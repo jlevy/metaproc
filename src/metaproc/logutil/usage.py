@@ -150,7 +150,7 @@ def _lookup_model(model: str, pricing: dict[str, dict[str, Any]]) -> dict[str, A
     rates = pricing.get(model)
     if rates:
         return rates
-    # Pi CLI reports models with org prefix (e.g., "deepseek-ai/deepseek-v3.2-maas").
+    # Pi CLI reports models with org prefix (e.g., "zai-org/glm-5.2-maas").
     if "/" in model:
         return pricing.get(model.rsplit("/", 1)[1])
     return None

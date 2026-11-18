@@ -1,6 +1,6 @@
 """P1.4 — Pi CLI trace extractor.
 
-Pi CLI wraps any underlying model (glm-5, gemini-flash, claude-opus, etc.)
+Pi CLI wraps any underlying model (glm-5.2, gemini-3.8-flash, claude-opus, etc.)
 and emits camelCase stream-json. These tests use the real fixture at
 ``pi-sample.jsonl`` from the 2030-01-01 synthetic five-adapter corpus,
 plus synthetic logs for edge cases.

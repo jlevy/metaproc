@@ -883,7 +883,7 @@ def build_plan(
 
     if adapter_override is not None and run_profile is None:
         # Accept both raw adapter types ("pi-cli") and named adapter configs
-        # from the spec's adapters map ("pi-deepseek-v3.2").
+        # from the spec's adapters map ("pi-glm52").
         if adapter_override not in spec.defaults.adapters:
             if adapter_override not in ADAPTER_REGISTRY:
                 supported = ", ".join(sorted(ADAPTER_REGISTRY))
@@ -1014,7 +1014,7 @@ def build_plan(
 
             if adapter_override is not None:
                 # If the override names a config in the adapters map, use its
-                # resolved type (e.g. "pi-deepseek-v3.2" → "pi-cli").
+                # resolved type (e.g. "pi-glm52" → "pi-cli").
                 # Otherwise use the override as-is (it's a raw adapter type).
                 if per_adapter is not None:
                     adapter_type = per_adapter.type or adapter_override

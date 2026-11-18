@@ -67,10 +67,10 @@ Credential requirements per adapter:
 | `claude-code-cli` | macOS Keychain OAuth *or* `ANTHROPIC_API_KEY` | `claude auth` or Claude Desktop login |
 | `codex-cli` | `OPENAI_API_KEY` (passed as `CODEX_API_KEY` when no stored login exists) *or* `~/.codex/auth.json` via `codex login` with `cli_auth_credentials_store = "file"` | See [codex setup](credential-setup.runbook.md) |
 | `gemini-cli` | one of: (a) `GEMINI_API_KEY`, (b) `GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_API_KEY`, (c) `GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_CLOUD_PROJECT` + ADC | See [credential-setup.md § Gemini](credential-setup.runbook.md#gemini-cli-gemini-cli). The smoke uses mode (c) against `$METAPROC_GCP_PROJECT` so it runs with no Gemini-specific key. |
-| `pi-cli` | `~/.pi/auth.json` (plus GCP ADC for `vertex-maas`) | `pi login`; `gcloud auth application-default login` for MaaS |
+| `pi-cli` | `~/.pi/agent/auth.json` (plus GCP ADC for `vertex-maas`) | `/login` in `pi`; `gcloud auth application-default login` for MaaS |
 
-The `pi-cli` smoke selects `vertex-maas` with `glm-5-maas`. Substitute
-`--variant pi-cli-<other>` and `--provider <other>` to probe another configured route.
+The `pi-cli` smoke selects `vertex-maas` with `glm-5.2-maas`.
+Substitute `--model <other>` and `--provider <other>` to probe another configured route.
 Model selection does not establish pricing or account credit eligibility.
 
 ### Model assertion (`--assert-model`)
@@ -87,7 +87,7 @@ The helper parses the CLI’s JSONL stdout for the event that names the model:
 | --- | --- | --- | --- |
 | `claude-code-cli` | `system.init` | `model` | `opus` |
 | `gemini-cli` | terminal `result` | `stats.models` keys that billed tokens | `gemini-3.1-pro-preview-customtools` |
-| `pi-cli` | `message_start` (first assistant) | `message.model` | `glm-5-maas` |
+| `pi-cli` | `message_start` (first assistant) | `message.model` | `glm-5.2-maas` |
 | `codex-cli` | session rollout `turn_context` (legacy config preamble when printed) | `model` (requested, not served) | `gpt` |
 
 Claude Code and Pi match a substring; Gemini requires an exact billed model, or for an

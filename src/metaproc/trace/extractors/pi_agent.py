@@ -1,6 +1,6 @@
 """Extractor: Pi CLI per-attempt JSONL.
 
-Pi CLI wraps any underlying model (glm-5, gemini-flash, claude-opus, etc.)
+Pi CLI wraps any underlying model (glm-5.2, gemini-3.8-flash, claude-opus, etc.)
 and emits a camelCase stream-json schema:
 
 - ``type=session``                — session header with ``version``, ``id``

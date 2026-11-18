@@ -126,10 +126,11 @@ async def dispatch_orchestrator(
             "GCLOUD_PROJECT": config.gcp.project,
             "CLOUDSDK_CORE_PROJECT": config.gcp.project,
             # Consumed by pi-cli's `google-vertex` API provider (@google/genai SDK).
-            # "global" resolves to https://aiplatform.googleapis.com/ under the SDK
-            # (see @google/genai dist/node/index.mjs:12862), which is the only
-            # hostname serving Gemini 3.x preview models. See
-            # metaproc/docs/runbooks/adapter-compatibility.runbook.md.
+            # "global" resolves to https://aiplatform.googleapis.com/ under the SDK,
+            # which is the only hostname serving Gemini preview models. Pi 1.5.2
+            # inlines @google/genai 2.21.0 in its `dist/bundle/chunks/` bundle; search
+            # there for the `location==="global"` branch, not a dist/node module path.
+            # See docs/runbooks/adapter-compatibility.runbook.md.
             "GOOGLE_CLOUD_LOCATION": "global",
         }
     )

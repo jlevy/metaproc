@@ -64,9 +64,8 @@ class ProviderSpec:
 
 PROVIDERS: tuple[ProviderSpec, ...] = (
     # vertex-maas comes first so any "*-maas" model ID (e.g.
-    # `deepseek-v3.2-maas`, `moonshotai/kimi-k2-thinking-maas`) infers the
-    # Vertex MaaS provider rather than the direct-API provider whose
-    # prefix would otherwise match.
+    # `deepseek-v4.1-flash-maas`) infers the Vertex MaaS provider rather
+    # than the direct-API provider whose prefix would otherwise match.
     ProviderSpec(
         name="vertex-maas",
         label="Vertex MaaS",

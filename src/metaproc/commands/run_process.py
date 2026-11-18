@@ -6346,7 +6346,7 @@ def run_process_command(
     ),
     spot: bool = typer.Option(True, "--spot/--no-spot", help="Use Spot VMs for gcp-worker backend"),
     variant: str | None = typer.Option(  # noqa: UP007
-        None, "--variant", help="Override adapter/variant for fan-out steps (e.g. pi-deepseek-v3.2)"
+        None, "--variant", help="Override adapter/variant for fan-out steps (e.g. pi-glm52)"
     ),
     artifact_namespace: str | None = typer.Option(  # noqa: UP007
         None,

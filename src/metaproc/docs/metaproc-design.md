@@ -1008,13 +1008,13 @@ runs/local/example-workflow/doc-sync-demo/
     runpool/steps/generate-record/events.jsonl
     tasks/generate-record/AAPL-2025Q2/generate-record_AAPL_2026-04-17T17-54-42.jsonl
     derived/trace.jsonl
-  mine/pi-deepseek-v3.2/
+  mine/pi-glm52/
     AAPL-2025Q2/
       record.md
 ```
 
 The harness contract is the `.state/` and `.logs/` branches at the run-dir root.
-The artifact tree (here, `mine/pi-deepseek-v3.2/<item>/`) is whatever the spec’s output
+The artifact tree (here, `mine/pi-glm52/<item>/`) is whatever the spec’s output
 templates produce; the engine writes no bookkeeping into it.
 Per-task state is keyed by the explicit `for_each.key` template, not inferred from the
 output path, so two non-fan-out steps that share an output parent dir keep separate
@@ -2124,27 +2124,38 @@ providers without changing process definitions.
 The adapter maps the framework’s `provider` and `model` config fields to Pi’s
 `--provider` and `--model` CLI flags.
 
-Valid models span built-in provider families and custom providers:
+Valid models span Pi’s built-in provider families and the custom providers in the
+packaged `pi-models.default.json`.
+The authoritative list is `known_model_ids("pi-cli")`, which combines the reviewed Pi
+built-in IDs in `src/metaproc/config/model_catalog.py` with the packaged catalog:
 
-- **Anthropic**: sonnet, opus, haiku (and full model IDs)
-- **OpenAI**: gpt-4.1, o3, o4-mini
-- **Google**: gemini-3.1-pro-preview, gemini-3-flash-preview,
-  gemini-3.1-flash-lite-preview
-- **Vertex AI MaaS** (custom provider): zai-org/glm-5-maas,
-  moonshotai/kimi-k2-thinking-maas
+- **Anthropic**: fable, opus, sonnet, haiku, and full IDs such as claude-fable-5-2 and
+  claude-opus-5-5
+- **OpenAI**: gpt-6.1-sol, gpt-6.1-terra, gpt-6-astra, gpt-5.5, and the packaged
+  gpt-6.2-astra and gpt-6.2-sol
+- **Google (`google-vertex`)**: gemini-4-argon, gemini-3.8-flash, gemini-3.5-flash-lite,
+  gemini-3.1-pro-preview, and the packaged gemini-4-carbon and gemini-4-hydrogen
+- **DeepSeek**: deepseek-flash, deepseek-v4-pro
+- **Moonshot** (packaged custom provider): kimi-k3.1-pro, kimi-k3, kimi-k2.6
+- **Vertex AI MaaS** (packaged custom provider): zai-org/glm-5.2-maas,
+  deepseek-ai/deepseek-v4.1-flash-maas, deepseek-ai/deepseek-v4.1-flash-1017-maas
 
-Built-in providers: anthropic (default), openai, google, vertex, azure, bedrock.
-Custom providers (defined in `~/.pi/agent/models.json`): any OpenAI-compatible endpoint.
+Accepted providers are the entries of the registry in `src/metaproc/config/providers.py`
+(anthropic, the default, plus openai, google, google-vertex, deepseek, moonshot, and
+vertex-maas) and Pi’s built-in azure and amazon-bedrock.
+A custom provider defined in `~/.pi/agent/models.json` can serve any OpenAI-compatible
+endpoint once it has a registry entry.
 
 #### Vertex AI MaaS custom provider
 
 **Design rationale (authoritative mechanism in
 [arch-cloud-execution.md §3.12](arch-cloud-execution.md) and
 [arch-authentication.md](arch-authentication.md), UC-5 / UC-6):** third-party models in
-Vertex AI Model Garden (GLM-5, Kimi K2) expose an OpenAI-compatible endpoint that Pi
-connects to via a custom `vertex-maas` provider in `~/.pi/agent/models.json`. The
-`apiKey` field is a placeholder; Metaproc injects a fresh `google.auth` access token per
-batch (**not per item**) and Pi sends it as `Authorization: Bearer <token>`. This is why
+Vertex AI Model Garden (GLM-5.2, DeepSeek V4.1 Flash) expose an OpenAI-compatible
+endpoint that Pi connects to via a custom `vertex-maas` provider in `models.json`.
+The packaged `apiKey` is a shell command that prints the token Metaproc supplies;
+Metaproc injects a fresh `google.auth` access token per batch (**not per item**) and Pi
+sends it as `Authorization: Bearer <token>`. This is why
 the framework treats `vertex`-prefixed providers specially in the adapter: it resolves
 the token once via `resolve_gcp_token()` and writes it into each item’s
 `runtime_config`, instead of leaving the operator to refresh tokens manually.

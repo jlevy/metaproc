@@ -213,7 +213,7 @@ class MetaprocEnv(EnvEnum):
         "DeepSeek API key for the pi-cli `deepseek` provider (DeepSeek V4 family, direct API)."
     )
     MOONSHOT_API_KEY = secret(
-        "Moonshot API key for the pi-cli `moonshot` provider (Kimi K2.6, direct API)."
+        "Moonshot API key for the pi-cli `moonshot` provider (Kimi family, direct API)."
     )
     GEMINI_API_KEY = secret("Gemini API key for direct (non-Vertex) Gemini adapter use.")
     GOOGLE_API_KEY = secret("Google API key for direct Gemini adapter fallback.")
@@ -252,7 +252,7 @@ class MetaprocEnv(EnvEnum):
     )
     METAPROC_GCP_SECRET_MOONSHOT_API_KEY = optional(
         "GCP Secret Manager ref that provides MOONSHOT_API_KEY to Batch workers "
-        "(pi-cli moonshot provider, Kimi K2.6 direct API)."
+        "(pi-cli moonshot provider, Kimi direct API)."
     )
     CLAUDE_CODE_CREDS_JSON = secret(
         "Claude Code OAuth credential blob injected into Batch workers from Secret Manager."

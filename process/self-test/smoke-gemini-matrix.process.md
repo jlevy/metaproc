@@ -59,7 +59,7 @@ process:
         bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter gemini-cli --model gemini-3.1-pro-preview-customtools --assert-model gemini-3.1-pro-preview-customtools && uv run metaproc probe-tool-use --harness gemini-cli --model gemini-3.1-pro-preview-customtools --timeout 180"
       description: gemini-cli + gemini-3.1-pro-preview-customtools. The gemini-cli default.
 
-    # ── pi-cli (google-vertex) cells (4 models registered in pi-models.default.json) ──
+    # ── pi-cli (google-vertex) cells (4 models: gemini-4-hydrogen from pi-models.default.json, the rest Pi built-ins) ──
     - id: pi-cli-4-hydrogen
       mode: code
       command: >-
@@ -97,12 +97,11 @@ For a given `(harness, model)`:
 
 1. **Auth + dispatch** —
    `metaproc auth-check --live --adapter <h> --model <m> --assert-model <m>` issues a
-   trivial prompt and verifies the model the harness reports matches the requested one
-   (substring match; passing the bare model ID is tight enough to catch silent fallback
-   to the harness default).
-   For `gemini-cli` that is a model the terminal `result` event’s `stats.models` shows
-   billing tokens; for `pi-cli`, `message.model` on the first assistant `message_start`
-   event.
+   trivial prompt and verifies the model the harness reports matches the requested one,
+   which catches silent fallback to the harness default.
+   For `gemini-cli` that is an exact match on a model the terminal `result` event’s
+   `stats.models` shows billing tokens; for `pi-cli`, a substring match on
+   `message.model` in the first assistant `message_start` event.
 2. **Tool round-trip** — `metaproc probe-tool-use --harness <h> --model <m>` writes a
    unique sentinel string to a tempfile under `.metaproc-probe/<hash>/`, asks the model
    to read it, and asserts the sentinel appears in the model’s response (parsing
@@ -124,11 +123,10 @@ when step 1 is green.
 The gemini-cli row covers every concrete model the catalog accepts for that harness
 except `gemini-3.6-flash`, which Vertex retires on 2026-11-19 and which remains
 reachable only through the Gemini API.
-The pi-cli row covers one model per Gemini lane; the other `google-vertex` entries in
-`pi-models.default.json` use the same API path.
-`--assert-model` is a substring match, so the `gemini-3.1-pro-preview` cell would also
-pass on `gemini-3.1-pro-preview-customtools`; a run’s terminal-result check compares
-the exact ID.
+The pi-cli row covers one model per Gemini lane; the other `google-vertex` models use
+the same API path.
+The pi-cli `--assert-model` check is a substring match, so its `gemini-3.1-pro-preview`
+cell would also pass on `gemini-3.1-pro-preview-customtools`.
 
 ## Credential requirements
 
@@ -140,7 +138,8 @@ the exact ID.
 - `GOOGLE_CLOUD_LOCATION=global` — regional values fail the native `google-vertex` API
   path (see
   [adapter-compatibility runbook §3](../../docs/runbooks/adapter-compatibility.runbook.md)).
-- `~/.pi/auth.json` from `pi auth` (pi-cli cells only).
+- The pi-cli cells need no `~/.pi/agent/auth.json`: the `google-vertex` provider uses
+  the same Application Default Credentials.
 
 No `GEMINI_API_KEY` or `GOOGLE_API_KEY` required.
 

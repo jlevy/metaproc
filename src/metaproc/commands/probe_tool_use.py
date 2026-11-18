@@ -221,7 +221,7 @@ def probe_tool_use(
     model: str | None = typer.Option(  # noqa: UP007
         None,
         "--model",
-        help="Model ID to dispatch through the harness (e.g. gemini-3.5-flash).",
+        help="Model ID to dispatch through the harness (e.g. gemini-3.8-flash).",
     ),
     provider: str | None = typer.Option(  # noqa: UP007
         None,
