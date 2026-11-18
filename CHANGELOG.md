@@ -81,6 +81,8 @@ development series.
   resolves it to; a substring no longer passes a `-customtools` result for
   `gemini-3.1-pro-preview`. Codex 0.166.0 reports no served model, so the Codex check
   reads the requested model from the session rollout and says so.
+  With no rollout (plain or `.jsonl.zst`) and no legacy preamble, the Codex assertion
+  now fails as not verifiable instead of passing on its own `-m`.
 - **Pricing is refreshed against primary provider pages.** Rows are added for every
   newly accepted model, `gemini-3.6-flash` moves to its introductory rate, DeepSeek
   direct rows move to peak rates, and rows for retired models stay as labelled
@@ -92,6 +94,9 @@ development series.
   only from `CODEX_API_KEY`, so such runs failed with HTTP 401. The adapter now passes
   the key under that name when no stored Codex login exists under a file-backed
   credential store; a stored ChatGPT login keeps precedence and subscription billing.
+  The bridge is skipped, with an INFO log, when `CODEX_ACCESS_TOKEN` is set or any Codex
+  config layer selects a non-file credential store, and it is decided again when a
+  step’s `env` changes `CODEX_HOME` or a Codex key.
 - **Real ChatGPT `auth.json` files are accepted.** Codex writes `auth_mode` at the top
   level, while Metaproc read only `tokens.auth_mode`, so `auth push`, `codex-auth push`
   and `CODEX_CREDS_JSON` bootstrap rejected real login files.
