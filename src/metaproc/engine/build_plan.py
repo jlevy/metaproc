@@ -138,46 +138,45 @@ def _recorded_profile_model_error(
 ) -> str:
     """The refusal of a recorded, since-removed profile whose model is no longer served.
 
-    It names the profile's removal, the model's, and the overrides that continue the
-    run: the successor profile, or for the run profile the same namespace on the
+    It names the profile's removal, the model's, and the override that continues the
+    run: the successor profile, and for the run profile also the same namespace on the
     successor's model.
     """
     name = profile.name
-    profile_note = removed_profile_note(name) or f"execution profile {name!r} is no longer defined"
-    model_note = removed_model_note(adapter_type, model) or "it is not in the model catalog"
     removed = REMOVED_EXECUTION_PROFILES.get(name)
-    successor = removed.successor if removed is not None else None
+    model_note = removed_model_note(adapter_type, model) or "it is not in the model catalog"
+    msg = f"{selected_by}: this run records execution profile {name!r}"
+    if removed is not None:
+        msg += (
+            f", which Metaproc's built-in profiles dropped on {removed.removed_on.isoformat()} "
+            f"({removed.reason})"
+        )
+    msg += f", and {adapter_type} no longer accepts its model {model!r}: {model_note}."
+    if removed is None:
+        return msg + " Select a profile whose model is accepted."
+    successor = removed.successor
     successor_model: object = None
-    if successor and successor in registry.entries:
+    if successor in registry.entries:
         try:
             successor_model = registry.resolve(successor).profile.config.get("model")
         except ValueError:
             successor_model = None
-    msg = (
-        f"{selected_by}: this run records execution profile {name!r}, but {profile_note}, and "
-        f"{adapter_type} no longer accepts its model {model!r}: {model_note}. "
-    )
-    if not successor:
-        return msg + "Select a profile whose model is accepted."
     on_model = f" (model {successor_model})" if successor_model else ""
+    msg += f" Its successor is {successor!r}{on_model}: "
     if selected_by == "--variant":
-        msg += f"Resume with --variant {successor} to continue on the successor{on_model}"
+        msg += f"resume with --variant {successor}"
         if successor_model:
             msg += (
-                f", or keep the artifact namespace with --variant {name} "
+                f", or keep the artifact namespace {name!r} with --variant {name} "
                 f"--adapter-config model={successor_model}"
             )
-        return msg + "; the steps that ran on the retired model re-run."
-    if selected_by.startswith("--step-variant "):
-        step_id = selected_by.removeprefix("--step-variant ")
-        return msg + (
-            f"Resume with --step-variant {step_id}={successor} to continue on the "
-            f"successor{on_model}; the step re-runs."
+    elif selected_by.startswith("--step-variant "):
+        msg += (
+            f"resume with --step-variant {selected_by.removeprefix('--step-variant ')}={successor}"
         )
-    return msg + (
-        f"Name {successor!r}{on_model} in the process file's {selected_by}, or select it "
-        "with --variant or --step-variant; the steps that ran on the retired model re-run."
-    )
+    else:
+        msg += f"name it in the process file's {selected_by}, or select it with --step-variant"
+    return msg + f". The steps that ran on {model} re-run."
 
 
 def _resolve_profile(
@@ -1140,30 +1139,33 @@ def build_plan(
                 merged_config[key] = _coerce_config_value(key, value)
 
         recorded_model = merged_config.get("model")
-        if (
+        unserved_recorded_model = (
             step_profile is not None
             and step_profile.source.kind == "recorded"
             and recorded_model is not None
             and adapter_type in ADAPTER_REGISTRY
             and str(recorded_model) not in known_model_ids(adapter_type)
-        ):
+        )
+        if unserved_recorded_model and validate_spec:
             # Planning would otherwise drop the model as a same-family reject and run
             # the adapter default, which is not the run the profile describes.
             raise ValueError(
                 _recorded_profile_model_error(
-                    step_profile,
+                    cast("ResolvedExecutionProfile", step_profile),
                     adapter_type=adapter_type,
                     model=str(recorded_model),
                     registry=profile_registry,
                     selected_by=profile_selected_by,
                 )
             )
-
-        merged_config = _apply_adapter_validation(
-            adapter_type=adapter_type,
-            authored_adapter_type=authored_adapter_type,
-            merged_config=merged_config,
-        )
+        if not unserved_recorded_model:
+            # A plan built only to be read (``validate_spec=False``, as ``metaproc
+            # status`` builds it) keeps such a step as the run recorded it.
+            merged_config = _apply_adapter_validation(
+                adapter_type=adapter_type,
+                authored_adapter_type=authored_adapter_type,
+                merged_config=merged_config,
+            )
 
         for transform in get_plugin_registry().adapter_config_transforms:
             merged_config = transform(step, merged_config, params)
