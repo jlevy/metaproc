@@ -26,7 +26,7 @@ def test_workspace_settings_preserve_environment_and_native_overrides(
     assert env == original
     settings = json.loads((tmp_path / ".gemini/settings.json").read_text())
     assert settings["general"]["sessionRetention"]["enabled"] is False
-    assert settings["experimental"]["dynamicModelConfiguration"] is True
+    assert settings["experimental"]["dynamicModelConfiguration"] is False
     assert settings["tools"]["core"] == ["read_file", "write_file"]
     assert adapter.prepare_env(original, config) == env
     assert adapter.validate_config(config) == []

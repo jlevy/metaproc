@@ -49,7 +49,7 @@ _CODEX_SLOT_CONFIG_TOML = 'cli_auth_credentials_store = "file"\nforced_login_met
 
 log = logging.getLogger(__name__)
 
-PINNED_CODEX_CLI_VERSION = "0.147.0"
+PINNED_CODEX_CLI_VERSION = "0.166.0"
 CODEX_CLI_INSTALL_HINT = f"Install: npm install -g @openai/codex@{PINNED_CODEX_CLI_VERSION}"
 # Keep a broken launcher from blocking agent dispatch indefinitely.
 _CODEX_VERSION_CHECK_TIMEOUT_SECONDS = 10
@@ -124,10 +124,44 @@ def _codex_version_drift() -> str | None:
     return None
 
 
+def codex_auth_json_mode(payload: dict[str, Any]) -> str | None:
+    """Return the login mode Codex resolves for a parsed ``auth.json`` object.
+
+    Codex writes ``auth_mode`` at the top level of ``auth.json``
+    (``codex-rs/login/src/auth/storage.rs`` ``AuthDotJson``, 0.147.0 and
+    0.166.0); its ``tokens`` block has no such field. Earlier Metaproc releases
+    read and documented ``tokens.auth_mode`` instead, so that nested spelling is
+    still honored when the top-level field is absent. A file with neither follows
+    Codex's own ``AuthDotJson::resolved_mode`` fallback: a stored API key means
+    ``apikey``, ``tokens`` alone means ``chatgpt``. Returns ``None`` when the
+    payload carries no credential Metaproc can classify.
+    """
+    top_level = payload.get("auth_mode")
+    if isinstance(top_level, str) and top_level:
+        return top_level
+    tokens = payload.get("tokens")
+    if isinstance(tokens, dict):
+        nested = cast("dict[str, Any]", tokens).get("auth_mode")
+        if isinstance(nested, str) and nested:
+            return nested
+    if payload.get("personal_access_token"):
+        return "personalAccessToken"
+    if payload.get("bedrock_api_key"):
+        return "bedrockApiKey"
+    if payload.get("bedrock_access_keys"):
+        return "bedrockAccessKeys"
+    if payload.get("OPENAI_API_KEY"):
+        return "apikey"
+    if isinstance(tokens, dict):
+        return "chatgpt"
+    return None
+
+
 def _validate_codex_creds_blob(blob: str) -> None:
     """Raise if *blob* is not a ChatGPT-OAuth ``auth.json`` payload.
 
-    API-key blobs (``tokens.auth_mode == "apikey"``) are explicitly
+    The login mode is read as Codex reads it (:func:`codex_auth_json_mode`).
+    API-key blobs (``auth_mode == "apikey"``) are explicitly
     rejected: API keys are stateless, don't need pooling, and should
     arrive as ``OPENAI_API_KEY`` through container-side secret hydration rather than a
     pool label. This matches ``CodexCliAdapter.bootstrap``'s existing
@@ -149,10 +183,10 @@ def _validate_codex_creds_blob(blob: str) -> None:
             "refusing to write a malformed auth.json"
         )
         raise RuntimeError(msg)
-    auth_mode = cast("dict[str, Any]", tokens).get("auth_mode")
+    auth_mode = codex_auth_json_mode(payload)
     if auth_mode != "chatgpt":
         msg = (
-            f"Codex credentials blob has tokens.auth_mode={auth_mode!r}; the pool "
+            f"Codex credentials blob has auth_mode={auth_mode!r}; the pool "
             "only accepts ChatGPT-OAuth payloads. API-key auth is stateless and "
             "should arrive as OPENAI_API_KEY through cloud secret hydration, "
             "not a pool label."
@@ -224,12 +258,9 @@ CODEX_LEGACY_APPROVAL_POLICIES: dict[str, str] = {
 }
 
 
-def _codex_approval_policy(value: object) -> str:
-    """Return the `-a` value the pinned CLI accepts for a configured policy."""
-    requested = str(value)
-    replacement = CODEX_LEGACY_APPROVAL_POLICIES.get(requested)
-    if replacement is None:
-        return requested
+@functools.cache
+def _warn_legacy_approval_policy(requested: str, replacement: str) -> None:
+    """Warn once per process per legacy value; fan-out builds many commands."""
     log.warning(
         "codex-cli approval_policy %r is no longer accepted by Codex %s; sending %r. "
         "`codex exec` forces approval to `never`, so the run's behavior is unchanged.",
@@ -237,7 +268,17 @@ def _codex_approval_policy(value: object) -> str:
         PINNED_CODEX_CLI_VERSION,
         replacement,
     )
+
+
+def _codex_approval_policy(value: object) -> str:
+    """Return the `-a` value the pinned CLI accepts for a configured policy."""
+    requested = str(value)
+    replacement = CODEX_LEGACY_APPROVAL_POLICIES.get(requested)
+    if replacement is None:
+        return requested
+    _warn_legacy_approval_policy(requested, replacement)
     return replacement
+
 
 # Full set of accepted permission_mode values for validate_config — the
 # 3 mapped modes plus the bypassPermissions special case handled inline.
@@ -501,10 +542,10 @@ class CodexCliAdapter:
         return Path(str(value)) if value else None
 
     def parse_result_event(self, line: str) -> dict[str, object] | None:
-        # codex-cli 0.124.0 uses flat top-level `type` keys (no msg.type
-        # nesting). Both terminal events signal end-of-stream: turn.completed
-        # (success, carries `usage` inline) and turn.failed (failure, carries
-        # error.message). Intermediate `error` events are codex-internal
+        # `codex exec --json` (0.124.0 through the pinned 0.166.0) uses flat
+        # top-level `type` keys (no msg.type nesting). Both terminal events
+        # signal end-of-stream: turn.completed (success, carries `usage`
+        # inline) and turn.failed (failure, carries error.message). Intermediate `error` events are codex-internal
         # reconnects and are NOT terminal.
         return parse_jsonl_event(line, "turn.completed") or parse_jsonl_event(line, "turn.failed")
 
@@ -874,10 +915,11 @@ def _inspect_auth_json(path: Path) -> tuple[str, str]:
         return ("unknown", f"{path} exists but could not be parsed")
     if not isinstance(doc, dict):
         return ("unknown", f"{path} exists but is not a JSON object")
-    tokens = cast("dict[str, Any]", doc).get("tokens")
-    mode = tokens.get("auth_mode") if isinstance(tokens, dict) else None
+    mode = codex_auth_json_mode(cast("dict[str, Any]", doc))
     if mode == "chatgpt":
         return ("interactive-login", f"Using ChatGPT OAuth session ({path})")
     if mode == "apikey":
         return ("api-key", f"Using API-key session ({path})")
-    return ("unknown", f"{path} exists but has no tokens.auth_mode")
+    if mode is None:
+        return ("unknown", f"{path} exists but holds no recognized Codex credential")
+    return ("unknown", f"{path} uses Codex auth_mode={mode!r}, which Metaproc does not classify")

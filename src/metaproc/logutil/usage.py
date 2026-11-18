@@ -325,15 +325,20 @@ def sum_claude_usage(
 
 
 def sum_codex_usage(turn_completed_event: dict[str, Any]) -> UsageStats:
-    """Extract per-turn usage from a codex-cli 0.124.0 ``turn.completed`` event.
+    """Extract per-turn usage from a ``codex exec --json`` ``turn.completed`` event.
 
-    codex-cli 0.124.0 reports usage inline on the terminal ``turn.completed``
-    event as ``usage.{input_tokens, cached_input_tokens, output_tokens}``
-    (reasoning tokens are rolled into ``output_tokens`` by the server in this
-    release; older 0.31.0-era ``info.total_token_usage`` + separate
-    ``reasoning_output_tokens`` / ``total_tokens`` fields are gone). That field
-    is therefore already the billed output `UsageStats` defines and is taken as
-    it stands.
+    codex-cli (0.124.0 through the pinned 0.166.0) reports thread-total usage
+    inline on the terminal ``turn.completed`` event as ``usage.{input_tokens,
+    cached_input_tokens, cache_write_input_tokens, output_tokens,
+    reasoning_output_tokens}``. ``output_tokens`` already includes
+    ``reasoning_output_tokens`` (a breakdown, not an addend), so it is the
+    billed output `UsageStats` defines and is taken as it stands.
+
+    ``input_tokens`` includes both cache reads and cache writes, which are
+    disjoint: a 0.166.0 rollout records a first request as 13,792 input =
+    0 cached + 13,789 written + 3 uncached. Both are split out of
+    ``input_tokens`` into their own buckets. Releases before
+    ``cache_write_input_tokens`` existed omit it, which reads as zero.
 
     Sets ``provider="openai"`` for cost-rollup routing.
     """
@@ -344,8 +349,10 @@ def sum_codex_usage(turn_completed_event: dict[str, Any]) -> UsageStats:
     usage = cast(dict[str, Any], usage_raw)
     total_input = _nonnegative_int(usage.get("input_tokens"))
     cached_input = _nonnegative_int(usage.get("cached_input_tokens"))
-    stats.input_tokens = max(total_input - cached_input, 0)
+    cache_write = _nonnegative_int(usage.get("cache_write_input_tokens"))
+    stats.input_tokens = max(total_input - cached_input - cache_write, 0)
     stats.cache_read_tokens = cached_input
+    stats.cache_write_tokens = cache_write
     stats.output_tokens = _nonnegative_int(usage.get("output_tokens"))
     stats.cost_is_estimated = True
     stats.has_token_usage = bool(usage)

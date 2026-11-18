@@ -35,10 +35,30 @@ from metaproc.settings import (
 
 log = logging.getLogger(__name__)
 
-PINNED_GEMINI_CLI_VERSION = "0.59.0"
+PINNED_GEMINI_CLI_VERSION = "0.66.0"
 # The auth hint and the version refusal quote one command, so a pin bump moves both.
 GEMINI_CLI_INSTALL_COMMAND = f"npm install -g @google/gemini-cli@{PINNED_GEMINI_CLI_VERSION}"
 GEMINI_CLI_INSTALL_HINT = f"Install: {GEMINI_CLI_INSTALL_COMMAND}"
+
+
+# Where gemini-cli 0.66.0 sends each moving alias under the auth types Metaproc
+# documents (Gemini API key, Vertex AI, gateway). `flash` and `flash-lite` resolve to
+# one model there (`hasLatestFlashGAAccess` is true for all three). `pro` resolves to
+# gemini-3.1-pro-preview-customtools with an API key and gemini-3.1-pro-preview
+# otherwise. `auto` is routed per turn between the `pro` model and the `flash` model.
+# `result.stats.models` is keyed by the model that answered, never by the alias, so
+# the terminal-result check accepts these in place of the requested name. Login with
+# Google can resolve the aliases to older models; those results are still refused.
+# Review this table whenever PINNED_GEMINI_CLI_VERSION moves.
+_GEMINI_PRO_ALIAS_MODELS = frozenset(
+    {"gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools"}
+)
+GEMINI_ALIAS_SERVED_MODELS: dict[str, frozenset[str]] = {
+    "flash": frozenset({"gemini-3.8-flash"}),
+    "flash-lite": frozenset({"gemini-3.5-flash-lite"}),
+    "pro": _GEMINI_PRO_ALIAS_MODELS,
+    "auto": _GEMINI_PRO_ALIAS_MODELS | {"gemini-3.8-flash"},
+}
 
 
 class GeminiCliVersionMismatch(CliVersionMismatch):
@@ -786,7 +806,13 @@ class GeminiCliAdapter:
         event: dict[str, object],
         merged_config: dict[str, object],
     ) -> str | None:
-        """Reject a successful result the requested model did not bill tokens for."""
+        """Reject a successful result the requested model did not bill tokens for.
+
+        A concrete id must bill under exactly that id. A moving alias bills under the
+        model the pinned CLI resolved it to, so it passes when one of that alias's
+        `GEMINI_ALIAS_SERVED_MODELS` billed; anything else, such as a quota fallback
+        from `pro` to a Flash model, is refused like a substitution.
+        """
         if event.get("status") != "success":
             return None
 
@@ -794,11 +820,20 @@ class GeminiCliAdapter:
         served = served_models(event)
         if expected in served:
             return None
+        alias_targets = GEMINI_ALIAS_SERVED_MODELS.get(expected)
+        if alias_targets is not None and not alias_targets.isdisjoint(served):
+            return None
 
         reported = format_served_models(served) if served else "no model that billed tokens"
+        requested = f"requested model {expected!r},"
+        if alias_targets is not None:
+            requested = (
+                f"requested alias {expected!r}, which gemini-cli {PINNED_GEMINI_CLI_VERSION} "
+                f"serves as {' or '.join(sorted(alias_targets))},"
+            )
         return (
             "Gemini terminal result contract violation: "
-            f"requested model {expected!r}, but result.stats.models reported {reported}. "
+            f"{requested} but result.stats.models reported {reported}. "
             "Refusing the result because model substitution makes its provenance invalid."
         )
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import stat
 import subprocess
@@ -13,14 +14,37 @@ import pytest
 from metaproc.adapters.base import Adapter, AuthCapableCliAdapter
 from metaproc.adapters.codex_cli import (
     CODEX_CREDS_ENV_VAR,
+    CODEX_LEGACY_APPROVAL_POLICIES,
     PINNED_CODEX_CLI_VERSION,
     CodexCliAdapter,
     CodexCliVersionMismatch,
+    _warn_legacy_approval_policy,  # pyright: ignore[reportPrivateUsage]
+    codex_auth_json_mode,
     verify_codex_version,
 )
-from metaproc.settings import CODEX_DEFAULT_MODEL
+from metaproc.logutil.parsing import LogFile
+from metaproc.logutil.usage import sum_codex_usage
+from metaproc.settings import CODEX_DEFAULT_MODEL, CODEX_VALID_EFFORTS, CODEX_VALID_MODELS
 
+# The shape Codex writes after a ChatGPT login (`AuthDotJson` in
+# codex-rs/login/src/auth/storage.rs, 0.147.0 and 0.166.0): `auth_mode` sits at
+# the top level, and the `tokens` block carries no mode of its own.
 _VALID_OAUTH_PAYLOAD = json.dumps(
+    {
+        "auth_mode": "chatgpt",
+        "OPENAI_API_KEY": None,
+        "tokens": {
+            "id_token": "fake-id",
+            "access_token": "fake-access",
+            "refresh_token": "fake-refresh",
+            "account_id": "fake-account",
+        },
+        "last_refresh": "2026-04-24T00:00:00Z",
+    }
+)
+
+# The nested `tokens.auth_mode` spelling earlier Metaproc releases required.
+_LEGACY_NESTED_OAUTH_PAYLOAD = json.dumps(
     {
         "OPENAI_API_KEY": None,
         "tokens": {
@@ -33,6 +57,9 @@ _VALID_OAUTH_PAYLOAD = json.dumps(
         "last_refresh": "2026-04-24T00:00:00Z",
     }
 )
+
+# What `codex login --with-api-key` writes at 0.166.0 (key value replaced).
+_REAL_APIKEY_AUTH_JSON = json.dumps({"auth_mode": "apikey", "OPENAI_API_KEY": "sk-fake"})
 
 
 class TestCodexCliAdapter:
@@ -106,18 +133,20 @@ class TestCodexBuildCommand:
     def test_accept_edits_permission_mode(self, tmp_path: Path):
         cmd = self._cmd(tmp_path, {"permission_mode": "acceptEdits"})
         assert cmd[cmd.index("--sandbox") + 1] == "workspace-write"
-        assert cmd[cmd.index("-a") + 1] == "on-failure"
+        # Codex 0.143.0 removed `-a on-failure`; exec forces `never` anyway.
+        assert cmd[cmd.index("-a") + 1] == "on-request"
 
     def test_plan_permission_mode(self, tmp_path: Path):
         cmd = self._cmd(tmp_path, {"permission_mode": "plan"})
         assert cmd[cmd.index("--sandbox") + 1] == "read-only"
-        assert cmd[cmd.index("-a") + 1] == "untrusted"
+        # Codex 0.149.0 removed `-a untrusted`; the read-only sandbox carries plan mode.
+        assert cmd[cmd.index("-a") + 1] == "on-request"
 
     def test_top_level_flags_precede_exec(self, tmp_path: Path):
         """-a / --search / --sandbox / -m must be top-level-only; before `exec`."""
         cmd = self._cmd(
             tmp_path,
-            {"permission_mode": "plan", "tools": ["WebSearch"], "model": "gpt-5.4"},
+            {"permission_mode": "plan", "tools": ["WebSearch"], "model": "gpt-6.1-sol"},
         )
         exec_idx = cmd.index("exec")
         for flag in ("--sandbox", "-a", "--search", "-m"):
@@ -281,7 +310,7 @@ class TestCodexValidateConfig:
         assert (
             self.adapter.validate_config(
                 {
-                    "model": "gpt-5.4",
+                    "model": "gpt-6.1-sol",
                     "effort": "low",
                     "sandbox": "read-only",
                     "approval_policy": "never",
@@ -705,3 +734,300 @@ class TestCodexAuthCapableSubprotocol:
         assert not (tmp_path / ".codex").exists()
         # Env var survives — coordinator owns lifecycle.
         assert os.environ.get(CODEX_CREDS_ENV_VAR) == _VALID_OAUTH_PAYLOAD
+
+
+# ── Codex 0.166.0 upgrade coverage ──────────────────────────────
+
+# A real `codex exec --json` stream from Codex 0.166.0 on the API-key route
+# (2026-11-18, gpt-6.1-sol, effort medium, one `echo probe-ok` shell call).
+# Only the thread ID is from the capture; nothing here is secret.
+_CODEX_0166_EXEC_JSON = """\
+{"type":"thread.started","thread_id":"01a1ec82-4ce4-7883-b842-8ecab3846d7b"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"command_execution","command":"/bin/bash -lc 'echo probe-ok'","aggregated_output":"","exit_code":null,"status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"/bin/bash -lc 'echo probe-ok'","aggregated_output":"probe-ok\\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"probe-ok"}}
+{"type":"turn.completed","usage":{"input_tokens":27644,"cached_input_tokens":13789,"cache_write_input_tokens":13849,"output_tokens":40,"reasoning_output_tokens":0}}
+"""
+
+
+def test_pin_is_codex_0_166_0() -> None:
+    assert PINNED_CODEX_CLI_VERSION == "0.166.0"
+
+
+def test_verify_codex_version_parses_0_166_0_banner(monkeypatch: pytest.MonkeyPatch) -> None:
+    def banner_run(*_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=["codex", "--version"], returncode=0, stdout="codex-cli 0.166.0\n", stderr=""
+        )
+
+    monkeypatch.setattr("metaproc.adapters.codex_cli.subprocess.run", banner_run)
+
+    assert verify_codex_version(expected="0.166.0") == "0.166.0"
+
+
+class TestCodexApprovalPolicyMigration:
+    """Codex 0.143.0 dropped `-a on-failure` and 0.149.0 dropped `-a untrusted`."""
+
+    def setup_method(self) -> None:
+        self.adapter = CodexCliAdapter()  # pyright: ignore[reportUninitializedInstanceVariable]
+        _warn_legacy_approval_policy.cache_clear()
+
+    def _cmd(self, tmp_path: Path, cfg: dict[str, object]) -> list[str]:
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Say hello.")
+        return self.adapter.build_command(prompt, cfg, {})
+
+    def test_permission_modes_emit_only_values_the_pin_parses(self, tmp_path: Path) -> None:
+        for mode in ("default", "acceptEdits", "plan"):
+            cmd = self._cmd(tmp_path, {"permission_mode": mode})
+            assert cmd[cmd.index("-a") + 1] in {"on-request", "never"}, mode
+
+    @pytest.mark.parametrize("legacy", sorted(CODEX_LEGACY_APPROVAL_POLICIES))
+    def test_legacy_explicit_policy_is_translated_with_warning(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, legacy: str
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="metaproc.adapters.codex_cli"):
+            cmd = self._cmd(tmp_path, {"sandbox": "workspace-write", "approval_policy": legacy})
+
+        assert cmd[cmd.index("-a") + 1] == "on-request"
+        assert legacy not in cmd
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert len(warnings) == 1
+        assert repr(legacy) in warnings[0].getMessage()
+        assert PINNED_CODEX_CLI_VERSION in warnings[0].getMessage()
+
+    def test_legacy_policy_warns_once_per_process(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        cfg: dict[str, object] = {"sandbox": "workspace-write", "approval_policy": "on-failure"}
+        with caplog.at_level(logging.WARNING, logger="metaproc.adapters.codex_cli"):
+            for _ in range(3):
+                self._cmd(tmp_path, cfg)
+
+        assert sum("on-failure" in r.getMessage() for r in caplog.records) == 1
+
+    @pytest.mark.parametrize("current", ["on-request", "never"])
+    def test_current_explicit_policy_passes_through_silently(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, current: str
+    ) -> None:
+        with caplog.at_level(logging.WARNING, logger="metaproc.adapters.codex_cli"):
+            cmd = self._cmd(tmp_path, {"sandbox": "read-only", "approval_policy": current})
+
+        assert cmd[cmd.index("-a") + 1] == current
+        assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+    @pytest.mark.parametrize("legacy", sorted(CODEX_LEGACY_APPROVAL_POLICIES))
+    def test_legacy_policy_still_validates(self, legacy: str) -> None:
+        # Existing process files keep validating; translation happens at build time.
+        assert self.adapter.validate_config({"approval_policy": legacy}) == []
+
+
+class TestCodexEffortAndModels:
+    def setup_method(self) -> None:
+        self.adapter = CodexCliAdapter()  # pyright: ignore[reportUninitializedInstanceVariable]
+
+    def _cmd(self, tmp_path: Path, cfg: dict[str, object]) -> list[str]:
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("Say hello.")
+        return self.adapter.build_command(prompt, cfg, {})
+
+    def test_persistent_effort_validates_and_is_emitted(self, tmp_path: Path) -> None:
+        assert "persistent" in CODEX_VALID_EFFORTS
+        assert self.adapter.validate_config({"effort": "persistent"}) == []
+        cmd = self._cmd(tmp_path, {"permission_mode": "default", "effort": "persistent"})
+        assert "model_reasoning_effort=persistent" in cmd
+
+    @pytest.mark.parametrize("model", sorted(CODEX_VALID_MODELS))
+    def test_every_accepted_model_reaches_argv_unchanged(self, tmp_path: Path, model: str) -> None:
+        cmd = self._cmd(tmp_path, {"permission_mode": "default", "model": model})
+        assert cmd[cmd.index("-m") + 1] == model
+        assert cmd.index("-m") < cmd.index("exec")
+
+    def test_default_model_reaches_argv(self, tmp_path: Path) -> None:
+        cmd = self._cmd(tmp_path, {"permission_mode": "default"})
+        assert cmd[cmd.index("-m") + 1] == CODEX_DEFAULT_MODEL
+
+    def test_argv_matches_live_probe_shape(self, tmp_path: Path) -> None:
+        # The argv shape validated against Codex 0.166.0 on 2026-11-18.
+        cmd = self._cmd(
+            tmp_path,
+            {"permission_mode": "default", "model": "gpt-6.1-sol", "working_directory": "/w"},
+        )
+        codex = cmd[cmd.index("codex") :]
+        assert codex == [
+            "codex",
+            "-m",
+            "gpt-6.1-sol",
+            "-c",
+            "model_reasoning_effort=medium",
+            "--sandbox",
+            "workspace-write",
+            "-a",
+            "on-request",
+            "exec",
+            "--json",
+            "--skip-git-repo-check",
+            "-C",
+            "/w",
+            "-",
+        ]
+
+
+class TestCodexAuthJsonShapes:
+    """Codex writes `auth_mode` at the top level; older Metaproc read `tokens.auth_mode`."""
+
+    def setup_method(self) -> None:
+        self.adapter = CodexCliAdapter()  # pyright: ignore[reportUninitializedInstanceVariable]
+
+    @pytest.mark.parametrize(
+        ("payload", "expected"),
+        [
+            (json.loads(_VALID_OAUTH_PAYLOAD), "chatgpt"),
+            (json.loads(_LEGACY_NESTED_OAUTH_PAYLOAD), "chatgpt"),
+            (json.loads(_REAL_APIKEY_AUTH_JSON), "apikey"),
+            # Pre-`auth_mode` files follow Codex's `resolved_mode` fallback.
+            ({"OPENAI_API_KEY": None, "tokens": {"access_token": "a"}}, "chatgpt"),
+            ({"OPENAI_API_KEY": "sk-fake"}, "apikey"),
+            ({"personal_access_token": "pat"}, "personalAccessToken"),
+            # The top-level field wins over a stale nested one, as in Codex.
+            ({"auth_mode": "apikey", "tokens": {"auth_mode": "chatgpt"}}, "apikey"),
+            ({}, None),
+        ],
+    )
+    def test_codex_auth_json_mode(self, payload: dict[str, object], expected: str | None) -> None:
+        assert codex_auth_json_mode(payload) == expected
+
+    def test_materialize_accepts_real_and_legacy_shapes(self, tmp_path: Path) -> None:
+        for name, blob in (
+            ("real", _VALID_OAUTH_PAYLOAD),
+            ("legacy", _LEGACY_NESTED_OAUTH_PAYLOAD),
+        ):
+            slot = tmp_path / name
+            self.adapter.materialize_credential(slot, blob)
+            assert (slot / ".codex" / "auth.json").read_text() == blob
+
+    def test_materialize_rejects_real_apikey_auth_json(self, tmp_path: Path) -> None:
+        # The real API-key file has no `tokens` block at all.
+        with pytest.raises(RuntimeError, match="tokens"):
+            self.adapter.materialize_credential(tmp_path / "slot", _REAL_APIKEY_AUTH_JSON)
+
+    def test_materialize_rejects_top_level_apikey_with_tokens(self, tmp_path: Path) -> None:
+        blob = json.dumps({"auth_mode": "apikey", "OPENAI_API_KEY": "sk", "tokens": {}})
+        with pytest.raises(RuntimeError, match="auth_mode='apikey'"):
+            self.adapter.materialize_credential(tmp_path / "slot", blob)
+
+    def test_bootstrap_accepts_legacy_nested_shape(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("CODEX_HOME", raising=False)
+        monkeypatch.setenv(CODEX_CREDS_ENV_VAR, _LEGACY_NESTED_OAUTH_PAYLOAD)
+        self.adapter.bootstrap(tmp_path)
+        assert (tmp_path / ".codex" / "auth.json").read_text() == _LEGACY_NESTED_OAUTH_PAYLOAD
+
+    @pytest.mark.parametrize(
+        ("blob", "auth_mode"),
+        [
+            (_VALID_OAUTH_PAYLOAD, "interactive-login"),
+            (_LEGACY_NESTED_OAUTH_PAYLOAD, "interactive-login"),
+            (_REAL_APIKEY_AUTH_JSON, "api-key"),
+        ],
+    )
+    def test_check_auth_classifies_auth_json_shapes(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, blob: str, auth_mode: str
+    ) -> None:
+        monkeypatch.setattr(
+            "metaproc.adapters.codex_cli.verify_codex_version",
+            lambda **_kwargs: PINNED_CODEX_CLI_VERSION,
+        )
+        monkeypatch.setattr("metaproc.adapters.codex_cli.shutil.which", lambda _: "/usr/bin/codex")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+        (tmp_path / "auth.json").write_text(blob)
+
+        status = self.adapter.check_auth()
+
+        assert status.auth_mode == auth_mode
+        assert status.credentials_found is True
+
+    def test_check_auth_reports_unclassified_mode(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(
+            "metaproc.adapters.codex_cli.verify_codex_version",
+            lambda **_kwargs: PINNED_CODEX_CLI_VERSION,
+        )
+        monkeypatch.setattr("metaproc.adapters.codex_cli.shutil.which", lambda _: "/usr/bin/codex")
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+        (tmp_path / "auth.json").write_text(json.dumps({"auth_mode": "bedrockApiKey"}))
+
+        status = self.adapter.check_auth()
+
+        assert status.auth_mode == "unknown"
+        assert "bedrockApiKey" in status.details
+
+
+class TestCodex0166ExecJsonStream:
+    """The captured 0.166.0 stream flows through every Metaproc Codex reader."""
+
+    def test_parse_result_event_finds_only_the_terminal_line(self) -> None:
+        adapter = CodexCliAdapter()
+        terminal = [
+            event
+            for line in _CODEX_0166_EXEC_JSON.splitlines()
+            if (event := adapter.parse_result_event(line)) is not None
+        ]
+        assert len(terminal) == 1
+        assert terminal[0]["type"] == "turn.completed"
+
+    def test_usage_splits_cache_reads_and_writes_out_of_input(self) -> None:
+        terminal = json.loads(_CODEX_0166_EXEC_JSON.splitlines()[-1])
+        stats = sum_codex_usage(terminal)
+        assert stats.cache_read_tokens == 13789
+        assert stats.cache_write_tokens == 13849
+        assert stats.input_tokens == 27644 - 13789 - 13849
+        assert stats.output_tokens == 40
+        assert stats.total_tokens == 27644 + 40
+        assert stats.provider == "openai"
+
+    def test_usage_without_cache_write_field_is_unchanged(self) -> None:
+        # Releases before `cache_write_input_tokens` (and gpt-5.5, which reports 0).
+        stats = sum_codex_usage(
+            {
+                "type": "turn.completed",
+                "usage": {"input_tokens": 1000, "cached_input_tokens": 200, "output_tokens": 5},
+            }
+        )
+        assert stats.input_tokens == 800
+        assert stats.cache_read_tokens == 200
+        assert stats.cache_write_tokens == 0
+
+    def test_usage_never_goes_negative(self) -> None:
+        stats = sum_codex_usage(
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 10,
+                    "cached_input_tokens": 8,
+                    "cache_write_input_tokens": 8,
+                    "output_tokens": 1,
+                },
+            }
+        )
+        assert stats.input_tokens == 0
+
+    def test_log_file_reads_tool_call_and_usage(self, tmp_path: Path) -> None:
+        log_file = tmp_path / "codex_run.jsonl"
+        log_file.write_text(_CODEX_0166_EXEC_JSON)
+
+        lf = LogFile(log_file, 0)
+        events = lf.read_new_events()
+
+        assert lf.done is True
+        assert lf.is_error is False
+        assert lf.usage_stats is not None
+        assert lf.usage_stats.cache_write_tokens == 13849
+        tool_events = [e for e in events if e.tool_name]
+        assert tool_events, "the command_execution item must surface as a tool event"
+        assert any("probe-ok" in e.summary for e in events)

@@ -135,6 +135,9 @@ CODEX_VALID_APPROVAL_POLICIES: set[str] = {
 # `-c model_reasoning_effort=<EFFORT>` — codex-cli config-path override.
 # Named values in the pinned 0.166.0 parser. Availability is model-specific;
 # accepting the syntax does not mean every model supports every effort.
+# `persistent` selects Codex's persistent-execution mode rather than a deeper
+# reasoning level; no model in the 0.166.0 bundle lists it, and on the API-key
+# route (2026-11-18) gpt-6.1-sol rejected it with HTTP 400.
 CODEX_VALID_EFFORTS: set[str] = {
     "none",
     "minimal",
@@ -180,8 +183,9 @@ PI_VALID_PROVIDERS: set[str] = set(_pi_valid_provider_names())
 # `cleanupExpiredSessions()` early-exits on a falsy
 # `general.sessionRetention.enabled` *before* enumerating, so this setting
 # prevents the scan rather than merely bounding it. Verified in 0.55.1
-# (upstream 41327e407) and 0.59.0, and still required at v0.60.0-nightly.20260904,
-# where the unbounded `Promise.all` remains -- upgrading does not fix it.
+# (upstream 41327e407) and again in the pinned 0.66.0, whose
+# `getAllSessionFiles` still loads every session file through one unbounded
+# `Promise.all` -- upgrading does not fix it.
 #
 # Tradeoff: the same switch also gates `cleanupToolOutputFiles`, so Gemini no
 # longer prunes its own `chats/` and `tool-outputs/`. Bounded retention becomes
@@ -196,23 +200,85 @@ GEMINI_SESSION_RETENTION_SETTINGS: dict[str, object] = {
     },
 }
 
-# gemini-cli resolves a model id ending in "flash" (its `isFlashModel` test) to its own
-# default flash model instead of sending it whenever it considers 3.5 Flash available,
-# which under Vertex auth is always, so a request for a model the CLI predates is
-# silently answered by a different one. 0.55.1 has no knowledge of gemini-3.6-flash
-# and rewrites it to gemini-3.5-flash before any network call; 0.58.0, 0.59.0 and the
-# 0.60.0 nightly do the same, so upgrading is not a fix. This flag routes model resolution
-# through the dynamic path, which passes an unrecognized id through untouched.
-# Vertex serves gemini-3.6-flash correctly, so the id only ever needed to reach it.
+# Metaproc keeps gemini-cli on its static model-resolution path. Through 0.60 that
+# path answered any id ending in "flash" with the CLI's own flash default, which is
+# why Metaproc once turned `experimental.dynamicModelConfiguration` on. 0.61.0
+# replaced that test with an exact list, and in the pinned 0.66.0 the static path
+# sends every concrete catalog id unchanged. The dynamic path now does the opposite
+# of what it was enabled for: its `modelIdResolutions` table rewrites an explicit
+# gemini-3.1-pro-preview to gemini-3.1-pro-preview-customtools under API-key auth,
+# and it judges preview status and multimodal tool output from model definitions
+# that 3.6 Flash and Gemini 4 do not have. Both paths still send gemini-3.5-flash
+# and gemini-3-flash as gemini-3.8-flash, and gemini-3.1-flash-lite as
+# gemini-3.5-flash-lite, under Vertex, API-key and gateway auth; the catalog no
+# longer accepts those ids. The key is asserted false, not left out, so a working
+# directory's settings cannot switch the rewriting path back on unnoticed.
 GEMINI_DYNAMIC_MODEL_SETTINGS: dict[str, object] = {
     "experimental": {
-        "dynamicModelConfiguration": True,
+        "dynamicModelConfiguration": False,
     },
 }
 
+# Model-config aliases gemini-cli 0.66.0 ships that extend `chat-base-3`, which sets
+# `thinkingLevel: HIGH`. A chat model without its own alias falls back to
+# `chat-base`, which sets no thinking level, so the model runs at its server
+# default: medium for 3.6 Flash, Gemini 4 Argon and Gemini 4 Carbon.
+GEMINI_CLI_CHAT_BASE_3_MODELS: frozenset[str] = frozenset(
+    {
+        "gemini-3-pro-preview",
+        "gemini-3-flash-preview",
+        "gemini-3.1-pro-preview",
+        "gemini-3.1-pro-preview-customtools",
+        "gemini-3.1-flash-lite-preview",
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-3.8-flash",
+        "gemma-4-31b-it",
+        "gemma-4-26b-a4b-it",
+    }
+)
+
+# Concrete catalog ids that need their own thinking-level override. Matching an
+# id with `match: {model: <id>}` is safe only because no internal gemini-cli
+# alias (classifier, loop detection, compression, web fetch) uses one of these
+# ids as its base model; those utility configs set their own thinking budgets.
+GEMINI_UNALIASED_CHAT_MODELS: tuple[str, ...] = tuple(
+    sorted(
+        model
+        for model in GEMINI_VALID_MODELS
+        if model.startswith("gemini-") and model not in GEMINI_CLI_CHAT_BASE_3_MODELS
+    )
+)
+
+
+def _gemini_thinking_override(match: dict[str, str]) -> dict[str, object]:
+    return {
+        "match": match,
+        "modelConfig": {
+            "generateContentConfig": {
+                "thinkingConfig": {
+                    "thinkingLevel": GEMINI_DEFAULT_THINKING_LEVEL,
+                },
+            },
+        },
+    }
+
+
+# gemini-cli matches an override's `model` key against the requested model and
+# every alias in its inheritance chain, so `{model: "chat-base-3"}` reaches every
+# chat model the CLI configures and `{model: <id>}` reaches one un-aliased model.
+# `overrideScope` names a sub-agent (codebase_investigator, generalist), not an
+# alias: the `{overrideScope: "chat-base-3"}` match Metaproc wrote before 0.66.0
+# never applied, and HIGH held only where the CLI's own alias already set it.
+GEMINI_THINKING_OVERRIDES: list[dict[str, object]] = [
+    _gemini_thinking_override({"model": "chat-base-3"}),
+    *(_gemini_thinking_override({"model": model}) for model in GEMINI_UNALIASED_CHAT_MODELS),
+]
+
 GEMINI_DEFAULT_NATIVE_SETTINGS: dict[str, object] = {
     "experimental": {
-        "dynamicModelConfiguration": True,
+        "dynamicModelConfiguration": False,
     },
     "general": {
         "sessionRetention": {
@@ -232,17 +298,6 @@ GEMINI_DEFAULT_NATIVE_SETTINGS: dict[str, object] = {
         },
     },
     "modelConfigs": {
-        "overrides": [
-            {
-                "match": {"overrideScope": "chat-base-3"},
-                "modelConfig": {
-                    "generateContentConfig": {
-                        "thinkingConfig": {
-                            "thinkingLevel": GEMINI_DEFAULT_THINKING_LEVEL,
-                        },
-                    },
-                },
-            },
-        ],
+        "overrides": GEMINI_THINKING_OVERRIDES,
     },
 }

@@ -102,7 +102,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         api_key_env=MetaprocEnv.MOONSHOT_API_KEY,
         gcp_secret_ref_env=MetaprocEnv.METAPROC_GCP_SECRET_MOONSHOT_API_KEY,
         gcp_secret_description=(
-            "Moonshot API key (pi-cli moonshot provider, Kimi K2.6 direct API)"
+            "Moonshot API key (pi-cli moonshot provider, Kimi direct API)"
         ),
         model_name_match=lambda n: n.startswith("kimi-"),
     ),
@@ -131,10 +131,12 @@ _PI_EXTRA_VALID_PROVIDER_NAMES: frozenset[str] = frozenset(
         # Pi-cli supports these vendor-cloud providers via its built-in
         # catalog. Metaproc does not actively wire credentials or Batch
         # injection for them today, so they live here rather than as full
-        # ProviderSpec entries.
-        "vertex",
+        # ProviderSpec entries. The names are Pi's own provider IDs: `azure`
+        # from Pi 1.0.3, `amazon-bedrock` throughout. The former `vertex` and
+        # `bedrock` tokens were never Pi IDs and failed at run time; Vertex AI
+        # is the registered `google-vertex` provider.
         "azure",
-        "bedrock",
+        "amazon-bedrock",
     }
 )
 

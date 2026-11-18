@@ -38,9 +38,14 @@ from metaproc.settings import (
 
 log = logging.getLogger(__name__)
 
-PINNED_PI_CODING_AGENT_VERSION = "0.84.2"
+PINNED_PI_CODING_AGENT_VERSION = "1.5.2"
+# Pi ships no shrinkwrap since 1.0.2, so its third-party dependencies float. The
+# release-age gate keeps the 14-day cool-off for them; only the exact-pinned
+# first-party `@earendil-works` packages are exempt (see SUPPLY-CHAIN-SECURITY.md).
 PI_CLI_INSTALL_HINT = (
-    f"Install: npm install -g @earendil-works/pi-coding-agent@{PINNED_PI_CODING_AGENT_VERSION}"
+    "Install: npm install -g --ignore-scripts --min-release-age=14 "
+    "--min-release-age-exclude='@earendil-works/*' "
+    f"@earendil-works/pi-coding-agent@{PINNED_PI_CODING_AGENT_VERSION}"
 )
 
 
@@ -108,6 +113,14 @@ _TOOL_MAP: dict[str, str] = {
 
 PI_AVAILABLE_TOOLS = frozenset({"read", "bash", "edit", "write", "grep", "find", "ls"})
 
+# Pi 0.99.0 and later load a built-in MCP extension by default. It connects the
+# servers in `~/.pi/agent/mcp.json` or a trusted project's `.pi/mcp.json`, keeps
+# their tools alongside a `--tools` allowlist, and can enable `codemode` and
+# `tool_search` for them. `--no-mcp` restores the tool isolation of the 0.84.2
+# client, where the allowlist was the whole tool surface. Unlike `--no-extensions`,
+# it leaves operator-installed extensions alone.
+_PI_ISOLATION_FLAGS: tuple[str, ...] = ("--no-mcp",)
+
 
 def _build_pi_flags(
     merged_config: dict[str, object],
@@ -169,14 +182,14 @@ def _build_pi_flags(
         flags.extend(["--append-system-prompt", resolved])
 
     # tool_choice: recognized at the adapter layer so process specs can declare
-    # intent (notably pi-qwen3-* variants, which the scaling plan wants to run
-    # with tool_choice=auto for function-calling accuracy). Pi-cli's pi-ai
-    # provider library already supports the option, but as of 2026-04-17 the
-    # pi-cli binary does not expose a --tool-choice flag (or equivalent env
-    # var) that routes it into stream options — confirmed by auditing the
-    # installed pi-coding-agent dist at /opt/node22/lib/.../dist/core/. We
-    # record the declaration and a one-shot warning; when pi-cli adds the
-    # flag upstream, flip the log call below to flags.extend([...]).
+    # intent. Pi's pi-ai provider library supports the option, but the pinned
+    # `pi` binary exposes no --tool-choice flag, environment variable, setting,
+    # or models.json field that routes it into stream options. Checked at Pi
+    # 1.5.2: `toolChoice` appears only in the provider stream code. The `pi` bin
+    # is `dist/bundle/cli.js`, which inlines pi-ai; audit `dist/bundle/chunks/`
+    # or the source at the release tag, not the library modules in `dist/core/`.
+    # We record the declaration and a warning; when Pi adds the flag upstream,
+    # flip the log call below to flags.extend([...]).
     tool_choice = merged_config.get("tool_choice")
     if tool_choice:
         log.warning(
@@ -274,7 +287,16 @@ class PiCliAdapter:
         session_flags = (
             [] if merged_config.get("no_session_persistence") is False else ["--no-session"]
         )
-        return [pi_binary, "--mode", "json", "-p", f"@{prompt_file}", *session_flags, *flags]
+        return [
+            pi_binary,
+            "--mode",
+            "json",
+            "-p",
+            f"@{prompt_file}",
+            *session_flags,
+            *_PI_ISOLATION_FLAGS,
+            *flags,
+        ]
 
     def validate_config(self, merged_config: dict[str, object]) -> list[ConfigRejection]:
         rejections: list[ConfigRejection] = []
@@ -302,6 +324,11 @@ class PiCliAdapter:
         env = dict(env)
         # Skip version check to avoid startup delays
         env["PI_SKIP_VERSION_CHECK"] = "1"
+        # Pin install telemetry and provider attribution headers off instead of
+        # inheriting the operator's `enableInstallTelemetry` setting. `PI_OFFLINE`
+        # is deliberately not set: it would also stop Pi from fetching the `fd` and
+        # `rg` binaries its find and grep tools need on hosts that lack them.
+        env["PI_TELEMETRY"] = "0"
         api_key = merged_config.get("api_key")
         if api_key:
             provider = str(merged_config.get("provider") or PI_DEFAULT_PROVIDER)

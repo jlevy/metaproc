@@ -122,7 +122,7 @@ def test_default_native_settings_reach_gemini_without_a_root_owned_file(tmp_path
     assert skipped == []
     general = cast("dict[str, dict[str, object]]", loaded["general"])
     assert general["sessionRetention"]["enabled"] is False
-    assert loaded["experimental"] == {"dynamicModelConfiguration": True}
+    assert loaded["experimental"] == {"dynamicModelConfiguration": False}
     assert loaded["tools"] == {"core": ["read_file"]}
     assert loaded["agents"] == GEMINI_DEFAULT_NATIVE_SETTINGS["agents"]
     assert loaded["modelConfigs"] == GEMINI_DEFAULT_NATIVE_SETTINGS["modelConfigs"]
@@ -254,13 +254,13 @@ def test_working_directory_settings_with_comments_are_read_as_gemini_reads_them(
     _write_workspace_settings(
         cwd,
         '{\n  // the theme a developer prefers\n  "ui": {"theme": "a // b /* c */"},\n'
-        '  /* the step\'s own value */ "experimental": {"dynamicModelConfiguration": true}\n}\n',
+        '  /* the step\'s own value */ "experimental": {"dynamicModelConfiguration": false}\n}\n',
     )
     adapter = GeminiCliAdapter()
     adapter.prepare_env({"HOME": str(tmp_path)}, {"working_directory": str(cwd)})
 
     (cwd / ".gemini" / "settings.json").write_text(
-        '{\n  // turned off locally\n  "experimental": {"dynamicModelConfiguration": false}\n}\n',
+        '{\n  // turned on locally\n  "experimental": {"dynamicModelConfiguration": true}\n}\n',
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match=r"experimental\.dynamicModelConfiguration"):

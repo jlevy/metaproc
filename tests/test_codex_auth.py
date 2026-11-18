@@ -12,15 +12,16 @@ import pytest
 from metaproc.adapters.codex_cli import resolve_codex_home
 from metaproc.commands import codex_auth
 
+# The shape Codex writes after a ChatGPT login: `auth_mode` at the top level.
 _VALID_AUTH_JSON = json.dumps(
     {
+        "auth_mode": "chatgpt",
         "OPENAI_API_KEY": None,
         "tokens": {
             "id_token": "fake-id",
             "access_token": "fake-access",
             "refresh_token": "fake-refresh",
             "account_id": "fake-account",
-            "auth_mode": "chatgpt",
         },
         "last_refresh": "2026-04-24T00:00:00Z",
     }
@@ -137,6 +138,26 @@ class TestValidateCodexPayload:
         monkeypatch.setenv("CODEX_HOME", str(tmp_path))
         payload = json.dumps({"tokens": {"auth_mode": "apikey", "access_token": "sk-..."}})
         with pytest.raises(RuntimeError, match="chatgpt|apikey"):
+            codex_auth._validate_codex_payload(payload)
+
+    def test_legacy_nested_chatgpt_payload_passes(self, tmp_path: Path, monkeypatch):
+        # Earlier Metaproc releases documented `tokens.auth_mode`; keep accepting it.
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+        payload = json.dumps(
+            {"OPENAI_API_KEY": None, "tokens": {"auth_mode": "chatgpt", "access_token": "a"}}
+        )
+        codex_auth._validate_codex_payload(payload)
+
+    def test_pre_auth_mode_chatgpt_payload_passes(self, tmp_path: Path, monkeypatch):
+        # Codex resolves a file without `auth_mode` and without an API key as ChatGPT.
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+        payload = json.dumps({"OPENAI_API_KEY": None, "tokens": {"access_token": "a"}})
+        codex_auth._validate_codex_payload(payload)
+
+    def test_top_level_apikey_mode_raises(self, tmp_path: Path, monkeypatch):
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+        payload = json.dumps({"auth_mode": "apikey", "OPENAI_API_KEY": "sk-x", "tokens": {}})
+        with pytest.raises(RuntimeError, match="auth_mode='apikey'"):
             codex_auth._validate_codex_payload(payload)
 
 

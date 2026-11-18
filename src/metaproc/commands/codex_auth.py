@@ -29,7 +29,7 @@ from typing import Any, cast
 
 import typer
 
-from metaproc.adapters.codex_cli import resolve_codex_home
+from metaproc.adapters.codex_cli import codex_auth_json_mode, resolve_codex_home
 from metaproc.cli import app, get_output
 from metaproc.config.env_vars import MetaprocEnv
 
@@ -163,10 +163,10 @@ def _validate_codex_payload(payload: str) -> None:
             "codex-auth push only accepts ChatGPT-OAuth sessions (use `codex login`)."
         )
         raise RuntimeError(msg)
-    auth_mode = cast("dict[str, Any]", tokens).get("auth_mode")
+    auth_mode = codex_auth_json_mode(payload_dict)
     if auth_mode != "chatgpt":
         msg = (
-            f"{_auth_json_path()} has tokens.auth_mode={auth_mode!r}. "
+            f"{_auth_json_path()} has auth_mode={auth_mode!r}. "
             "codex-auth push only supports ChatGPT-OAuth sessions (auth_mode=chatgpt). "
             "API-key auth should be exported as OPENAI_API_KEY directly."
         )
