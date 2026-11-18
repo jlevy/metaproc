@@ -1821,9 +1821,9 @@ def _resume_plan_warnings(
         successor = REMOVED_EXECUTION_PROFILES[name].successor
         warnings.append(
             f"{removed_profile_note(name)}. This resume rebuilds it from the definition the "
-            f"run was created with, so completed steps are reused; select {successor!r} "
-            "(--variant, --step-variant, or the process file) to move to the successor, "
-            "which re-runs the steps it changes."
+            "run was created with, so completed steps it does not change are reused. "
+            f"Select {successor!r} (--variant, --step-variant, or the process file) to move "
+            "to the successor; the steps that changes re-run."
         )
     if not namespace_is_explicit and plan.artifact_namespace:
         current = derive_run_artifact_namespace(variant, config_overrides)
