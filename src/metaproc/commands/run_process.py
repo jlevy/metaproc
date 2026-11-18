@@ -40,7 +40,15 @@ from metaproc.adapters.base import (
     agent_seed_env,
     validate_terminal_result_log,
 )
-from metaproc.adapters.registry import derive_variant, get_adapter, get_auth_capable
+from metaproc.adapters.registry import (
+    ADAPTER_REGISTRY,
+    UNRECORDED_NAMESPACE_DEFAULT_MODELS,
+    current_default_models,
+    derive_variant,
+    get_adapter,
+    get_auth_capable,
+    recorded_namespace_default_models,
+)
 from metaproc.agent_errors import parse_quota_reset_at
 from metaproc.cli import app, get_output
 from metaproc.cloud.gcp.resolve_token import resolve_gcp_token
@@ -93,7 +101,12 @@ from metaproc.dispatch.preflight import (
     validate_guard_posture,
 )
 from metaproc.dispatch.slot_coordinator import SlotCoordinator, SlotLease
-from metaproc.engine.build_plan import build_plan, merge_defaults
+from metaproc.engine.build_plan import (
+    build_plan,
+    derive_run_artifact_namespace,
+    load_profile_registry,
+    merge_defaults,
+)
 from metaproc.engine.code_handler import resolve_code_handler
 from metaproc.engine.collected_inputs import (
     COLLECTED_INPUTS_UNREADABLE,
@@ -225,6 +238,12 @@ from metaproc.io.state_io import (
 )
 from metaproc.logutil.compaction import try_compact_log
 from metaproc.models.authored import IOSpec, ProcessSpec, ProcessStep, RetryPolicy, StepContext
+from metaproc.models.execution_profile import (
+    REMOVED_EXECUTION_PROFILES,
+    ExecutionProfile,
+    recorded_execution_profiles,
+    removed_profile_note,
+)
 from metaproc.models.lane import ExecutionLane
 from metaproc.models.plan import Plan, ResolvedStep, RunPlanSnapshot, RunPlanStep
 from metaproc.models.resource_budget import FinalizationState
@@ -480,6 +499,13 @@ class RunExecutionContext:
     sync_executor: ThreadPoolExecutor
     run_pool_owner: RunPoolOwner | None
     spend_ledger: SpendLedger | None = None
+    # What a resume's run-config.yaml records for planning composite children and
+    # deriving step namespaces: the removed profiles the run used, and the adapter
+    # defaults its derived namespaces compare against (`_ResumePlanRecord`).
+    recorded_profiles: Mapping[str, ExecutionProfile] = dataclasses.field(
+        default_factory=dict[str, ExecutionProfile]
+    )
+    namespace_default_models: Mapping[str, str] | None = None
 
     @classmethod
     def create(
@@ -505,6 +531,8 @@ class RunExecutionContext:
         run_dir: Path | None = None,
         enable_run_pool: bool = False,
         spend_ledger: SpendLedger | None = None,
+        recorded_profiles: Mapping[str, ExecutionProfile] | None = None,
+        namespace_default_models: Mapping[str, str] | None = None,
     ) -> RunExecutionContext:
         """Create the references that must remain identical through recursion."""
         if max_concurrency is not None and max_concurrency < 1:
@@ -545,6 +573,8 @@ class RunExecutionContext:
                 else None
             ),
             spend_ledger=spend_ledger,
+            recorded_profiles=dict(recorded_profiles or {}),
+            namespace_default_models=namespace_default_models,
         )
 
     def agent_pool(
@@ -926,6 +956,7 @@ class _LaunchConfig:
     backend: str
     git_sha: str
     max_spend_usd: float | None = None
+    default_models: Mapping[str, str] = dataclasses.field(default_factory=dict[str, str])
 
 
 _LAUNCH_CONFIG_FIELDS: tuple[str, ...] = tuple(
@@ -934,9 +965,13 @@ _LAUNCH_CONFIG_FIELDS: tuple[str, ...] = tuple(
 """The launch-config fields of ``run-config.yaml``, which a resume compares, records, and
 rewrites; ``_LaunchConfig`` declares them."""
 
-_KEYED_LAUNCH_CONFIG_FIELDS = frozenset({"variables", "step_variants"})
+_KEYED_LAUNCH_CONFIG_FIELDS = frozenset({"variables", "step_variants", "default_models"})
 """The launch-config mappings compared key by key, as ``<field>.<KEY>``; every other
-field is compared whole."""
+field is compared whole.
+
+``default_models`` maps each adapter that runs a root agent step with no ``model`` to
+the default model that step resolves to (``_plan_default_models``), so a default a later
+release moves is recorded, and warned about, as ``default_models.<ADAPTER>``."""
 
 type _LaunchConfigValue = str | list[dict[str, object]] | dict[str, object] | None
 """One launch-config value as the run records it, ``None`` when absent.
@@ -950,7 +985,8 @@ type _LaunchConfigChanges = dict[str, tuple[_LaunchConfigValue, _LaunchConfigVal
 """What one resume changed in the launch config: ``field -> (recorded, current)``.
 
 ``None`` marks an absent side. A change to one of the ``_KEYED_LAUNCH_CONFIG_FIELDS`` is
-named ``variables.<NAME>`` or ``step_variants.<STEP>``, a change to any other
+named ``variables.<NAME>``, ``step_variants.<STEP>``, or ``default_models.<ADAPTER>``, a
+change to any other
 ``_LAUNCH_CONFIG_FIELDS`` entry by the field itself, and a binding the resume adopts or
 releases (``engine.input_bindings``) ``input_bindings.<NAME>``. The mapping is sorted by
 field. A changed ``run_dir``, and a changed value of an input the process binds
@@ -990,6 +1026,7 @@ def _write_run_config(  # noqa: PLR0913
     git_sha: str | None = None,
     spec: ProcessSpec | None = None,
     max_spend_usd: float | None = None,
+    default_models: Mapping[str, str] | None = None,
 ) -> _RunConfigWrite:
     """Write run-config.yaml at run creation time; validate a resume against it.
 
@@ -999,7 +1036,9 @@ def _write_run_config(  # noqa: PLR0913
     intent.
 
     The first write records the launch-config fields (``_LaunchConfig``) with the rest of
-    the run's creation record. *git_sha* is the launch checkout's; ``None`` reads it here.
+    the run's creation record, which includes ``namespace_default_models``: the adapter
+    defaults the run's derived artifact namespaces compare against for its whole life
+    (``derive_variant``), so a default a later release moves does not rename them. *git_sha* is the launch checkout's; ``None`` reads it here.
     It also binds the root scope's ``on_change: new_run`` inputs, when *spec* declares
     any, by writing ``input-bindings.yaml`` beside the config
     (``engine.input_bindings``); *spec* absent means a process declaring none.
@@ -1057,6 +1096,9 @@ def _write_run_config(  # noqa: PLR0913
         data["resolved_profiles"] = resolved_profiles
     if step_variants:
         data["step_variants"] = dict(sorted(step_variants.items()))
+    if default_models:
+        data["default_models"] = dict(sorted(default_models.items()))
+    data["namespace_default_models"] = current_default_models()
     if auth_flags is not None and auth_flags.is_pool_dispatch_enabled():
         data["auth"] = _serialize_auth_flags(auth_flags)
     if max_concurrency is not None:
@@ -1676,6 +1718,163 @@ def _resume_step_variants(run_dir: Path, requested: Mapping[str, str]) -> dict[s
     return recorded_step_variants(_read_run_config(config_path))
 
 
+def _recorded_default_models(raw: Mapping[object, object]) -> dict[str, str] | None:
+    """Return the ``default_models`` a ``run-config.yaml`` records, ``None`` when absent.
+
+    A config written before the field existed, or by a launch with no root agent step
+    that left its model unset, has none.
+    """
+    recorded = raw.get("default_models")
+    if not isinstance(recorded, Mapping):
+        return None
+    return {
+        str(adapter_type): str(model)
+        for adapter_type, model in cast("Mapping[object, object]", recorded).items()
+        if isinstance(model, str) and model
+    }
+
+
+def _plan_default_models(plan: Plan) -> dict[str, str]:
+    """Return the default model each root agent step that sets no ``model`` resolves to.
+
+    Keyed by adapter type. A step that names a model, a code step, and a composite's
+    children (planned per scope) contribute nothing.
+    """
+    defaults: dict[str, str] = {}
+    for step in plan.steps:
+        if step.mode != "agent" or step.adapter.config.get("model"):
+            continue
+        adapter = ADAPTER_REGISTRY.get(step.adapter.type)
+        if adapter is not None and adapter.default_model:
+            defaults[step.adapter.type] = adapter.default_model
+    return dict(sorted(defaults.items()))
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _ResumePlanRecord:
+    """What a resumed run's ``run-config.yaml`` records that its plan must follow.
+
+    ``recorded_profiles`` are the removed built-in profiles the run used, rebuilt from
+    their former definitions (``recorded_execution_profiles``). ``namespace_default_models``
+    are the adapter defaults its derived artifact namespaces compare against
+    (``recorded_namespace_default_models``). ``default_models`` is what the last launch
+    resolved for steps with no model, ``None`` when the config does not record it. A
+    new run has no recorded profiles and derives against the current defaults.
+    """
+
+    resumed: bool
+    recorded_profiles: dict[str, ExecutionProfile]
+    namespace_default_models: dict[str, str]
+    default_models: dict[str, str] | None
+
+
+def _resume_plan_record(run_dir: Path) -> _ResumePlanRecord:
+    """Read the planning record of the run at *run_dir*; a new run has an empty one."""
+    config_path = paths_mod.run_config_file(run_dir)
+    if not config_path.exists():
+        return _ResumePlanRecord(
+            resumed=False,
+            recorded_profiles={},
+            namespace_default_models=current_default_models(),
+            default_models=None,
+        )
+    raw = _read_run_config(config_path)
+    return _ResumePlanRecord(
+        resumed=True,
+        recorded_profiles=recorded_execution_profiles(raw),
+        namespace_default_models=recorded_namespace_default_models(
+            raw.get("namespace_default_models")
+        ),
+        default_models=_recorded_default_models(raw),
+    )
+
+
+def _resume_plan_warnings(
+    plan: Plan,
+    record: _ResumePlanRecord,
+    *,
+    process_path: Path,
+    profile_files: Sequence[Path],
+    variant: str | None,
+    config_overrides: Mapping[str, str] | None,
+    namespace_is_explicit: bool,
+) -> list[str]:
+    """Return what a resume's plan follows from its record rather than the current release.
+
+    A removed built-in profile the run used, rebuilt from its former definition, and an
+    artifact namespace derived against the defaults the run was created with when the
+    current defaults would derive another. Neither refuses the resume; each is said.
+    """
+    if not record.resumed:
+        return []
+    warnings: list[str] = []
+    registry = load_profile_registry(
+        process_path, profile_files, recorded_profiles=record.recorded_profiles
+    )
+    used = {step.execution_profile for step in plan.steps if step.execution_profile}
+    if plan.execution_profile:
+        used.add(plan.execution_profile)
+    for name in sorted(used):
+        entry = registry.entries.get(name)
+        if entry is None or entry.source.kind != "recorded":
+            continue
+        successor = REMOVED_EXECUTION_PROFILES[name].successor
+        warnings.append(
+            f"{removed_profile_note(name)}. This resume rebuilds it from the definition the "
+            f"run was created with, so completed steps are reused; select {successor!r} "
+            "(--variant, --step-variant, or the process file) to move to the successor, "
+            "which re-runs the steps it changes."
+        )
+    if not namespace_is_explicit and plan.artifact_namespace:
+        current = derive_run_artifact_namespace(variant, config_overrides)
+        if current is not None and current != plan.artifact_namespace and variant:
+            earlier = record.namespace_default_models.get(variant)
+            warnings.append(
+                f"Artifact namespace stays {plan.artifact_namespace!r}: the run was created "
+                f"when the {variant} default model was {earlier}, and a resume derives its "
+                f"namespace as the run did. A new run with these flags would use "
+                f"{current!r}; pass --artifact-namespace {current} to move this one."
+            )
+    return warnings
+
+
+def _default_model_change_warnings(
+    changes: _LaunchConfigChanges, record: _ResumePlanRecord
+) -> list[str]:
+    """Explain each ``default_models.<ADAPTER>`` change a resume records.
+
+    Completed steps keep the results their earlier model produced, since a step's
+    fingerprint covers the model it names, not a default it leaves unset; steps the
+    resume runs use the new default. A config that does not record the earlier default
+    names the default of the releases that wrote it, as the likely earlier model.
+    """
+    prefix = "default_models."
+    warnings: list[str] = []
+    for field, (old, new) in changes.items():
+        if not field.startswith(prefix) or not isinstance(new, str):
+            continue
+        adapter_type = field.removeprefix(prefix)
+        if isinstance(old, str):
+            earlier = f"ran {old}"
+        elif record.default_models is None and (
+            legacy := UNRECORDED_NAMESPACE_DEFAULT_MODELS.get(adapter_type)
+        ):
+            if legacy == new:
+                continue
+            earlier = (
+                f"most likely ran {legacy}, the {adapter_type} default of the releases that "
+                "did not record it"
+            )
+        else:
+            continue
+        warnings.append(
+            f"{adapter_type} steps that set no model: those completed earlier {earlier} and "
+            f"are reused; steps this resume runs use {new}. Set the model explicitly to run "
+            "one model throughout (steps whose model changes re-run)."
+        )
+    return warnings
+
+
 def _validate_run_config(
     config_path: Path,
     *,
@@ -1722,6 +1921,13 @@ def _validate_run_config(
         changes[f"step_variants.{step_id}"] = (
             recorded_overrides.get(step_id),
             launch.step_variants.get(step_id),
+        )
+
+    recorded_defaults = _recorded_default_models(raw) or {}
+    for adapter_type in _changed_keys(recorded_defaults, launch.default_models):
+        changes[f"default_models.{adapter_type}"] = (
+            recorded_defaults.get(adapter_type),
+            launch.default_models.get(adapter_type),
         )
 
     for field in _LAUNCH_CONFIG_FIELDS:
@@ -1845,12 +2051,14 @@ def _read_resumable_run_config(
 def _recorded_launch_config(launch: _LaunchConfig) -> dict[str, object]:
     """Return *launch* as ``run-config.yaml`` records it: field -> value, ``None`` if absent.
 
-    The two mappings keep their shape, ``step_variants`` sorted as the first write sorts
-    it; every other field goes through ``_persisted_launch_value``.
+    The three mappings keep their shape, ``step_variants`` and ``default_models`` sorted
+    as the first write sorts them; every other field goes through
+    ``_persisted_launch_value``.
     """
     record: dict[str, object] = {
         "variables": dict(launch.variables) or None,
         "step_variants": dict(sorted(launch.step_variants.items())) or None,
+        "default_models": dict(sorted(launch.default_models.items())) or None,
     }
     for field in _LAUNCH_CONFIG_FIELDS:
         if field not in _KEYED_LAUNCH_CONFIG_FIELDS:
@@ -3173,7 +3381,13 @@ async def _execute_agent_step(
         merged_config.setdefault("max_budget_usd", merged["max_budget_usd"])
     runtime_config = cast("dict[str, object]", resolve_runtime_config(merged_config, variables))
 
-    derived_variant = derive_variant(adapter_type, runtime_config)
+    derived_variant = derive_variant(
+        adapter_type,
+        runtime_config,
+        default_models=(
+            execution_context.namespace_default_models if execution_context is not None else None
+        ),
+    )
     effective_execution_profile = (
         target.execution_profile
         or step_def.execution_profile
@@ -3952,6 +4166,8 @@ def _prepare_composite_scope(
         adapter_override=child_execution_profile,
         artifact_namespace=target.artifact_namespace,
         profile_files=execution_context.profile_files,
+        recorded_profiles=execution_context.recorded_profiles,
+        namespace_default_models=execution_context.namespace_default_models,
     )
     if profile_pinned and child_plan.artifact_namespace:
         child_vars.setdefault("ARTIFACT_NAMESPACE", child_plan.artifact_namespace)
@@ -4778,7 +4994,13 @@ async def _execute_fan_out_step(
         merged_config.setdefault("max_budget_usd", merged["max_budget_usd"])
     runtime_config = cast("dict[str, object]", resolve_runtime_config(merged_config, variables))
 
-    derived_variant = derive_variant(adapter_type, runtime_config)
+    derived_variant = derive_variant(
+        adapter_type,
+        runtime_config,
+        default_models=(
+            execution_context.namespace_default_models if execution_context is not None else None
+        ),
+    )
     effective_execution_profile = (
         target.execution_profile
         or step_def.execution_profile
@@ -6605,6 +6827,7 @@ def run_process_command(
     step_profile_overrides = _resume_step_variants(
         compute_run_dir(spec, variables), step_profile_overrides
     )
+    resume_record = _resume_plan_record(compute_run_dir(spec, variables))
 
     # Launch validation runs before any step, so it carries the validation exit
     # code (2) rather than the general failure code (1) an executed-and-failed
@@ -6620,6 +6843,7 @@ def run_process_command(
         profile_files=profile_files,
         adapter_override=variant or None,
         step_profile_overrides=step_profile_overrides,
+        recorded_profiles=resume_record.recorded_profiles,
     )
     if launch_errors:
         raise ValidationError(format_launch_errors(launch_errors))
@@ -6640,9 +6864,23 @@ def run_process_command(
             profile_files=profile_files,
             step_profile_overrides=step_profile_overrides,
             config_overrides=config_overrides or None,
+            recorded_profiles=resume_record.recorded_profiles,
+            namespace_default_models=resume_record.namespace_default_models,
         )
     except (TypeError, ValueError) as exc:
         raise ValidationError(str(exc)) from exc
+    for message in _resume_plan_warnings(
+        plan,
+        resume_record,
+        process_path=process_path,
+        profile_files=profile_files,
+        variant=variant or None,
+        config_overrides=config_overrides or None,
+        namespace_is_explicit=bool(
+            artifact_namespace or variables.get("ARTIFACT_NAMESPACE") or variables.get("VARIANT")
+        ),
+    ):
+        out.warning(message)
 
     if plan.execution_profile:
         variables["EXECUTION_PROFILE"] = plan.execution_profile
@@ -6924,6 +7162,7 @@ def run_process_command(
         backend=backend,
         git_sha=_get_git_sha(),
         max_spend_usd=spend_cap_usd,
+        default_models=_plan_default_models(plan),
     )
     # Write run-config.yaml for a new run. A resume is only checked against it here.
     run_config = _write_run_config(
@@ -6944,6 +7183,7 @@ def run_process_command(
         git_sha=launch_config.git_sha,
         spec=spec,
         max_spend_usd=spend_cap_usd,
+        default_models=launch_config.default_models,
     )
 
     out.progress(f"run-process: {spec.name} ({len(active_step_ids)} steps, {len(levels)} levels)")
@@ -7171,6 +7411,8 @@ def run_process_command(
     # The operator sees the changes once recorded.
     for field, (old, new) in launch_changes.items():
         out.warning(_describe_launch_config_change(field, old, new))
+    for message in _default_model_change_warnings(launch_changes, resume_record):
+        out.warning(message)
     if launch_changes:
         out.warning(
             f"Recorded {len(launch_changes)} launch-config change(s) as a "
@@ -7236,6 +7478,8 @@ def run_process_command(
                     run_dir=run_dir,
                     enable_run_pool=backend == "local",
                     spend_ledger=spend_ledger,
+                    recorded_profiles=resume_record.recorded_profiles,
+                    namespace_default_models=resume_record.namespace_default_models,
                 )
                 primary_error: BaseException | None = None
                 try:
