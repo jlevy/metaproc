@@ -163,9 +163,7 @@ class TestAliasResults:
         ],
     )
     def test_an_alias_answered_by_another_model_is_refused(self, alias: str, served: str) -> None:
-        verdict = GeminiCliAdapter().validate_result_event(
-            _result({served: 120}), {"model": alias}
-        )
+        verdict = GeminiCliAdapter().validate_result_event(_result({served: 120}), {"model": alias})
         assert verdict is not None
         assert f"requested alias {alias!r}" in verdict
         assert f"gemini-cli {PINNED_GEMINI_CLI_VERSION} serves as" in verdict
@@ -211,7 +209,7 @@ _FLASH_ALIAS_STREAM = (
     '"session_id":"a2902f02-19fb-4cbd-ac25-32b89d44fc26","model":"flash"}\n'
     '{"type":"message","timestamp":"2026-11-18T02:41:34.761Z","role":"user",'
     '"content":"Use the run_shell_command tool exactly once to run the command '
-    '`echo probe-ok`. Then reply with only the command\'s output."}\n'
+    "`echo probe-ok`. Then reply with only the command's output.\"}\n"
     '{"type":"tool_use","timestamp":"2026-11-18T02:41:38.264Z",'
     '"tool_name":"run_shell_command","tool_id":"run_shell_command__call_209398948367156358",'
     '"parameters":{"command":"echo probe-ok",'

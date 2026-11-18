@@ -95,13 +95,13 @@ To exercise a specific model (Phase 1 matrix), export `GEMINI_SMOKE_MODEL` befor
 running:
 
 ```bash
-GEMINI_SMOKE_MODEL=gemini-3.5-flash \
+GEMINI_SMOKE_MODEL=gemini-4-hydrogen \
   uv run metaproc run-process process/self-test/smoke-adapter-gemini.process.md
 ```
 
 `live-probe` will request that model and assert the same ID; `tool-probe` will use the
 same model for the file-read round-trip.
-If Vertex returns a different observed ID shape (e.g. `models/gemini-3.5-flash-001`),
+If Vertex returns a different observed ID shape (e.g. `models/gemini-4-hydrogen-001`),
 `--assert-model` does substring matching, so the bare ID is enough — override
 `GEMINI_SMOKE_ASSERT_MODEL` only if the substring match needs to differ from the
 requested model.

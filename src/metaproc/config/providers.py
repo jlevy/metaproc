@@ -78,7 +78,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         name="anthropic",
         label="Anthropic",
         api_key_env=MetaprocEnv.ANTHROPIC_API_KEY,
-        model_name_match=lambda n: n.startswith("claude-") or n in {"opus", "sonnet", "haiku"},
+        model_name_match=lambda n: n.startswith("claude-") or n in {"fable", "opus", "sonnet", "haiku"},
     ),
     ProviderSpec(
         name="openai",
@@ -94,7 +94,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         api_key_env=MetaprocEnv.DEEPSEEK_API_KEY,
         gcp_secret_ref_env=MetaprocEnv.METAPROC_GCP_SECRET_DEEPSEEK_API_KEY,
         gcp_secret_description=("DeepSeek API key (pi-cli deepseek provider, V4 direct API)"),
-        model_name_match=lambda n: n.startswith("deepseek-v"),
+        model_name_match=lambda n: n.startswith("deepseek-"),
     ),
     ProviderSpec(
         name="moonshot",

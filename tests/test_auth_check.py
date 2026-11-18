@@ -635,7 +635,9 @@ class TestLiveCheckUsesTheProfileConfig:
         Both resolution paths send gemini-3.5-flash and gemini-3-flash as
         gemini-3.8-flash and gemini-3.1-flash-lite as gemini-3.5-flash-lite. With
         dynamic model configuration on, an explicit gemini-3.1-pro-preview is also
-        answered by gemini-3.1-pro-preview-customtools (observed live 2026-11-18).
+        answered by gemini-3.1-pro-preview-customtools (observed live 2026-11-18). A
+        `modelConfigs.overrides` entry that matches the requested id and names another
+        model sends the request there.
         """
 
         def run(cmd: list[str], **kwargs: object) -> MagicMock:
@@ -659,6 +661,10 @@ class TestLiveCheckUsesTheProfileConfig:
             }
             if dynamic:
                 rewrites["gemini-3.1-pro-preview"] = "gemini-3.1-pro-preview-customtools"
+            for override in settings.get("modelConfigs", {}).get("overrides", []):
+                target = override.get("modelConfig", {}).get("model")
+                if override.get("match") == {"model": model} and target:
+                    rewrites[model] = target
             served = rewrites.get(model, model)
             calls.append({"dynamic": dynamic, "output_format": output_format})
             proc = MagicMock()
@@ -726,23 +732,25 @@ class TestLiveCheckUsesTheProfileConfig:
             )
 
     def test_profile_native_settings_reach_the_probe(self, tmp_path: Path) -> None:
-        """A profile that turns dynamic model configuration on fails the probe."""
+        """A profile whose native settings reroute the model fails the probe."""
         profile_file = self._write_profile(
             tmp_path,
             "      native_settings:\n"
-            "        experimental:\n"
-            "          dynamicModelConfiguration: true\n",
+            "        modelConfigs:\n"
+            "          overrides:\n"
+            "            - match: {model: gemini-3.1-pro-preview}\n"
+            "              modelConfig: {model: gemini-3.8-flash}\n",
         )
         calls: list[dict[str, object]] = []
 
         result = self._invoke(profile_file, calls)
 
-        assert calls == [{"dynamic": True, "output_format": "stream-json"}]
+        assert calls == [{"dynamic": False, "output_format": "stream-json"}]
         assert result.exit_code == 1, result.output
         assert (
             "no served model matches expected 'gemini-3.1-pro-preview' (requested "
             "'gemini-3.1-pro-preview') — the CLI answered with a different model; billed: "
-            "gemini-3.1-pro-preview-customtools (10 tokens)"
+            "gemini-3.8-flash (10 tokens)"
         ) in result.output
 
     def test_workspace_native_settings_reach_the_probe(self, tmp_path: Path) -> None:
@@ -752,8 +760,10 @@ class TestLiveCheckUsesTheProfileConfig:
             "      native_settings_scope: workspace\n"
             f"      working_directory: {json.dumps(str(workspace))}\n"
             "      native_settings:\n"
-            "        experimental:\n"
-            "          dynamicModelConfiguration: true\n",
+            "        modelConfigs:\n"
+            "          overrides:\n"
+            "            - match: {model: gemini-3.1-pro-preview}\n"
+            "              modelConfig: {model: gemini-3.8-flash}\n",
         )
         calls: list[dict[str, object]] = []
 
@@ -762,12 +772,12 @@ class TestLiveCheckUsesTheProfileConfig:
         assert result.exception is None or isinstance(result.exception, SystemExit), (
             result.exception
         )
-        assert calls == [{"dynamic": True, "output_format": "stream-json"}]
+        assert calls == [{"dynamic": False, "output_format": "stream-json"}]
         assert result.exit_code == 1, result.output
         assert "no served model matches expected" in result.output
 
     def test_a_profile_without_the_override_keeps_metaproc_settings(self, tmp_path: Path) -> None:
-        """The control: the same stub serves the request when the flag stays off."""
+        """The control: the same stub serves the request under Metaproc's settings."""
         profile_file = self._write_profile(tmp_path, "")
         calls: list[dict[str, object]] = []
 
