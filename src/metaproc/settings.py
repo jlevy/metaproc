@@ -300,3 +300,35 @@ GEMINI_DEFAULT_NATIVE_SETTINGS: dict[str, object] = {
         "overrides": GEMINI_THINKING_OVERRIDES,
     },
 }
+
+# The defaults Metaproc wrote to a working directory's `.gemini/settings.json` under
+# `native_settings_scope: workspace` before it recorded them beside that file: v0.5.0
+# through v0.6.1 all wrote this object. A file without that record whose values differ
+# from today's defaults only where it holds one of these is a file Metaproc wrote, and
+# the adapter replaces those keys with a warning instead of refusing the relaunch.
+# Later releases record their own defaults, so a default change, including one the
+# model catalog drives through GEMINI_UNALIASED_CHAT_MODELS, needs no entry here.
+GEMINI_UNRECORDED_DEFAULT_NATIVE_SETTINGS: tuple[dict[str, object], ...] = (
+    {
+        "experimental": {"dynamicModelConfiguration": True},
+        "general": {"sessionRetention": {"enabled": False}},
+        "context": {"fileFiltering": {"respectGitIgnore": False}},
+        "agents": {
+            "overrides": {
+                "generalist": {"enabled": False},
+                "codebase_investigator": {"enabled": False},
+                "cli_help": {"enabled": False},
+            },
+        },
+        "modelConfigs": {
+            "overrides": [
+                {
+                    "match": {"overrideScope": "chat-base-3"},
+                    "modelConfig": {
+                        "generateContentConfig": {"thinkingConfig": {"thinkingLevel": "HIGH"}},
+                    },
+                },
+            ],
+        },
+    },
+)
