@@ -254,8 +254,9 @@ Each adapter implements three auth-relevant methods:
   credentials are discoverable.
   Consumed by `auth-check` Phase 1.
 - `prepare_env(env, merged_config) -> dict[str, str]` — transforms the subprocess
-  environment. Typically just filters stray vars and sets perf tweaks
-  (`PI_SKIP_VERSION_CHECK=1`, removal of inherited `CLAUDECODE`).
+  environment. Typically it filters stray vars and sets perf and privacy settings
+  (`PI_SKIP_VERSION_CHECK=1` and `PI_TELEMETRY=0` for Pi, removal of inherited
+  `CLAUDECODE`).
 - `bootstrap(home: Path) -> None` — materializes per-task filesystem state such as
   credentials files. Default is no-op.
   Called once per container by `worker_entrypoint.py` / `orchestrator_entrypoint.py` /
@@ -405,13 +406,17 @@ Reference: `src/metaproc/adapters/claude_cli.py` (`bootstrap()`),
    `GEMINI_API_KEY`, `GOOGLE_CLOUD_PROJECT` (for vertex-ai).
    Reports which are found.
 3. Pi CLI subprocess reads the relevant env var itself — metaproc does not transform it.
-4. `prepare_env` sets `PI_SKIP_VERSION_CHECK=1` to avoid a startup HTTP call.
+4. `prepare_env` sets `PI_SKIP_VERSION_CHECK=1` to avoid a startup HTTP call and
+   `PI_TELEMETRY=0` to keep install telemetry off.
+   The command line includes `--no-mcp`, so Pi’s built-in MCP extension cannot add tools
+   beyond the `--tools` allowlist.
 
-**Pi valid providers** (validated by `validate_config`): anthropic, openai, google,
-vertex, azure, bedrock, plus custom providers registered in `models.json`
-(`vertex-maas`, `google-vertex`).
+**Pi valid providers** (validated by `validate_config`): the providers registered in
+`src/metaproc/config/providers.py` (`anthropic`, `openai`, `google`, `deepseek`,
+`moonshot`, `vertex-maas`, `google-vertex`), plus Pi’s built-in `azure` and
+`amazon-bedrock`, which Metaproc does not wire credentials for.
 
-#### UC-5: Laptop run with Pi CLI + Vertex MaaS (GLM-5, Kimi K2, DeepSeek, etc.)
+#### UC-5: Laptop run with Pi CLI + Vertex MaaS (GLM-5.2, DeepSeek V4.1 Flash)
 
 Vertex MaaS (Model-as-a-Service) exposes an OpenAI-compatible endpoint at
 `https://aiplatform.googleapis.com/v1/projects/<PROJECT>/locations/global/endpoints/openapi`.
@@ -420,10 +425,11 @@ It requires a **GCP access token** as the bearer credential.
 Auth flow:
 
 1. Pi CLI loads `~/.pi/agent/models.json`. Metaproc dispatch (`build_pi_models_json` at
-   `src/metaproc/cloud/gcp/batch_backend.py`) prefers operator-authored config and falls
-   back to the packaged default `src/metaproc/data/pi-models.default.json`.
+   `src/metaproc/cloud/gcp/batch_backend.py`) starts from the packaged default
+   `src/metaproc/data/pi-models.default.json` and overlays an operator-authored file.
 
-2. The `vertex-maas` provider is declared with `"apiKey": "<injected-by-metaproc>"` and
+2. The packaged `vertex-maas` provider declares an `apiKey` shell command that prints
+   `METAPROC_PI_API_KEY` when it is set and otherwise runs `gcp-access-token.sh`, with
    `"authHeader": true` → Pi sends `Authorization: Bearer <apiKey>`.
 
 3. Metaproc resolves a GCP access token **once per batch** (not per item) via
@@ -442,9 +448,10 @@ Auth flow:
    `_needs_gcloud_token` is `True` when `adapter_type == "pi-cli"` and
    `provider.startswith("vertex")` and `backend == "local"`.
 
-4. The token is injected into the adapter’s `api_key` merged config and passed to the
-   pi-cli subprocess as `--api-key <token>` (`src/metaproc/commands/auth_check.py`
-   follows the same pattern for live checks).
+4. The token is injected into the adapter’s `api_key` merged config, and `prepare_env`
+   passes it to the pi-cli subprocess as `METAPROC_PI_API_KEY`, which keeps it out of the
+   process list.
+   Live checks in `src/metaproc/commands/auth_check.py` pass it as `--api-key <token>`.
 
 5. Tokens auto-refresh via `google.auth` before expiry — no subprocess shell-outs, no
    TTL guessing. Failure raises; there is no degraded fallback.
@@ -461,9 +468,14 @@ Additional per-container rewrites (`src/metaproc/cloud/gcp/batch_backend.py`
 `_rewrite_pi_models_json`):
 
 - `apiKey` values beginning with `!gcloud` (a shell-command token that Pi expands) are
-  rewritten to `!gcp-access-token.sh` — a small helper installed in the container that
-  prints an ADC token.
+  rewritten to a command that prints `METAPROC_PI_API_KEY` when it is set and otherwise
+  runs `gcp-access-token.sh`, a small helper installed in the container that prints an
+  ADC token.
   Containers don’t have the `gcloud` CLI.
+- A bare `apiKey` that names an `*_API_KEY` variable, such as `"OPENAI_API_KEY"`, is
+  rewritten to the `"$OPENAI_API_KEY"` reference, with a warning.
+  Pi sends a bare string as the literal key, so an operator file written for an older Pi
+  would otherwise get 401 responses.
 - Vertex `baseUrl` project paths are normalized to the dispatch project ID so
   operator-local models.json works verbatim across projects.
 

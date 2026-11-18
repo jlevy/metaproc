@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from importlib import resources
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
+
+import pytest
 
 from metaproc.cloud.gcp.batch_backend import (
     _merge_pi_models_json,
@@ -49,6 +52,59 @@ def test_rewrite_retargets_project_in_vertex_base_url() -> None:
         == "https://aiplatform.googleapis.com/v1/projects/exampletool/locations/global/endpoints/openapi"
     )
 
+
+
+def test_rewrite_turns_bare_api_key_env_name_into_reference(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A bare `*_API_KEY` name is a literal key to Pi, so it becomes `$NAME`."""
+    src = json.dumps(
+        {
+            "providers": {
+                "openai": {"apiKey": "OPENAI_API_KEY"},
+                "deepseek": {"apiKey": "DEEPSEEK_API_KEY"},
+            }
+        }
+    )
+    with caplog.at_level(logging.WARNING, logger="metaproc.cloud.gcp.batch_backend"):
+        out = json.loads(_rewrite_pi_models_json(src, "exampletool"))
+    assert out["providers"]["openai"]["apiKey"] == "$OPENAI_API_KEY"
+    assert out["providers"]["deepseek"]["apiKey"] == "$DEEPSEEK_API_KEY"
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("'openai'" in w and "$OPENAI_API_KEY" in w for w in warnings)
+    assert any("'deepseek'" in w for w in warnings)
+
+
+def test_rewrite_leaves_other_api_key_forms_alone(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """References, commands, literal keys and non-matching names pass through."""
+    kept = {
+        "ref": "$OPENAI_API_KEY",
+        "cmd": "!gcp-access-token.sh",
+        "literal": "sk-not-a-variable-name",
+        "lower": "openai_api_key",
+        "other_suffix": "OPENAI_TOKEN",
+        "creds": "gcp-vertex-credentials",
+    }
+    src = json.dumps({"providers": {name: {"apiKey": key} for name, key in kept.items()}})
+    with caplog.at_level(logging.WARNING, logger="metaproc.cloud.gcp.batch_backend"):
+        out = json.loads(_rewrite_pi_models_json(src, "exampletool"))
+    assert {name: p["apiKey"] for name, p in out["providers"].items()} == kept
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+def test_build_rewrites_bare_api_key_from_operator_overlay(tmp_path: Path) -> None:
+    """A stale operator overlay must not reintroduce the literal-key 401."""
+    operator_models = {"providers": {"openai": {"apiKey": "OPENAI_API_KEY"}}}
+    pi_dir = tmp_path / ".pi" / "agent"
+    pi_dir.mkdir(parents=True)
+    (pi_dir / "models.json").write_text(json.dumps(operator_models))
+
+    with patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=False):
+        out = json.loads(build_pi_models_json("exampletool"))
+
+    assert out["providers"]["openai"]["apiKey"] == "$OPENAI_API_KEY"
 
 def test_build_merges_operator_file_into_packaged(tmp_path: Path) -> None:
     """Operator-added models augment the packaged vertex-maas block; rewrite still runs."""

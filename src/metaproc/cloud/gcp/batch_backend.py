@@ -214,9 +214,19 @@ def build_compute_resource(machine_type: str) -> Any:
     return ComputeResource(cpu_milli=cpu_milli, memory_mib=memory_mib)
 
 
+# A bare provider `apiKey` that names an environment variable. Pi has treated a bare
+# string as the literal key since 0.77, so such a value sends the variable's name and
+# the provider answers 401; `$NAME` is Pi's environment-variable reference.
+_BARE_API_KEY_ENV_NAME = _re.compile(r"[A-Z][A-Z0-9_]*_API_KEY")
+
+
 def _rewrite_pi_models_json(raw: str, project: str) -> str:
     """Apply the cloud-dispatch rewrites to a pi-cli models.json string.
 
+    - A bare ``apiKey`` that names an ``*_API_KEY`` environment variable, such as
+      ``"OPENAI_API_KEY"`` in an operator file written for Pi before 0.77, becomes
+      the ``"$OPENAI_API_KEY"`` reference, with a warning. Pi would otherwise send
+      the variable's name as the key.
     - ``!gcloud auth print-access-token`` apiKey commands become a command that reads
       ``METAPROC_PI_API_KEY`` when supplied and otherwise invokes
       ``gcp-access-token.sh``, so neither path needs gcloud or exposes a token in argv.
@@ -227,8 +237,17 @@ def _rewrite_pi_models_json(raw: str, project: str) -> str:
 
     data = _json.loads(raw)
     providers = data.get("providers", {})
-    for provider in providers.values():
+    for name, provider in providers.items():
         api_key = provider.get("apiKey", "")
+        if isinstance(api_key, str) and _BARE_API_KEY_ENV_NAME.fullmatch(api_key):
+            log.warning(
+                "pi models.json provider %r gives apiKey %r, which Pi sends as a "
+                "literal key; rewriting it to the environment reference %r",
+                name,
+                api_key,
+                f"${api_key}",
+            )
+            provider["apiKey"] = f"${api_key}"
         if isinstance(api_key, str) and api_key.startswith("!gcloud"):
             provider["apiKey"] = (
                 '!sh -c \'if [ -n "$METAPROC_PI_API_KEY" ]; then '
