@@ -1365,6 +1365,22 @@ class TestCodexAssertModel:
         codex_home = tmp_path / "codex-home"
         codex_home.mkdir()
         _write_rollout(codex_home, _THREAD_ID, CODEX_DEFAULT_MODEL)
+        results = self._live_check(codex_home)
+
+        assert all(ok for ok, _ in results), results
+        assert any(f"requested model {CODEX_DEFAULT_MODEL!r}" in msg for _, msg in results)
+
+    def test_live_check_without_rollout_fails(self, tmp_path: Path) -> None:
+        """The probe passes `-m`, but with no rollout the assertion must not pass on it."""
+        codex_home = tmp_path / "codex-home"
+        codex_home.mkdir()
+        results = self._live_check(codex_home)
+
+        assert not all(ok for ok, _ in results), results
+        assert any("cannot verify" in msg and "-m " in msg for ok, msg in results if not ok)
+
+    @staticmethod
+    def _live_check(codex_home: Path) -> list[tuple[bool, str]]:
         adapter = CodexCliAdapter()
         auth_status = AuthStatus(
             adapter_type="codex-cli",
@@ -1385,10 +1401,7 @@ class TestCodexAssertModel:
             patch("metaproc.commands.auth_check.run_command_in_process_group", return_value=proc),
             patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}),
         ):
-            results = _run_live_check("codex-cli", None, timeout_s=5, assert_model="gpt")
-
-        assert all(ok for ok, _ in results), results
-        assert any(f"requested model {CODEX_DEFAULT_MODEL!r}" in msg for _, msg in results)
+            return _run_live_check("codex-cli", None, timeout_s=5, assert_model="gpt")
 
 
 # ── Cost: cache writes on rows without a write rate ─────────────
