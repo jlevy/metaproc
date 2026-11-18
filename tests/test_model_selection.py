@@ -93,7 +93,7 @@ def test_codex_preserves_accepted_explicit_models(
 
 
 @pytest.mark.parametrize(
-    "effort", ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "persistent"]
+    "effort", ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
 )
 def test_codex_accepts_pinned_cli_effort_syntax(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, effort: str

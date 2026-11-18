@@ -59,11 +59,14 @@ MODEL_CATALOG = ModelCatalog(
             "https://github.com/google-gemini/gemini-cli/blob/v0.66.0/packages/core/src/config/models.ts",
         ),
         "pi": (
-            "https://github.com/earendil-works/pi-mono/tree/v0.84.2/packages/ai/src/api",
-            "https://github.com/earendil-works/pi/releases/download/v0.84.2/pi-0.84.2-source.tar.gz",
+            "https://github.com/earendil-works/pi/tree/v1.5.2/packages/ai/src/providers",
+            "https://github.com/earendil-works/pi/blob/v1.5.2/packages/coding-agent/CHANGELOG.md",
+            "https://www.npmjs.com/package/@earendil-works/pi-coding-agent/v/1.5.2",
+            "https://pi.dev/schemas/models.schema.json",
+            "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/maas/use-open-models",
             "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/open-models",
             "https://api-docs.deepseek.com/quick_start/pricing/",
-            "https://platform.moonshot.ai/docs/guide/prompt-best-practice",
+            "https://platform.kimi.ai/docs/models",
         ),
     },
     # Defaults are policy choices, not aliases for the newest release. A catalog
@@ -132,20 +135,48 @@ MODEL_CATALOG = ModelCatalog(
                 "flash-lite",
             }
         ),
-        # PI_NATIVE_MODELS_PLACEHOLDER
+        # Built-in model IDs of the pinned Pi 1.5.2 client that Metaproc accepts.
+        # IDs Pi does not ship come from pi-models.default.json and are derived in
+        # known_model_ids; adding one never needs a second allowlist edit.
         "pi-cli": frozenset(
             {
+                # anthropic
+                "claude-fable-5-2",
+                "claude-opus-5-5",
+                "claude-sonnet-5-5",
+                "claude-haiku-5-5",
+                "claude-fable-5-1",
                 "claude-fable-5",
                 "claude-opus-5",
                 "claude-sonnet-5",
                 "claude-opus-4-8",
-                "sonnet",
-                "opus",
-                "haiku",
                 "claude-opus-4-7",
                 "claude-opus-4-6",
                 "claude-sonnet-4-6",
                 "claude-haiku-4-5-20251001",
+                "fable",
+                "opus",
+                "sonnet",
+                "haiku",
+                # openai
+                "gpt-6.1-sol",
+                "gpt-6.1-terra",
+                "gpt-6-astra",
+                "gpt-6-sol",
+                "gpt-6-luna",
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna",
+                "gpt-5.5",
+                # google-vertex
+                "gemini-4-argon",
+                "gemini-3.8-flash",
+                "gemini-3.5-flash-lite",
+                "gemini-3.1-pro-preview",
+                "gemini-3.1-pro-preview-customtools",
+                # deepseek
+                "deepseek-flash",
+                "deepseek-v4-pro",
             }
         ),
     },
@@ -176,8 +207,14 @@ MODEL_CATALOG = ModelCatalog(
         "pro": "Moving gemini-cli alias: gemini-3.1-pro-preview on Vertex, -customtools with an API key, in 0.66.0.",
         "auto": "Moving gemini-cli alias: resolves like pro in 0.66.0.",
         "removed-2026-11-18": "Dropped as retired, deprecated, or superseded: gemini-3.7-flash, gemini-3.5-flash, gemini-3.1-flash-lite, gemini-3-flash-preview, gemini-3-pro-preview, gemini-3.1-flash-lite-preview, auto-gemini-3, gpt-5.4, gpt-5.4-mini, gpt-5.3-codex-spark, and the six Vertex MaaS IDs retired 2026-10-21. gemini-cli 0.62.0 and later rewrite gemini-3.5-flash and gemini-3-flash to gemini-3.8-flash, so those IDs could not be served as requested.",
-        # PI_LIFECYCLE_PLACEHOLDER
-        "kimi-k2.6": "Exact Moonshot ID confirmed; closed to new users from 2026-11-01, deprecation expected late December 2026.",
+        "pi-cli": "Pinned Pi 1.5.2, adopted under a reviewed cool-off exemption because claude-fable-5-2 needs Pi 1.5.1 or later. Pi resolves sonnet, opus, haiku and fable to the newest undated match: claude-sonnet-5-5, claude-opus-5-5, claude-haiku-5-5 and claude-fable-5-2 (claude-sonnet-5, claude-opus-5, claude-haiku-4-5 and claude-fable-5 on 0.84.2).",
+        "zai-org/glm-5.2-maas": "Vertex AI MaaS preview (2026-08-24), global endpoint only, available until at least 2026-11-30; replaces the retired GLM-5 and GLM-4.7 MaaS IDs. Pi also accepts the short ID glm-5.2-maas.",
+        "deepseek-ai/deepseek-v4.1-flash-maas": "Vertex AI MaaS preview (2026-10-14), global endpoint only, available until at least 2026-11-28; replaces the retired DeepSeek V3.2 MaaS ID.",
+        "deepseek-ai/deepseek-v4.1-flash-1017-maas": "Vertex AI MaaS preview (2026-11-16), global endpoint only; Vertex publishes no price yet, so Pi reports no cost for it.",
+        "deepseek-flash": "DeepSeek's current Flash name, served by DeepSeek-V4.1-Flash-1017. The legacy deepseek-v4-flash name is a retired alias and is no longer accepted.",
+        "kimi-k3.1-pro": "Moonshot's current flagship (1,048,576-token context), on Metaproc's moonshot route; kimi-k3 is the previous generation.",
+        "kimi-k2.6": "Exact Moonshot ID confirmed; closed to new users from 2026-11-01, deprecation expected late December 2026. Retained on Pi's moonshot route for existing accounts until then.",
+        "pi-removed-2026-11-18": "Dropped from the pi-cli catalog as retired, retiring, or superseded: deepseek-v4-flash, gpt-5.4-mini, gpt-5.4-nano, gemini-3.7-flash, gemini-3.6-flash (Vertex retires it 2026-11-19), gemini-3.5-flash, gemini-3.1-flash-lite, gemini-3-flash-preview, and the six Vertex MaaS IDs retired 2026-10-21 with their short forms.",
     },
 )
 
