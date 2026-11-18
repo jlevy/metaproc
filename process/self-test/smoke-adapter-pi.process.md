@@ -44,19 +44,20 @@ Three-step gate for pi-cli: binary → credential → live prompt on Vertex MaaS
 
 1. **binary-check** — `pi --version`.
 2. **auth-check-dry** — `metaproc auth-check --variant pi-cli`.
-3. **live-probe-vertex-maas** — live probe against `glm-5.2-maas` on `vertex-maas`,
-   with `--assert-model glm-5.2-maas` to verify the `message.model` field of the first
+3. **live-probe-vertex-maas** — live probe against `glm-5.2-maas` on `vertex-maas`, with
+   `--assert-model glm-5.2-maas` to verify the `message.model` field of the first
    assistant `message_start` event (substring match so provider-prefixed IDs like
    `zai-org/glm-5.2-maas` still pass).
-   Google retired GLM-5 on Vertex MaaS on 2026-10-21; GLM-5.2 is a preview model with
-   a 45-day minimum availability, so recheck the ID when this smoke starts failing.
+   Google retired GLM-5 on Vertex MaaS on 2026-10-21; GLM-5.2 is a preview model with a
+   45-day minimum availability, so recheck the ID when this smoke starts failing.
    Requires GCP Application Default Credentials
    (`gcloud auth application-default login`) or `GCP_CREDENTIALS_BASE64` /
    `GOOGLE_APPLICATION_CREDENTIALS`.
 
 The pi adapter supports multiple providers — `anthropic`, `openai`, `google-vertex`,
 `vertex-maas`. This smoke pins `vertex-maas` because no other smoke exercises the
-packaged custom provider. To probe another provider, name it and a model:
+packaged custom provider.
+To probe another provider, name it and a model:
 
 ```bash
 uv run metaproc auth-check --live --adapter pi-cli --model opus --provider anthropic

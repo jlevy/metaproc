@@ -804,8 +804,8 @@ dynamic path sends an explicit `gemini-3.1-pro-preview` as
 Under Vertex, API-key and gateway auth either path sends `gemini-3.5-flash` and
 `gemini-3-flash` as `gemini-3.8-flash` and `gemini-3.1-flash-lite` as
 `gemini-3.5-flash-lite`, so the catalog does not accept those IDs.
-The same settings set thinking level `HIGH` for every chat model, including Gemini 4
-and 3.6 Flash, which the CLI would otherwise run at the server default.
+The same settings set thinking level `HIGH` for every chat model, including Gemini 4 and
+3.6 Flash, which the CLI would otherwise run at the server default.
 A step’s own `native_settings` override Metaproc’s, so a step or adapter config
 transform must not turn the flag on or replace `modelConfigs.overrides`.
 

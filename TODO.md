@@ -5,11 +5,11 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 ## Current Release
 
 - **[v0.6.1](https://github.com/jlevy/metaproc/releases/tag/v0.6.1)**: published
-  2026-11-17 from tag `5ea6732`, the merge of pull request 125 and the tip of main at the
-  time. A patch carrying four Metabrowser plugin fixes and lock-only security bumps for
-  `pyasn1`, `opentelemetry-api`, and `certifi`; no public CLI surface, process-file
-  field, runtime artifact shape, plugin entry point, adapter default, or dependency floor
-  changed.
+  2026-11-17 from tag `5ea6732`, the merge of pull request 125 and the tip of main at
+  the time. A patch carrying four Metabrowser plugin fixes and lock-only security bumps
+  for `pyasn1`, `opentelemetry-api`, and `certifi`; no public CLI surface, process-file
+  field, runtime artifact shape, plugin entry point, adapter default, or dependency
+  floor changed.
 
 ## Release Follow-Ups
 

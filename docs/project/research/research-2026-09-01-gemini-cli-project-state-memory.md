@@ -182,8 +182,7 @@ At `v0.66.0` (`97041320`) `getAllSessionFiles` in `sessionUtils.ts` still loads 
 session file through an unbounded `Promise.all` (metadata-only loads), and
 `cleanupExpiredSessions` in `sessionCleanup.ts` still returns before enumerating when
 retention is disabled, so the Metaproc setting remains both necessary and sufficient to
-prevent the scan
-([refresh record](research-2026-11-18-model-and-harness-refresh.md)).
+prevent the scan ([refresh record](research-2026-11-18-model-and-harness-refresh.md)).
 
 ## Working Directory and the Three Meanings of Memory
 

@@ -173,16 +173,15 @@ of either.
 ### Audited Third-Party Cool-Off Exceptions
 
 Two third-party releases are adopted inside the cool-off by the owner’s explicit,
-case-by-case exemption on 2026-11-18.
-The reason for both is model support, not an advisory: Claude Fable 5.2
-(`claude-fable-5-2`, released 2026-11-09) first appears in Claude Code `2.1.321` and Pi
-`1.5.1`, both published that day.
+case-by-case exemption on 2026-11-18. The reason for both is model support, not an
+advisory: Claude Fable 5.2 (`claude-fable-5-2`, released 2026-11-09) first appears in
+Claude Code `2.1.321` and Pi `1.5.1`, both published that day.
 Each exemption lapses when its release clears the window; a later version needs a fresh
 review.
 
-- **Claude Code `2.1.325`** (`@anthropic-ai/claude-code`, published
-  2026-11-13T20:07Z), replacing `2.1.234`; it clears the window on 2026-11-27.
-  It is chosen over the `2.1.321` minimum because `2.1.323` removes long tool results
+- **Claude Code `2.1.325`** (`@anthropic-ai/claude-code`, published 2026-11-13T20:07Z),
+  replacing `2.1.234`; it clears the window on 2026-11-27. It is chosen over the
+  `2.1.321` minimum because `2.1.323` removes long tool results
   `--no-session-persistence` left on disk and stops `--debug-file` replacing a `latest`
   file in the slot, and `2.1.325` fixes a security issue in zstd response decoding, a
   path every API response and `WebFetch` reach.
@@ -202,11 +201,11 @@ review.
   - The `linux-x64` binary installed with `--ignore-scripts` reports `2.1.325` and its
     SHA-256 matches an independently downloaded tarball of the same version.
 - **Pi `1.5.2`** (`@earendil-works/pi-coding-agent`, published 2026-11-10T12:24Z),
-  replacing `0.84.2`; it clears the window on 2026-11-24.
-  It is chosen over `1.5.1` because its shipped code differs only in an interactive
-  prompt, an `/import` cleanup and the Claude Code version Anthropic OAuth requests
-  report, with identical dependencies and built-in catalogs for every provider Metaproc
-  uses. The npm advisory endpoint lists nothing against Pi’s packages at any of these
+  replacing `0.84.2`; it clears the window on 2026-11-24. It is chosen over `1.5.1`
+  because its shipped code differs only in an interactive prompt, an `/import` cleanup
+  and the Claude Code version Anthropic OAuth requests report, with identical
+  dependencies and built-in catalogs for every provider Metaproc uses.
+  The npm advisory endpoint lists nothing against Pi’s packages at any of these
   versions. Reviewed against `0.84.2` and `1.5.0`:
   - Same MIT license, `earendil-works/pi` repository, maintainers and publisher (GitHub
     Actions trusted publishing).

@@ -17,10 +17,10 @@ shipped behavior belongs in [`src/metaproc/docs/`](../../../src/metaproc/docs/).
   macOS and Linux gauge semantics, process-tree attribution, and the separation between
   admission, launch pacing, and emergency containment
 
-Together, the process-safety records are the authoritative project-neutral account of the downstream
-agent-resource research available on 2026-09-01. They preserve the reusable
-measurements, causal analysis, source review, state-isolation contract, operating-system
-accounting, guard evidence, workflow controls, and open evidence gaps.
+Together, the process-safety records are the authoritative project-neutral account of
+the downstream agent-resource research available on 2026-09-01. They preserve the
+reusable measurements, causal analysis, source review, state-isolation contract,
+operating-system accounting, guard evidence, workflow controls, and open evidence gaps.
 Consumer-specific run identifiers, private issue references, local paths, deployment
 tasks, and raw operational artifacts remain with the consumer that owns them.
 

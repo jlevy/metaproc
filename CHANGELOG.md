@@ -9,14 +9,14 @@ development series.
 
 ### Changed
 
-- **Agent CLI pins move to current releases.** The adapters now pin Claude Code
-  2.1.325 (from 2.1.234), Codex 0.166.0 (from 0.147.0), Gemini CLI 0.66.0 (from 0.59.0)
-  and Pi 1.5.2 (from 0.84.2). Codex and Gemini CLI are the newest releases outside the
-  14-day cool-off. Claude Code and Pi were adopted inside it under reviewed, recorded
-  exemptions because Claude Fable 5.2 needs Claude Code 2.1.321 and Pi 1.5.1; see
+- **Agent CLI pins move to current releases.** The adapters now pin Claude Code 2.1.325
+  (from 2.1.234), Codex 0.166.0 (from 0.147.0), Gemini CLI 0.66.0 (from 0.59.0) and Pi
+  1.5.2 (from 0.84.2). Codex and Gemini CLI are the newest releases outside the 14-day
+  cool-off. Claude Code and Pi were adopted inside it under reviewed, recorded exemptions
+  because Claude Fable 5.2 needs Claude Code 2.1.321 and Pi 1.5.1; see
   [supply-chain security](SUPPLY-CHAIN-SECURITY.md#audited-third-party-cool-off-exceptions).
-  Rebuild any image that installs these CLIs. Pi installs keep the release-age gate on
-  its unshrinkwrapped third-party dependencies:
+  Rebuild any image that installs these CLIs.
+  Pi installs keep the release-age gate on its unshrinkwrapped third-party dependencies:
   `npm install -g --ignore-scripts --min-release-age=14 '--min-release-age-exclude=@earendil-works/*' @earendil-works/pi-coding-agent@1.5.2`.
 - **The model catalog is reviewed against current provider evidence (2026-11-18).**
   Newly accepted: Claude `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5` and
@@ -24,15 +24,17 @@ development series.
   `gpt-6.1-terra`, `gpt-6-sol` and `gpt-6-luna`; Google `gemini-4-argon`,
   `gemini-4-carbon` and `gemini-4-hydrogen`; Vertex MaaS `glm-5.2-maas` and
   `deepseek-v4.1-flash-maas`; DeepSeek `deepseek-flash`; Moonshot `kimi-k3` and
-  `kimi-k3.1-pro`. Each new Claude, OpenAI and Gemini ID completed a live tool-call probe
-  on the Anthropic, OpenAI API-key or Gemini API-key route; Vertex routes are unverified.
+  `kimi-k3.1-pro`. Each new Claude, OpenAI and Gemini ID completed a live tool-call
+  probe on the Anthropic, OpenAI API-key or Gemini API-key route; Vertex routes are
+  unverified.
 - **Retired and superseded models are no longer accepted.** An explicit selection of
   `gemini-3.7-flash`, `gemini-3.5-flash`, `gemini-3.1-flash-lite`,
   `gemini-3-flash-preview`, `gemini-3-pro-preview`, `gemini-3.1-flash-lite-preview`,
-  `auto-gemini-3`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex-spark`, `deepseek-v4-flash`,
-  or any of the six Vertex MaaS models Google retired on 2026-10-21 now fails
-  validation. Gemini CLI 0.62.0 and later send `gemini-3.5-flash` and `gemini-3-flash`
-  as `gemini-3.8-flash`, so those IDs could no longer be served as requested.
+  `auto-gemini-3`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex-spark`,
+  `deepseek-v4-flash`, or any of the six Vertex MaaS models Google retired on 2026-10-21
+  now fails validation.
+  Gemini CLI 0.62.0 and later send `gemini-3.5-flash` and `gemini-3-flash` as
+  `gemini-3.8-flash`, so those IDs could no longer be served as requested.
   `gemini-3.6-flash` stays accepted for the Gemini API, where Google still serves it;
   Vertex retires it 2026-11-19.
 - **Default models move, by recorded decision.** The codex-cli default changes from
@@ -45,13 +47,14 @@ development series.
   `pi-gemini-hydrogen`, `pi-glm52`, `codex-gpt61` and `pi-gpt61`. Removed:
   `gemini-flash` (3.5 Flash), `gemini-flash-36` (3.6 Flash, retiring on Vertex),
   `pi-gemini-flash` (3.5 Flash) and `pi-glm5`, whose model retired on 2026-10-21.
-  `gemini-flash-38` is demoted to experimental. `codex-gpt55` and `pi-gpt55` remain for
-  API-key runs.
+  `gemini-flash-38` is demoted to experimental.
+  `codex-gpt55` and `pi-gpt55` remain for API-key runs.
 - **Codex permission modes pass approval values the CLI accepts.** `acceptEdits` and
   `plan` now pass `-a on-request`; Codex removed `on-failure` in 0.143.0 and `untrusted`
   in 0.149.0. An explicit `approval_policy: on-failure` or `untrusted` still validates
-  and is sent as `on-request` with a warning. `codex exec` forces approval `never` in
-  headless mode, so run behavior is unchanged; the sandbox carries each mode’s policy.
+  and is sent as `on-request` with a warning.
+  `codex exec` forces approval `never` in headless mode, so run behavior is unchanged;
+  the sandbox carries each mode’s policy.
 - **Gemini runs use static model resolution and the intended thinking level.** Metaproc
   now writes `experimental.dynamicModelConfiguration: false`, because in 0.66.0 the
   dynamic path sends an explicit `gemini-3.1-pro-preview` as `-customtools` under
@@ -64,8 +67,8 @@ development series.
   longer overrides models Pi ships natively, which had zeroed their cost and dropped
   their thinking maps.
 - **Claude debug capture passes `--debug-file` alone.** The `-d api` that preceded it
-  never filtered the log; the filtering form would drop the API error lines the
-  failure classifier reads.
+  never filtered the log; the filtering form would drop the API error lines the failure
+  classifier reads.
 - **`auth-check --assert-model` reports what each CLI can prove.** Gemini assertions
   require an exact billed model, or for an alias one of the models Gemini CLI 0.66.0
   resolves it to; a substring no longer passes a `-customtools` result for
@@ -79,12 +82,13 @@ development series.
 ### Fixed
 
 - **Codex runs with only `OPENAI_API_KEY` authenticate.** `codex exec` reads an API key
-  only from `CODEX_API_KEY`, so such runs failed with HTTP 401. The adapter now passes the
-  key under that name when no stored Codex login exists under a file-backed credential
-  store; a stored ChatGPT login keeps precedence and subscription billing.
+  only from `CODEX_API_KEY`, so such runs failed with HTTP 401. The adapter now passes
+  the key under that name when no stored Codex login exists under a file-backed
+  credential store; a stored ChatGPT login keeps precedence and subscription billing.
 - **Real ChatGPT `auth.json` files are accepted.** Codex writes `auth_mode` at the top
   level, while Metaproc read only `tokens.auth_mode`, so `auth push`, `codex-auth push`
-  and `CODEX_CREDS_JSON` bootstrap rejected real login files. Both shapes are accepted.
+  and `CODEX_CREDS_JSON` bootstrap rejected real login files.
+  Both shapes are accepted.
 - **Codex cache writes are counted.** Usage now records `cache_write_input_tokens` as
   cache writes rather than uncached input; a pricing row without a cache-write rate
   prices them at its input rate, as before.
@@ -93,15 +97,16 @@ development series.
   `openai`, `deepseek` and `moonshot` routes sent the variable name and got HTTP 401.
   GCP dispatch also rewrites such values in an operator’s `models.json` overlay.
 - **Gemini alias requests are no longer refused.** A run that requested `flash`,
-  `flash-lite`, `pro` or `auto` was refused because usage is keyed by the resolved model;
-  results are now checked against the alias’s 0.66.0 resolutions, and concrete IDs stay
-  strict.
+  `flash-lite`, `pro` or `auto` was refused because usage is keyed by the resolved
+  model; results are now checked against the alias’s 0.66.0 resolutions, and concrete
+  IDs stay strict.
 - **Pooled Claude runs ignore ambient Anthropic profile and federation credentials.**
-  `ANTHROPIC_PROFILE`, `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID` and the
-  Workload Identity Federation token, service-account and workspace variables are unset
-  before a slot launches; Claude Code ranks them above stored `/login` credentials.
-- **The `vertex` and `bedrock` pi-cli provider names are replaced.** Neither was ever a Pi
-  provider ID, so they failed at run time; use `google-vertex` or `amazon-bedrock`.
+  `ANTHROPIC_PROFILE`, `ANTHROPIC_FEDERATION_RULE_ID`, `ANTHROPIC_ORGANIZATION_ID` and
+  the Workload Identity Federation token, service-account and workspace variables are
+  unset before a slot launches; Claude Code ranks them above stored `/login`
+  credentials.
+- **The `vertex` and `bedrock` pi-cli provider names are replaced.** Neither was ever a
+  Pi provider ID, so they failed at run time; use `google-vertex` or `amazon-bedrock`.
 
 ## [0.6.1][] - 2026-11-17
 

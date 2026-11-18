@@ -10,8 +10,8 @@
 This record preserves the evidence behind the November model-catalog review and the
 upgrade of the four pinned agent CLIs.
 It keeps the four evidence boundaries of
-[Model Catalog Maintenance](../model-catalog-maintenance.md) separate: catalog existence,
-CLI parsing, provider availability, and live compatibility.
+[Model Catalog Maintenance](../model-catalog-maintenance.md) separate: catalog
+existence, CLI parsing, provider availability, and live compatibility.
 Live probes ran on 2026-11-18 from a cloud development container through the routes
 named in each section; no Vertex AI credential was available, so every Vertex route is
 unverified.
@@ -65,28 +65,27 @@ Google model or codename matches “Kai Run”, so Carbon is the presumed intent
   `gemini-3.7-flash` retires 2027-01-28, and `gemini-3.5-flash` stays GA until at least
   2027-05-19.
 - `gemini-3.1-pro-preview-customtools` is a documented public-preview endpoint on both
-  surfaces with a 1,048,576-token context, not the 2,097,152 previously packaged for
-  Pi.
+  surfaces with a 1,048,576-token context, not the 2,097,152 previously packaged for Pi.
 - The owner’s operator comparisons rated 3.8 Flash below 3.6 Flash, so the refresh
   retires 3.6 and 3.5 Flash profiles in favor of Gemini 4 Hydrogen rather than 3.8.
 
 ### Vertex MaaS
 
-All six packaged open-model IDs (GLM 5, GLM 4.7, DeepSeek V3.2, Kimi K2 Thinking, and two
-Qwen3 models) retired on 2026-10-21. Current replacements are preview models in the
-`global` region only: `zai-org/glm-5.2-maas`, `deepseek-ai/deepseek-v4.1-flash-maas`
-and `deepseek-ai/deepseek-v4.1-flash-1017-maas`. Vertex MaaS currently serves no Kimi
-or Qwen chat model.
+All six packaged open-model IDs (GLM 5, GLM 4.7, DeepSeek V3.2, Kimi K2 Thinking, and
+two Qwen3 models) retired on 2026-10-21. Current replacements are preview models in the
+`global` region only: `zai-org/glm-5.2-maas`, `deepseek-ai/deepseek-v4.1-flash-maas` and
+`deepseek-ai/deepseek-v4.1-flash-1017-maas`. Vertex MaaS currently serves no Kimi or
+Qwen chat model.
 
 ### Gemini CLI 0.59.0 to 0.66.0
 
 Read from source at tags `v0.59.0` (`fb0d535a`) and `v0.66.0` (`97041320`):
 
-- 0.61.0 removed the rewrite of unrecognized `*flash` IDs, which was the reason
-  Metaproc enabled `experimental.dynamicModelConfiguration`.
-- 0.62.0 added forced remaps under Vertex, API-key and gateway auth:
-  `gemini-3.5-flash` and `gemini-3-flash` are sent as `gemini-3.8-flash`, and
-  `gemini-3.1-flash-lite` as `gemini-3.5-flash-lite`, on both resolution paths.
+- 0.61.0 removed the rewrite of unrecognized `*flash` IDs, which was the reason Metaproc
+  enabled `experimental.dynamicModelConfiguration`.
+- 0.62.0 added forced remaps under Vertex, API-key and gateway auth: `gemini-3.5-flash`
+  and `gemini-3-flash` are sent as `gemini-3.8-flash`, and `gemini-3.1-flash-lite` as
+  `gemini-3.5-flash-lite`, on both resolution paths.
 - With dynamic resolution on, 0.66.0 sent an explicit `gemini-3.1-pro-preview` as
   `-customtools` under API-key auth (observed live), so Metaproc now asserts it off.
 - The `modelConfigs.overrides` entry matching `overrideScope: "chat-base-3"` never
@@ -106,8 +105,8 @@ completed the call.
 
 Sources: [Codex models](https://learn.chatgpt.com/docs/models),
 [API models](https://developers.openai.com/api/docs/models),
-[deprecations](https://developers.openai.com/api/docs/deprecations), and the Codex source
-at `rust-v0.166.0`.
+[deprecations](https://developers.openai.com/api/docs/deprecations), and the Codex
+source at `rust-v0.166.0`.
 
 - Current IDs added: `gpt-6.2-astra` and `gpt-6.2-sol` (2026-11-17, absent from the
   0.166.0 presets), `gpt-6.1-sol` (2026-09-29), `gpt-6.1-terra`, `gpt-6-sol`,
@@ -117,8 +116,8 @@ at `rust-v0.166.0`.
   Codex. The codex-cli default moved to `gpt-6.1-sol`.
 - Codex removed `-a on-failure` in 0.143.0 and `-a untrusted` in 0.149.0; `codex exec`
   forces approval `never` in headless mode, so `-a` is only parse-validated.
-- Codex writes `auth_mode` at the top level of `auth.json`; Metaproc read only the nested
-  `tokens.auth_mode`, so real ChatGPT login files were rejected.
+- Codex writes `auth_mode` at the top level of `auth.json`; Metaproc read only the
+  nested `tokens.auth_mode`, so real ChatGPT login files were rejected.
 - `codex exec` reads an API key only from `CODEX_API_KEY`; an `OPENAI_API_KEY`-only run
   failed with HTTP 401 at 0.147.0 and 0.166.0.
 - Usage events report `cache_write_input_tokens` inside `input_tokens`.
@@ -126,8 +125,8 @@ at `rust-v0.166.0`.
   records the requested model.
 - The new `persistent` effort parses, but the API rejected it for `gpt-6.1-sol`.
 
-Live probes on the API-key route (adapter argv, one shell tool call each): `gpt-6.1-sol`,
-`gpt-6.2-sol`, `gpt-6.2-astra`, `gpt-6-luna` and `gpt-5.5` completed.
+Live probes on the API-key route (adapter argv, one shell tool call each):
+`gpt-6.1-sol`, `gpt-6.2-sol`, `gpt-6.2-astra`, `gpt-6-luna` and `gpt-5.5` completed.
 The ChatGPT sign-in route was not probed.
 
 DeepSeek now serves `deepseek-flash` (V4.1 Flash) and bills peak and off-peak rates;
@@ -147,12 +146,13 @@ Sources: [models](https://platform.claude.com/docs/en/models/overview),
 - On the new pin the moving aliases resolve to `opus` → Opus 5.5, `sonnet` → Sonnet 5.5,
   `haiku` → Haiku 5.5, `fable` → Fable 5.2. The claude-code-cli default is `opus`, so
   the default model moves from Opus 5 to Opus 5.5; the owner accepted that move.
-- The `-d api` token Metaproc passed never filtered the debug log, and the filtering form
-  `--debug=api` drops the uncategorized API error lines the failure classifier reads.
+- The `-d api` token Metaproc passed never filtered the debug log, and the filtering
+  form `--debug=api` drops the uncategorized API error lines the failure classifier
+  reads.
 - Anthropic profile and Workload Identity Federation variables outrank stored `/login`
   credentials.
-- Claude Code 2.1.325 writes cache entries with a one-hour TTL; its own
-  `total_cost_usd` prices them correctly.
+- Claude Code 2.1.325 writes cache entries with a one-hour TTL; its own `total_cost_usd`
+  prices them correctly.
 
 Live probes on the Anthropic first-party route (Claude Code 2.1.325, one Bash tool call
 each): `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`,
@@ -174,8 +174,8 @@ except the pinned CLI:
 - A custom `models.json` entry for a model Pi ships natively replaces the native entry,
   zeroing its cost and dropping its thinking map.
 - 1.5.1 turns Anthropic message threads on by default and changes cache-warming
-  defaults; the packaged data turns threads off, and idle cache warming is inert in
-  `-p` mode.
+  defaults; the packaged data turns threads off, and idle cache warming is inert in `-p`
+  mode.
 - `vertex` and `bedrock` were never Pi provider IDs.
 
 Live probes (adapter argv, one bash tool call each): `gpt-6.1-sol`, `gpt-6.2-sol` and

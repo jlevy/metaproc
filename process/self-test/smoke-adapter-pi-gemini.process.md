@@ -66,8 +66,8 @@ end-to-end including tool use.
 
 ## Why a separate smoke
 
-The existing `smoke-adapter-pi` exercises `vertex-maas/glm-5.2-maas`, which is a different
-API (Vertex MaaS, openai-completions-shaped).
+The existing `smoke-adapter-pi` exercises `vertex-maas/glm-5.2-maas`, which is a
+different API (Vertex MaaS, openai-completions-shaped).
 The google-vertex path used for Gemini has its own auth flow and its own tool-call
 contract — most critically the Gemini-3 `thought_signature` requirement that produced
 the 2026 r5 400-storm on the openai-completions path

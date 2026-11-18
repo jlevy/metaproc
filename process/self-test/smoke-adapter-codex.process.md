@@ -57,8 +57,8 @@ Serial because each step gates the next; total wall clock ≈ 10–15 seconds en
    backend and asserts that the model Codex requested contains “gpt”.
    codex-cli 0.166.0 names no model in its event stream and prints no config preamble,
    so the check reads the `turn_context` model from the thread’s session rollout under
-   `$CODEX_HOME/sessions`, falling back to the probe’s `-m`.
-   That is the requested model; no Codex output shows which model served the call.
+   `$CODEX_HOME/sessions`, falling back to the probe’s `-m`. That is the requested
+   model; no Codex output shows which model served the call.
    Bogus-model negative control lives in `smoke-adapters-negative-control.process.md`.
 
 ## Credentials

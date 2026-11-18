@@ -628,8 +628,8 @@ AI MaaS models).
 For adapters that self-report cost (for example Claude CLI via Anthropic
 API), the self-reported value still takes precedence for `actual_cost`.
 
-Rows for models that the model catalog no longer accepts are kept, with a
-“Historical” note, because earlier run logs still need prices.
+Rows for models that the model catalog no longer accepts are kept, with a “Historical”
+note, because earlier run logs still need prices.
 
 ## All Models — List Price Comparison
 
@@ -760,8 +760,8 @@ have a separate `list_price` block.
   4.8 and the retained 4.x rows.
   The Opus 4.7 rate, previously carried over from 4.6, is now confirmed.
 - Cache reads are `0.1x` base input except on Fable 5.1 and Fable 5.2 (`0.025x`) and on
-  Opus 5.5 and Sonnet 5.5 (`0.05x`).
-  5-minute cache writes are `1.25x` and 1-hour cache writes are `2x` base input.
+  Opus 5.5 and Sonnet 5.5 (`0.05x`). 5-minute cache writes are `1.25x` and 1-hour cache
+  writes are `2x` base input.
   This file stores the 5-minute cache-write rate in `cache_write_per_1m`, because the
   usage logs currently do not distinguish 5-minute from 1-hour writes.
 - **Haiku 5.5 is priced by prompt length.** A request whose prompt (input plus cache
@@ -772,8 +772,8 @@ have a separate `list_price` block.
   scheduled for 2026-09-01 did not occur.
 - Fast mode, batch (50% off), and the 1.1x US-only `inference_geo` multiplier are not
   modelled.
-- Claude Code reports the dated ID `claude-haiku-4-5-20251001` for Haiku 4.5, so that
-  ID has its own row with the `claude-haiku-4-5` rate card.
+- Claude Code reports the dated ID `claude-haiku-4-5-20251001` for Haiku 4.5, so that ID
+  has its own row with the `claude-haiku-4-5` rate card.
 - `claude-sonnet-4-5` is a historical row; Anthropic lists it as deprecated.
 
 Cost source: `self-reported` for Claude CLI actual cost.
@@ -799,8 +799,8 @@ Rows record the Standard paid tier.
 - `gemini-4-hydrogen` (GA 2026-11-12) bills $1.50 / $7.50 / $0.075 with no promotion.
   Gemini 4 models support implicit caching only, at 0.05x input, and have no
   context-length tier.
-  Vertex publishes a Hydrogen cache-write rate effective 2027-01-12, which is not
-  stored yet.
+  Vertex publishes a Hydrogen cache-write rate effective 2027-01-12, which is not stored
+  yet.
 - `gemini-3.6-flash` corrected: Google charges the same introductory rate as
   `gemini-3.8-flash` ($0.75 / $3.75 / $0.075 through 2026-12-31, then $1.50 / $7.50 /
   $0.15). The row previously stored the standard rate as `actual_price`; it now holds
@@ -822,9 +822,8 @@ For `gemini-3-flash-preview` and `gemini-3.1-flash-lite`, it is the text, image,
 video input rate; audio input costs more.
 
 Cached-input prices are `0.1x` the standard input rate for the Gemini 3.x models in this
-file and `0.05x` for Gemini 4.
-Vertex AI’s global endpoint charges the Gemini API rates; its non-global regions charge
-10% more.
+file and `0.05x` for Gemini 4. Vertex AI’s global endpoint charges the Gemini API rates;
+its non-global regions charge 10% more.
 Context-cache storage charges are not modelled.
 
 The `gemini-3.1-pro-preview-customtools` model is intentionally omitted from the
@@ -851,9 +850,8 @@ As of 2026-11-18, Google’s pricing page shows no free tier for `gemini-4-argon
   row now carries that rate card.
   Runs made before that change were billed $0.14 / $0.28 / $0.0028; re-pricing them now
   overstates them.
-- `deepseek-v4-pro` is served by DeepSeek-V4-Pro-0813.
-  The May 2026 promotional `actual_price` and the $1.74 / $3.48 `list_price` are
-  superseded and were removed.
+- `deepseek-v4-pro` is served by DeepSeek-V4-Pro-0813. The May 2026 promotional
+  `actual_price` and the $1.74 / $3.48 `list_price` are superseded and were removed.
 
 Cost source: `computed` (no adapter in metaproc self-reports DeepSeek direct cost).
 The `deepseek-v3.2-maas` Vertex MaaS row keeps the V4-Flash direct rate from the
@@ -866,14 +864,14 @@ point while that model served.
 [model inference pricing page](https://platform.kimi.ai/docs/pricing/chat).
 `platform.moonshot.ai` now redirects to `platform.kimi.ai`.
 
-- `kimi-k3.1-pro` ($2.00 / $10.00 / $0.20) and `kimi-k3` ($3.00 / $15.00 / $0.30) are the
-  current K3-series models, with flat pricing across the 1,048,576-token context.
+- `kimi-k3.1-pro` ($2.00 / $10.00 / $0.20) and `kimi-k3` ($3.00 / $15.00 / $0.30) are
+  the current K3-series models, with flat pricing across the 1,048,576-token context.
   `cache_write_per_1m` stores the 5-minute TTL write rate; Kimi also publishes a 1-hour
   rate, noted per row.
   Neither model is in the model catalog yet.
-- `kimi-k2.6` is unchanged at $0.95 / $4.00 / $0.16.
-  Kimi closed K2-series models to newly registered users on 2026-10-31 and plans to
-  retire them by the end of December 2026.
+- `kimi-k2.6` is unchanged at $0.95 / $4.00 / $0.16. Kimi closed K2-series models to
+  newly registered users on 2026-10-31 and plans to retire them by the end of December
+  2026\.
 
 ### Vertex MaaS (Third-Party Models)
 
@@ -882,9 +880,9 @@ point while that model served.
 
 - Vertex retired all six previously listed MaaS models on **2026-10-21**: `glm-5-maas`,
   `glm-4.7-maas`, `deepseek-v3.2-maas`, `kimi-k2-thinking-maas`,
-  `qwen3-235b-a22b-instruct-2507-maas`, and `qwen3-coder-480b-a35b-instruct-maas`.
-  Their rows are kept as historical rows; the pricing page still lists their rates,
-  which match.
+  `qwen3-235b-a22b-instruct-2507-maas`, and `qwen3-coder-480b-a35b-instruct-maas`. Their
+  rows are kept as historical rows; the pricing page still lists their rates, which
+  match.
 - Replacements on the global endpoint, both in Preview: `glm-5.2-maas` ($1.40 / $4.40 /
   $0.14) and `deepseek-v4.1-flash-maas` ($0.30 / $1.20 / $0.03; free until 2026-10-16).
   Vertex has no Kimi or Qwen chat successor.
@@ -897,8 +895,8 @@ is stored in `list_price`. Where we do not, `list_cost` falls back to `actual_pr
 The two replacement rows have no `list_price`: no current Zhipu rate was verified for
 GLM-5.2, and DeepSeek’s direct API serves a different snapshot under time-of-day
 pricing.
-The historical rows keep the `list_price` blocks from their last reviews, frozen and not
-re-verified.
+The historical rows keep the `list_price` blocks from their last reviews, frozen
+and not re-verified.
 
 For Alibaba Qwen models, `list_price` is deployment-mode-specific.
 This file uses Alibaba Cloud Model Studio’s **Global deployment mode** pricing, and for
@@ -962,8 +960,8 @@ The `metaproc write-usage` command produces `usage.md` files with two cost colum
 - For `list_cost`, the code always computes from the table: it uses `list_price` if
   present, otherwise it falls back to `actual_price`.
 - Prices are looked up by the model ID the usage record carries, which is the served ID
-  where the adapter reports one (Claude `modelUsage`, Gemini `stats.models`, Pi messages)
-  and the requested ID otherwise (codex-cli).
+  where the adapter reports one (Claude `modelUsage`, Gemini `stats.models`, Pi
+  messages) and the requested ID otherwise (codex-cli).
   The match is exact apart from the org-prefix rule below, so aliases and dated IDs that
   adapters report need their own rows.
 - Org-prefixed model names (for example `zai-org/glm-5.2-maas` from Pi CLI) are resolved
@@ -990,8 +988,8 @@ token counts.
 2. The CLI may report costs using a rate basis or token accounting detail not visible in
    the log summary we ingest.
 3. The token counts extracted from logs may not exactly match what the API billed for.
-4. For `claude-haiku-5-5`, requests over 100,000 prompt tokens bill 5x the stored
-   ≤100K rate card.
+4. For `claude-haiku-5-5`, requests over 100,000 prompt tokens bill 5x the stored ≤100K
+   rate card.
 
 **How to verify**:
 
@@ -1002,9 +1000,9 @@ token counts.
 
 ### NOTE: One rate card per model
 
-The schema stores a single `actual_price` (and optional `list_price`) per model ID.
-It cannot express prompt-length tiers (Haiku 5.5, OpenAI long context, Gemini 3.1 Pro
-over 200K), time-of-day pricing (DeepSeek), or a rate that changes on a date.
+The schema stores a single `actual_price` (and optional `list_price`) per model ID. It
+cannot express prompt-length tiers (Haiku 5.5, OpenAI long context, Gemini 3.1 Pro over
+200K), time-of-day pricing (DeepSeek), or a rate that changes on a date.
 Each affected row states which tier it stores and in which direction computed costs can
 be wrong.
 
@@ -1070,8 +1068,8 @@ its rates. Model availability and lifecycle are reviewed separately under
 4. **Recheck Google credit and promotion docs** if this file makes any claims about free
    tiers, startup credits, or partner-model credits.
 5. **Update the YAML frontmatter:** prices, notes, `last_reviewed` per model, and
-   top-level `last_updated`.
-   Keep rows for models the catalog no longer accepts and label them historical.
+   top-level `last_updated`. Keep rows for models the catalog no longer accepts and
+   label them historical.
 6. **Update the markdown table and prose below** so it matches the frontmatter exactly.
    The table is sorted by output cost descending.
 7. **Run the focused test:**
