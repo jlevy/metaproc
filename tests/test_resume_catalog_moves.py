@@ -315,9 +315,11 @@ process:
     - id: draft
       mode: agent
       prompt_prefix: draft
+      output_root: "{{run.dir}}/draft"
     - id: judge
       mode: agent
       prompt_prefix: judge
+      output_root: "{{run.dir}}/judge"
       adapter:
         type: codex-cli
         config:
