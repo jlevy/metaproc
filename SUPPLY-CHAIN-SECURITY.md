@@ -167,7 +167,7 @@ A pin therefore changes which binary the adapter’s version check expects, not 
 repository’s dependency closure, but it is held to the same 14-day cool-off.
 
 The 2026-11-18 refresh moved Codex to `0.166.0` and Gemini CLI to `0.66.0`, each the
-newest stable release outside the window; no advisory is fixed only in a later release
+newest stable release outside the window at review time; no advisory is fixed only in a later release
 of either.
 
 ### Audited Third-Party Cool-Off Exceptions
@@ -223,7 +223,9 @@ review.
     `npm audit` reports none; a `0.84.2` tree reported seven, two high.
   - Behavior changed since `0.84.2` is pinned back where Pi allows it: the adapter
     passes `--no-mcp` and sets `PI_TELEMETRY=0`, and the packaged
-    `pi-models.default.json` turns `1.5.1`’s default Anthropic message threads off.
+    `pi-models.default.json`, which GCP dispatch installs on workers, turns `1.5.1`’s
+    default Anthropic message threads off. Local runs read the operator’s own
+    `~/.pi/agent/models.json`, where threads stay on unless the operator turns them off.
 
 ## Audited Advisory Waivers
 

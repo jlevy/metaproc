@@ -684,8 +684,10 @@ Key configuration details:
 
 - **Endpoint**: Must use the global endpoint (`aiplatform.googleapis.com`), not
   regional. Not every MaaS model is available in every region.
-- **Model IDs**: Must include the publisher prefix (e.g., `zai-org/glm-5.2-maas`,
-  `deepseek-ai/deepseek-v4.1-flash-maas`).
+- **Model IDs**: The packaged entries carry the publisher prefix (e.g.,
+  `zai-org/glm-5.2-maas`, `deepseek-ai/deepseek-v4.1-flash-maas`), which is what Vertex
+  receives. Pi also resolves the short form (`glm-5.2-maas`), which the shipped
+  `pi-glm52` profile uses.
 - **Availability**: Vertex AI MaaS preview models carry only a 45-day minimum
   availability, so the packaged list changes as Google retires models.
 - **Auth**: Metaproc resolves the bearer token at run time via `google.auth.default()`

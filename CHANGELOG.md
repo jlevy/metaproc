@@ -63,9 +63,15 @@ development series.
   Gemini 4 and 3.6 Flash.
 - **Pi runs keep their tool isolation.** The adapter passes `--no-mcp`, because Pi 1.x
   enables built-in MCP, codemode and tool-search extensions, and sets `PI_TELEMETRY=0`.
-  The packaged Pi model data turns off 1.5.1’s default Anthropic message threads and no
-  longer overrides models Pi ships natively, which had zeroed their cost and dropped
-  their thinking maps.
+  The packaged Pi model data, which GCP dispatch installs on workers, turns off 1.5.1’s
+  default Anthropic message threads and no longer overrides models Pi ships natively,
+  which had zeroed their cost and dropped their thinking maps. Local runs read the
+  operator’s own `~/.pi/agent/models.json`, so threads stay on there unless the operator
+  turns them off; an operator overlay merged at dispatch still wins for any provider
+  entry it defines, so remove stale `openai`, `deepseek` or `vertex-maas` entries from it.
+  Existing cloud runs see Pi’s native limits for these models: the
+  `gemini-3.1-pro-preview-customtools` context window drops from 2,097,152 to the
+  documented 1,048,576, and DeepSeek requests move to Pi’s built-in provider.
 - **Claude debug capture passes `--debug-file` alone.** The `-d api` that preceded it
   never filtered the log; the filtering form would drop the API error lines the failure
   classifier reads.
