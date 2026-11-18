@@ -1379,3 +1379,70 @@ class TestLiveCheckLauncher:
         assert launcher.call_args.args[0][:3] == ["fake-agent", "-p", "x"]
         assert launcher.call_args.kwargs["timeout"] == 5
         plain_run.assert_not_called()
+
+
+def _gemini_result(requested: str, served: dict[str, int]) -> str:
+    models = {name: {"total_tokens": tokens} for name, tokens in served.items()}
+    result = {"type": "result", "status": "success", "stats": {"models": models}}
+    return json.dumps({"type": "init", "model": requested}) + "\n" + json.dumps(result) + "\n"
+
+
+class TestGeminiAssertModelIsExact:
+    """`--assert-model` for gemini-cli matches served ids exactly, with alias support.
+
+    A substring match passed `gemini-3.1-pro-preview` when its `-customtools`
+    variant served, and `auto` could never match any served id.
+    """
+
+    def test_prefix_of_the_served_id_fails(self) -> None:
+        stdout = _gemini_result(
+            "gemini-3.1-pro-preview", {"gemini-3.1-pro-preview-customtools": 900}
+        )
+        ok, msg = _evaluate_model_assertion(
+            "gemini-cli", stdout, "gemini-3.1-pro-preview", "gemini-cli"
+        )
+        assert not ok
+        assert "gemini-3.1-pro-preview-customtools (900 tokens)" in msg
+
+    def test_exact_served_id_passes(self) -> None:
+        stdout = _gemini_result(
+            "gemini-3.1-pro-preview-customtools", {"gemini-3.1-pro-preview-customtools": 900}
+        )
+        ok, msg = _evaluate_model_assertion(
+            "gemini-cli", stdout, "gemini-3.1-pro-preview-customtools", "gemini-cli"
+        )
+        assert ok, msg
+
+    def test_substring_of_the_served_id_fails(self) -> None:
+        ok, _ = _evaluate_model_assertion(
+            "gemini-cli", _GEMINI_HONORED_STDOUT, "gemini-4", "gemini-cli"
+        )
+        assert not ok
+
+    @pytest.mark.parametrize(
+        ("alias", "served"),
+        [
+            ("auto", "gemini-3.8-flash"),
+            ("auto", "gemini-3.1-pro-preview-customtools"),
+            ("pro", "gemini-3.1-pro-preview"),
+            ("flash", "gemini-3.8-flash"),
+            ("flash-lite", "gemini-3.5-flash-lite"),
+        ],
+    )
+    def test_alias_passes_when_one_of_its_models_served(self, alias: str, served: str) -> None:
+        stdout = _gemini_result(alias, {served: 500})
+        ok, msg = _evaluate_model_assertion("gemini-cli", stdout, alias, "gemini-cli")
+        assert ok, msg
+        assert f"served model {served!r} matches expected {alias!r} (alias served as" in msg
+
+    def test_alias_fails_on_a_model_outside_its_targets(self) -> None:
+        # A quota fallback from `pro` to a Flash model is a substitution.
+        stdout = _gemini_result("pro", {"gemini-3.8-flash": 500})
+        ok, msg = _evaluate_model_assertion("gemini-cli", stdout, "pro", "gemini-cli")
+        assert not ok
+        assert "alias served as" in msg
+
+    def test_claude_keeps_substring_semantics(self) -> None:
+        stdout = '{"type":"system","subtype":"init","model":"claude-opus-4-7"}\n'
+        ok, msg = _evaluate_model_assertion("claude-code-cli", stdout, "opus", "claude-code-cli")
+        assert ok, msg

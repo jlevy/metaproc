@@ -25,7 +25,7 @@ from strif import temp_output_file
 
 from metaproc.adapters.base import agent_seed_env, parse_jsonl_event
 from metaproc.adapters.codex_cli import codex_rollout_model, codex_thread_id, resolve_codex_home
-from metaproc.adapters.gemini_cli import format_served_models
+from metaproc.adapters.gemini_cli import GEMINI_ALIAS_SERVED_MODELS, format_served_models
 from metaproc.adapters.gemini_cli import served_models as gemini_served_models
 from metaproc.adapters.pi_cli import resolve_pi_binary
 from metaproc.adapters.registry import ADAPTER_REGISTRY
@@ -289,10 +289,17 @@ def _extract_observed_model(adapter_type: str, stdout: str) -> str | None:
 # it sent a request to, and `gemini_cli.served_models` keeps the ones that billed
 # tokens. `GeminiCliAdapter.validate_result_event` refuses a run's result through
 # the same function, so the probe and the run path decide which model served by
-# one rule. They still compare differently: the run path requires the resolved
-# requested id itself, while `--assert-model` takes an operator-supplied substring.
+# one rule, and they compare by one rule too: the asserted id must itself have
+# billed, or, for a moving alias, one of the models `_SERVED_MODEL_ALIASES` says the
+# pinned CLI serves it as. A substring match would pass `gemini-3.1-pro-preview`
+# when `gemini-3.1-pro-preview-customtools` served, and could never pass `auto`.
 _SERVED_MODEL_READERS: dict[str, Callable[[dict[str, object]], dict[str, int]]] = {
     "gemini-cli": gemini_served_models,
+}
+
+# Per adapter: moving alias -> the concrete models the pinned CLI may bill it as.
+_SERVED_MODEL_ALIASES: dict[str, Mapping[str, frozenset[str]]] = {
+    "gemini-cli": GEMINI_ALIAS_SERVED_MODELS,
 }
 
 
@@ -332,8 +339,9 @@ def _run_live_check(
     then sets what the probe itself needs.
 
     When *assert_model* is set, also parse the subprocess stdout and fail unless
-    the model it names contains the expected substring. Where that model is read
-    differs by adapter:
+    the model it names contains the expected substring (gemini-cli: equals it, or
+    is one a moving alias is served as). Where that model is read differs by
+    adapter:
 
     - gemini-cli: the terminal `result` event's `stats.models`, the models that
       billed the call, so a request the CLI rewrote or answered with a fallback
@@ -620,7 +628,7 @@ def _evaluate_model_assertion(
     env: Mapping[str, str] | None = None,
     cmd: list[str] | None = None,
 ) -> tuple[bool, str]:
-    """Compare the model the probe's output names against *expected* substring.
+    """Compare the model the probe's output names against *expected*.
 
     For an adapter in `_SERVED_MODEL_READERS` this reads the terminal event's
     served-model accounting, so a CLI that rewrites the request to another model
@@ -719,10 +727,12 @@ def _evaluate_served_model_assertion(
 ) -> tuple[bool, str]:
     """Assert *expected* against the models the terminal event says billed the call.
 
-    Any one billing model matching passes, because utility and sub-agent requests
-    legitimately bill other models beside the requested one. Both the pass and the
-    fail line list every billing model with its token count, so a fallback that
-    answered beside or instead of the requested model is visible either way.
+    The match is exact: *expected* must be a model that billed, or a moving alias
+    (`_SERVED_MODEL_ALIASES`) one of whose served models billed. Any one billing
+    model matching passes, because utility and sub-agent requests legitimately bill
+    other models beside the requested one. Both the pass and the fail line list
+    every billing model with its token count, so a fallback that answered beside or
+    instead of the requested model is visible either way.
     """
     served = _extract_served_models(adapter_type, stdout)
     requested = _extract_observed_model(adapter_type, stdout)
@@ -731,29 +741,35 @@ def _evaluate_served_model_assertion(
     if served is None:
         missing = (
             f"{label}: no terminal result event in stdout, so the served model is "
-            f"unknown{asked}; cannot confirm a model containing {expected!r}"
+            f"unknown{asked}; cannot confirm model {expected!r}"
         )
         return (False, missing)
     if not served:
         unaccounted = (
             f"{label}: terminal result event reported no served model (no model billed "
-            f"tokens){asked}; cannot confirm a model containing {expected!r}"
+            f"tokens){asked}; cannot confirm model {expected!r}"
         )
         return (False, unaccounted)
 
     billed = format_served_models(served)
+    alias_targets = _SERVED_MODEL_ALIASES.get(adapter_type, {}).get(expected)
+    accepted = {expected} | (alias_targets or frozenset())
     matching = sorted(
-        (name for name in served if expected in name),
+        (name for name in served if name in accepted),
         key=lambda name: (-served[name], name),
     )
+    as_alias = ""
+    if alias_targets is not None:
+        as_alias = f" (alias served as {' or '.join(sorted(alias_targets))})"
     if matching:
         passed = (
-            f"{label}: served model {matching[0]!r} matches expected {expected!r}; billed: {billed}"
+            f"{label}: served model {matching[0]!r} matches expected {expected!r}"
+            f"{as_alias}; billed: {billed}"
         )
         return (True, passed)
     mismatch = (
-        f"{label}: no served model matches expected {expected!r}{asked} — the CLI "
-        f"answered with a different model; billed: {billed}"
+        f"{label}: no served model matches expected {expected!r}{as_alias}{asked} — the "
+        f"CLI answered with a different model; billed: {billed}"
     )
     return (False, mismatch)
 
@@ -977,7 +993,8 @@ def auth_check(
             "Fail the --live probe unless the model its output names contains this "
             "substring. Where that model is read differs by adapter. "
             "gemini-cli: the terminal result event's stats.models, the models that "
-            "billed the call, so a request the CLI rewrote or answered with a "
+            "billed the call, matched exactly (an alias such as auto matches the models "
+            "it is served as), so a request the CLI rewrote or answered with a "
             "fallback fails. "
             "claude-code-cli: system.init.model, the model Claude Code resolved the "
             "request to; its result.modelUsage carries the models that billed but is "
