@@ -205,11 +205,39 @@ _CODEX_ALLOWED_KEYS = frozenset(
 
 # permission_mode -> (sandbox, approval_policy). bypassPermissions is special —
 # it emits --dangerously-bypass-approvals-and-sandbox instead of --sandbox/--ask-for-approval.
+# The sandbox carries each mode's policy: `codex exec` forces approval to `never` in
+# headless mode whatever `-a` says, so `-a` is only parse-validated. Codex removed
+# `on-failure` from the flag in 0.143.0 and `untrusted` in 0.149.0, leaving
+# `on-request` and `never`.
 _PERMISSION_MODE_MAP: dict[str, tuple[str, str]] = {
     "default": ("workspace-write", "on-request"),
-    "acceptEdits": ("workspace-write", "on-failure"),
-    "plan": ("read-only", "untrusted"),
+    "acceptEdits": ("workspace-write", "on-request"),
+    "plan": ("read-only", "on-request"),
 }
+
+# Explicit `approval_policy` values the pinned CLI no longer parses. They are
+# translated, with a warning, so existing process files keep running; the
+# translation has no runtime effect because `codex exec` forces `never`.
+CODEX_LEGACY_APPROVAL_POLICIES: dict[str, str] = {
+    "on-failure": "on-request",
+    "untrusted": "on-request",
+}
+
+
+def _codex_approval_policy(value: object) -> str:
+    """Return the `-a` value the pinned CLI accepts for a configured policy."""
+    requested = str(value)
+    replacement = CODEX_LEGACY_APPROVAL_POLICIES.get(requested)
+    if replacement is None:
+        return requested
+    log.warning(
+        "codex-cli approval_policy %r is no longer accepted by Codex %s; sending %r. "
+        "`codex exec` forces approval to `never`, so the run's behavior is unchanged.",
+        requested,
+        PINNED_CODEX_CLI_VERSION,
+        replacement,
+    )
+    return replacement
 
 # Full set of accepted permission_mode values for validate_config — the
 # 3 mapped modes plus the bypassPermissions special case handled inline.
@@ -262,7 +290,7 @@ def _build_codex_flag_groups(
         if explicit_sandbox:
             top_level.extend(["--sandbox", str(explicit_sandbox)])
         if explicit_approval:
-            top_level.extend(["-a", str(explicit_approval)])
+            top_level.extend(["-a", _codex_approval_policy(explicit_approval)])
     elif permission_mode in _PERMISSION_MODE_MAP:
         sandbox_mode, approval = _PERMISSION_MODE_MAP[str(permission_mode)]
         top_level.extend(["--sandbox", sandbox_mode])
@@ -710,7 +738,7 @@ class CodexCliAdapter:
         if not auth_file.exists():
             msg = (
                 f"Codex credential capture requires an auth.json at {auth_file}. "
-                "Run `codex login --with-chatgpt-oauth` on this machine first."
+                "Run `codex login` (or `codex login --device-auth`) on this machine first."
             )
             raise RuntimeError(msg)
         try:

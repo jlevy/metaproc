@@ -210,7 +210,7 @@ def test_status_rebuilds_plan_with_recorded_execution_identity(tmp_path: Path) -
             "--var",
             f"RUN_ID={run_id}",
             "--variant",
-            "gemini-flash-36",
+            "gemini-hydrogen",
             "--artifact-namespace",
             "status-test-artifacts",
             "--backend",

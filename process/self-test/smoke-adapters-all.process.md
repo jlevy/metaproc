@@ -60,7 +60,7 @@ process:
     - id: pi
       mode: composite
       uses: deps.smoke_adapter_pi
-      description: Live binary + credential + model-asserted prompt for pi-cli (glm-5-maas).
+      description: Live binary + credential + model-asserted prompt for pi-cli.
 ---
 # smoke-adapters-all — live aggregator across every adapter
 

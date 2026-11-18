@@ -28,6 +28,10 @@ def _selected_model(command: list[str], flag: str) -> str:
 @pytest.mark.parametrize(
     ("model", "flag"),
     [
+        ("claude-fable-5-2", "--model"),
+        ("claude-opus-5-5", "--model"),
+        ("claude-sonnet-5-5", "--model"),
+        ("claude-haiku-5-5", "--model"),
         ("claude-fable-5-1", "--model"),
         ("claude-opus-5", "--model"),
         ("claude-sonnet-5", "--model"),
@@ -56,12 +60,18 @@ def test_claude_preserves_accepted_explicit_models(
 @pytest.mark.parametrize(
     "model",
     [
+        "gpt-6.2-astra",
+        "gpt-6.2-sol",
+        "gpt-6.1-sol",
+        "gpt-6.1-terra",
         "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
         "gpt-5.6",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
-        "gpt-5.3-codex-spark",
+        "gpt-5.5",
     ],
 )
 def test_codex_preserves_accepted_explicit_models(
@@ -83,7 +93,7 @@ def test_codex_preserves_accepted_explicit_models(
 
 
 @pytest.mark.parametrize(
-    "effort", ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+    "effort", ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra", "persistent"]
 )
 def test_codex_accepts_pinned_cli_effort_syntax(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, effort: str
@@ -97,7 +107,19 @@ def test_codex_accepts_pinned_cli_effort_syntax(
     assert f"model_reasoning_effort={effort}" in adapter.build_command(prompt, config, {})
 
 
-@pytest.mark.parametrize("model", ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-4-carbon",
+        "gemini-4-argon",
+        "gemini-4-hydrogen",
+        "gemini-3.8-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-pro-preview",
+        "gemini-3.1-pro-preview-customtools",
+    ],
+)
 def test_gemini_preserves_accepted_explicit_models(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -116,20 +138,23 @@ def test_gemini_preserves_accepted_explicit_models(
     ("provider", "model"),
     [
         ("anthropic", "opus"),
-        ("anthropic", "claude-fable-5"),
+        ("anthropic", "sonnet"),
+        ("anthropic", "claude-fable-5-2"),
+        ("anthropic", "claude-fable-5-1"),
+        ("anthropic", "claude-opus-5-5"),
+        ("anthropic", "claude-sonnet-5-5"),
+        ("anthropic", "claude-haiku-5-5"),
         ("anthropic", "claude-opus-5"),
         ("anthropic", "claude-sonnet-5"),
-        ("anthropic", "claude-opus-4-8"),
-        ("openai", "gpt-5.5"),
+        ("openai", "gpt-6.1-sol"),
         ("openai", "gpt-6-astra"),
         ("openai", "gpt-5.6-sol"),
-        ("openai", "gpt-5.6-terra"),
-        ("openai", "gpt-5.6-luna"),
-        ("google-vertex", "gemini-3.5-flash"),
+        ("google-vertex", "gemini-4-argon"),
+        ("google-vertex", "gemini-4-carbon"),
+        ("google-vertex", "gemini-4-hydrogen"),
         ("google-vertex", "gemini-3.8-flash"),
-        ("google-vertex", "gemini-3.7-flash"),
-        ("google-vertex", "gemini-3.6-flash"),
         ("google-vertex", "gemini-3.5-flash-lite"),
+        ("google-vertex", "gemini-3.1-pro-preview-customtools"),
     ],
 )
 def test_pi_preserves_accepted_explicit_models(
@@ -152,10 +177,41 @@ def test_pi_preserves_accepted_explicit_models(
     assert _selected_model(command, "--model") == model
 
 
-def test_pi_rejects_model_missing_from_pinned_native_catalog() -> None:
-    rejections = PiCliAdapter().validate_config(
-        {"provider": "anthropic", "model": "claude-fable-5-1"}
-    )
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [
+        ("vertex-maas", "zai-org/glm-5-maas"),
+        ("vertex-maas", "glm-5-maas"),
+        ("google-vertex", "gemini-3.5-flash"),
+        ("openai", "gpt-5.4-mini"),
+    ],
+)
+def test_pi_rejects_retired_models(provider: str, model: str) -> None:
+    rejections = PiCliAdapter().validate_config({"provider": provider, "model": model})
+    assert any(rejection.key == "model" for rejection in rejections)
+
+
+@pytest.mark.parametrize(
+    ("adapter", "model"),
+    [
+        (CodexCliAdapter(), "gpt-5.4"),
+        (CodexCliAdapter(), "gpt-5.4-mini"),
+        (CodexCliAdapter(), "gpt-5.3-codex-spark"),
+        (GeminiCliAdapter(), "gemini-3.5-flash"),
+        (GeminiCliAdapter(), "gemini-3.7-flash"),
+        (GeminiCliAdapter(), "gemini-3.1-flash-lite"),
+        (GeminiCliAdapter(), "gemini-3-flash-preview"),
+        (GeminiCliAdapter(), "gemini-3-pro-preview"),
+        (GeminiCliAdapter(), "auto-gemini-3"),
+    ],
+)
+def test_removed_models_are_rejected(
+    adapter: CodexCliAdapter | GeminiCliAdapter, model: str
+) -> None:
+    config: dict[str, object] = {"permission_mode": "default", "model": model}
+    if isinstance(adapter, GeminiCliAdapter):
+        config = {"model": model}
+    rejections = adapter.validate_config(config)
     assert any(rejection.key == "model" for rejection in rejections)
 
 

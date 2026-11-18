@@ -120,9 +120,11 @@ CODEX_VALID_SANDBOX_MODES: set[str] = {
     "danger-full-access",
 }
 
-# `codex -a <POLICY>` — top-level flag. `on-failure` is deprecated in
-# codex-cli 0.124.0 but still accepted; we keep it for the `acceptEdits`
-# permission mode until upstream removes it.
+# `codex -a <POLICY>` — top-level flag. The pinned CLI parses only `on-request`
+# and `never`; `on-failure` (removed in 0.143.0) and `untrusted` (removed in
+# 0.149.0) stay accepted in process files and are translated to `on-request`
+# by the adapter (CODEX_LEGACY_APPROVAL_POLICIES), since `codex exec` forces
+# `never` either way.
 CODEX_VALID_APPROVAL_POLICIES: set[str] = {
     "untrusted",
     "on-failure",
@@ -131,7 +133,7 @@ CODEX_VALID_APPROVAL_POLICIES: set[str] = {
 }
 
 # `-c model_reasoning_effort=<EFFORT>` — codex-cli config-path override.
-# Named values in the pinned 0.147.0 parser. Availability is model-specific;
+# Named values in the pinned 0.166.0 parser. Availability is model-specific;
 # accepting the syntax does not mean every model supports every effort.
 CODEX_VALID_EFFORTS: set[str] = {
     "none",
@@ -142,6 +144,7 @@ CODEX_VALID_EFFORTS: set[str] = {
     "xhigh",
     "max",
     "ultra",
+    "persistent",
 }
 
 # ── Pi ───────────────────────────────────────────────────────────

@@ -66,7 +66,7 @@ process:
         (see `_build_codex_flag_groups`), codex dispatches with the
         default, and its untyped config-dump preamble carries
         `{"model": <default>}`. `--assert-model bogus-xyz-nomatch`
-        sees "gpt-5.4" (or current default) — no substring match — and
+        sees the current default — no substring match — and
         fails the check. `!` inverts: step green iff auth-check exits
         non-zero. Confirms `--assert-model`'s new codex support works
         even though codex-cli itself does NOT validate unknown model
