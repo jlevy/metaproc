@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import logging
 import os
-import stat
 import pickle
+import stat
 import subprocess
 from compression import zstd
 from pathlib import Path
@@ -30,6 +30,7 @@ from metaproc.adapters.codex_cli import (
 )
 from metaproc.commands.auth_check import _evaluate_model_assertion, _run_live_check
 from metaproc.config.env_vars import SECRET_VARS, MetaprocEnv
+from metaproc.engine import runtime as engine_runtime
 from metaproc.engine.command_diagnostics import redact_diagnostic
 from metaproc.logutil.parsing import LogFile
 from metaproc.logutil.usage import UsageStats, compute_cost, load_pricing, sum_codex_usage
@@ -1190,6 +1191,78 @@ class TestCodexApiKeyBridge:
         out = self.adapter.prepare_env(self._env(tmp_path), {})
         assert "CODEX_API_KEY" not in out
 
+    def test_bridges_when_no_stored_login(self, tmp_path: Path) -> None:
+        out = self.adapter.prepare_env(self._env(tmp_path), {})
+        assert out["CODEX_API_KEY"] == "sk-openai"
+        assert out["OPENAI_API_KEY"] == "sk-openai"
+
+    def test_stored_auth_json_keeps_its_login(self, tmp_path: Path) -> None:
+        # A ChatGPT login keeps its subscription billing; Codex would let the
+        # env key outrank it.
+        (tmp_path / ".codex").mkdir()
+        (tmp_path / ".codex" / "auth.json").write_text(_VALID_OAUTH_PAYLOAD)
+        out = self.adapter.prepare_env(self._env(tmp_path), {})
+        assert "CODEX_API_KEY" not in out
+
+    def test_explicit_codex_home_is_the_one_checked(self, tmp_path: Path) -> None:
+        codex_home = tmp_path / "alt"
+        codex_home.mkdir()
+        (codex_home / "auth.json").write_text(_VALID_OAUTH_PAYLOAD)
+        out = self.adapter.prepare_env(self._env(tmp_path, CODEX_HOME=str(codex_home)), {})
+        assert "CODEX_API_KEY" not in out
+
+    def test_operator_codex_api_key_is_left_alone(self, tmp_path: Path) -> None:
+        out = self.adapter.prepare_env(self._env(tmp_path, CODEX_API_KEY="sk-codex"), {})
+        assert out["CODEX_API_KEY"] == "sk-codex"
+
+    def test_env_example_placeholder_is_dropped_then_bridged(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        env = self._env(tmp_path, CODEX_API_KEY="REPLACE_WITH_CODEX_API_KEY")
+        with caplog.at_level(logging.WARNING, logger="metaproc.adapters.codex_cli"):
+            out = self.adapter.prepare_env(env, {})
+        assert out["CODEX_API_KEY"] == "sk-openai"
+        assert any("placeholder" in r.getMessage() for r in caplog.records)
+
+    def test_placeholder_is_dropped_even_with_a_stored_login(self, tmp_path: Path) -> None:
+        (tmp_path / ".codex").mkdir()
+        (tmp_path / ".codex" / "auth.json").write_text(_VALID_OAUTH_PAYLOAD)
+        env = self._env(tmp_path, CODEX_API_KEY="REPLACE_WITH_CODEX_API_KEY")
+        out = self.adapter.prepare_env(env, {})
+        assert "CODEX_API_KEY" not in out
+
+    def test_no_openai_key_means_no_bridge(self, tmp_path: Path) -> None:
+        out = self.adapter.prepare_env({"HOME": str(tmp_path)}, {})
+        assert "CODEX_API_KEY" not in out
+
+    @pytest.mark.parametrize("store", ["keyring", "auto"])
+    def test_keyring_store_in_config_toml_blocks_the_bridge(
+        self, tmp_path: Path, store: str
+    ) -> None:
+        (tmp_path / ".codex").mkdir()
+        (tmp_path / ".codex" / "config.toml").write_text(
+            f'cli_auth_credentials_store = "{store}"\n'
+        )
+        out = self.adapter.prepare_env(self._env(tmp_path), {})
+        assert "CODEX_API_KEY" not in out
+
+    def test_file_store_in_config_toml_allows_the_bridge(self, tmp_path: Path) -> None:
+        (tmp_path / ".codex").mkdir()
+        (tmp_path / ".codex" / "config.toml").write_text('cli_auth_credentials_store = "file"\n')
+        out = self.adapter.prepare_env(self._env(tmp_path), {})
+        assert out["CODEX_API_KEY"] == "sk-openai"
+
+    def test_config_override_keyring_store_blocks_the_bridge(self, tmp_path: Path) -> None:
+        cfg: dict[str, object] = {"config_overrides": {"cli_auth_credentials_store": "keyring"}}
+        out = self.adapter.prepare_env(self._env(tmp_path), cfg)
+        assert "CODEX_API_KEY" not in out
+
+    def test_unreadable_config_toml_blocks_the_bridge(self, tmp_path: Path) -> None:
+        (tmp_path / ".codex").mkdir()
+        (tmp_path / ".codex" / "config.toml").write_text("not = [valid toml\n")
+        out = self.adapter.prepare_env(self._env(tmp_path), {})
+        assert "CODEX_API_KEY" not in out
+
 
 class TestCodexBridgeFollowsStepEnv:
     """Launchers apply a step's `env` after prepare_env; the bridge decides on the merged env."""
@@ -1275,8 +1348,6 @@ class TestCodexBridgeFollowsStepEnv:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Through the real launcher: a step CODEX_HOME with a ChatGPT login keeps that login."""
-        from metaproc.engine import runtime  # noqa: PLC0415 -- engine import kept local to this test
-
         step_home = tmp_path / "step-codex"
         step_home.mkdir()
         (step_home / "auth.json").write_text(_VALID_OAUTH_PAYLOAD)
@@ -1292,11 +1363,11 @@ class TestCodexBridgeFollowsStepEnv:
             seen["env"] = dict(kwargs["env"])
             return _Proc()
 
-        monkeypatch.setattr(runtime.subprocess, "Popen", _popen)
+        monkeypatch.setattr(engine_runtime.subprocess, "Popen", _popen)
         monkeypatch.setattr("metaproc.adapters.codex_cli._codex_version_drift", lambda: None)
         logs = tmp_path / "logs"
         logs.mkdir()
-        runtime.launch_step(
+        engine_runtime.launch_step(
             "step",
             "prompt",
             logs,
@@ -1309,78 +1380,6 @@ class TestCodexBridgeFollowsStepEnv:
         )
         assert seen["env"]["CODEX_HOME"] == str(step_home)
         assert "CODEX_API_KEY" not in seen["env"]
-
-    def test_bridges_when_no_stored_login(self, tmp_path: Path) -> None:
-        out = self.adapter.prepare_env(self._env(tmp_path), {})
-        assert out["CODEX_API_KEY"] == "sk-openai"
-        assert out["OPENAI_API_KEY"] == "sk-openai"
-
-    def test_stored_auth_json_keeps_its_login(self, tmp_path: Path) -> None:
-        # A ChatGPT login keeps its subscription billing; Codex would let the
-        # env key outrank it.
-        (tmp_path / ".codex").mkdir()
-        (tmp_path / ".codex" / "auth.json").write_text(_VALID_OAUTH_PAYLOAD)
-        out = self.adapter.prepare_env(self._env(tmp_path), {})
-        assert "CODEX_API_KEY" not in out
-
-    def test_explicit_codex_home_is_the_one_checked(self, tmp_path: Path) -> None:
-        codex_home = tmp_path / "alt"
-        codex_home.mkdir()
-        (codex_home / "auth.json").write_text(_VALID_OAUTH_PAYLOAD)
-        out = self.adapter.prepare_env(self._env(tmp_path, CODEX_HOME=str(codex_home)), {})
-        assert "CODEX_API_KEY" not in out
-
-    def test_operator_codex_api_key_is_left_alone(self, tmp_path: Path) -> None:
-        out = self.adapter.prepare_env(self._env(tmp_path, CODEX_API_KEY="sk-codex"), {})
-        assert out["CODEX_API_KEY"] == "sk-codex"
-
-    def test_env_example_placeholder_is_dropped_then_bridged(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
-    ) -> None:
-        env = self._env(tmp_path, CODEX_API_KEY="REPLACE_WITH_CODEX_API_KEY")
-        with caplog.at_level(logging.WARNING, logger="metaproc.adapters.codex_cli"):
-            out = self.adapter.prepare_env(env, {})
-        assert out["CODEX_API_KEY"] == "sk-openai"
-        assert any("placeholder" in r.getMessage() for r in caplog.records)
-
-    def test_placeholder_is_dropped_even_with_a_stored_login(self, tmp_path: Path) -> None:
-        (tmp_path / ".codex").mkdir()
-        (tmp_path / ".codex" / "auth.json").write_text(_VALID_OAUTH_PAYLOAD)
-        env = self._env(tmp_path, CODEX_API_KEY="REPLACE_WITH_CODEX_API_KEY")
-        out = self.adapter.prepare_env(env, {})
-        assert "CODEX_API_KEY" not in out
-
-    def test_no_openai_key_means_no_bridge(self, tmp_path: Path) -> None:
-        out = self.adapter.prepare_env({"HOME": str(tmp_path)}, {})
-        assert "CODEX_API_KEY" not in out
-
-    @pytest.mark.parametrize("store", ["keyring", "auto"])
-    def test_keyring_store_in_config_toml_blocks_the_bridge(
-        self, tmp_path: Path, store: str
-    ) -> None:
-        (tmp_path / ".codex").mkdir()
-        (tmp_path / ".codex" / "config.toml").write_text(
-            f'cli_auth_credentials_store = "{store}"\n'
-        )
-        out = self.adapter.prepare_env(self._env(tmp_path), {})
-        assert "CODEX_API_KEY" not in out
-
-    def test_file_store_in_config_toml_allows_the_bridge(self, tmp_path: Path) -> None:
-        (tmp_path / ".codex").mkdir()
-        (tmp_path / ".codex" / "config.toml").write_text('cli_auth_credentials_store = "file"\n')
-        out = self.adapter.prepare_env(self._env(tmp_path), {})
-        assert out["CODEX_API_KEY"] == "sk-openai"
-
-    def test_config_override_keyring_store_blocks_the_bridge(self, tmp_path: Path) -> None:
-        cfg: dict[str, object] = {"config_overrides": {"cli_auth_credentials_store": "keyring"}}
-        out = self.adapter.prepare_env(self._env(tmp_path), cfg)
-        assert "CODEX_API_KEY" not in out
-
-    def test_unreadable_config_toml_blocks_the_bridge(self, tmp_path: Path) -> None:
-        (tmp_path / ".codex").mkdir()
-        (tmp_path / ".codex" / "config.toml").write_text("not = [valid toml\n")
-        out = self.adapter.prepare_env(self._env(tmp_path), {})
-        assert "CODEX_API_KEY" not in out
 
 
 class TestCodexCheckAuthPrecedence:
