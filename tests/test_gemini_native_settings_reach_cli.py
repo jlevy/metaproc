@@ -180,6 +180,47 @@ def _write_workspace_settings(directory: Path, content: str) -> Path:
     return settings
 
 
+def test_workspace_settings_an_earlier_release_wrote_reach_gemini_updated(
+    tmp_path: Path,
+) -> None:
+    """A workspace-scope relaunch over v0.6.1's file hands Gemini today's settings.
+
+    v0.6.1 turned dynamic model configuration on and matched its thinking override by
+    `overrideScope`, which never applied. Left in place, that file would keep every
+    relaunch of the run on the old behavior.
+    """
+    cwd = tmp_path / "scope"
+    v061 = _merge(
+        cast("dict[str, object]", json.loads(json.dumps(GEMINI_DEFAULT_NATIVE_SETTINGS))),
+        {
+            "experimental": {"dynamicModelConfiguration": True},
+            "modelConfigs": {
+                "overrides": [
+                    {
+                        "match": {"overrideScope": "chat-base-3"},
+                        "modelConfig": {
+                            "generateContentConfig": {"thinkingConfig": {"thinkingLevel": "HIGH"}}
+                        },
+                    }
+                ]
+            },
+        },
+    )
+    _write_workspace_settings(cwd, json.dumps(v061, sort_keys=True, separators=(",", ":")))
+    environment = {"HOME": str(_operator_home(tmp_path))}
+    config: dict[str, object] = {
+        "native_settings_scope": "workspace",
+        "working_directory": str(cwd),
+    }
+
+    env = GeminiCliAdapter().prepare_env(environment, config)
+    loaded, skipped = _settings_gemini_loads(env, cwd)
+
+    assert skipped == []
+    assert loaded["experimental"] == {"dynamicModelConfiguration": False}
+    assert loaded["modelConfigs"] == GEMINI_DEFAULT_NATIVE_SETTINGS["modelConfigs"]
+
+
 def test_working_directory_settings_cannot_override_metaproc_settings(tmp_path: Path) -> None:
     """A trusted working directory outranks the private home, so a conflict stops the launch.
 

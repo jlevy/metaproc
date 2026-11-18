@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-from metaproc.adapters.gemini_cli import GeminiCliAdapter, _deep_merge_settings
+from metaproc.adapters.gemini_cli import GeminiCliAdapter
 from metaproc.io import write_secret_text
 from metaproc.settings import GEMINI_DEFAULT_NATIVE_SETTINGS
 
@@ -133,9 +134,22 @@ _V061_WORKSPACE_SETTINGS: dict[str, object] = {
 _STEP_TOOLS: dict[str, object] = {"tools": {"core": ["read_file"]}}
 
 
-def _workspace_config(directory: Path, native_settings: dict[str, object] | None = None) -> dict[
-    str, object
-]:
+def _merge(base: dict[str, object], override: dict[str, object]) -> dict[str, object]:
+    merged = dict(base)
+    for key, value in override.items():
+        existing = merged.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            merged[key] = _merge(
+                cast("dict[str, object]", existing), cast("dict[str, object]", value)
+            )
+        else:
+            merged[key] = value
+    return merged
+
+
+def _workspace_config(
+    directory: Path, native_settings: dict[str, object] | None = None
+) -> dict[str, object]:
     config: dict[str, object] = {
         "native_settings_scope": "workspace",
         "working_directory": str(directory),
@@ -202,7 +216,7 @@ def test_workspace_settings_from_an_earlier_release_with_operator_edits_are_refu
 ) -> None:
     """An operator's value in an old Metaproc file is not Metaproc's to replace."""
     workspace = tmp_path / "scope"
-    edited = _deep_merge_settings(_V061_WORKSPACE_SETTINGS, operator_settings)
+    edited = _merge(_V061_WORKSPACE_SETTINGS, operator_settings)
     settings_path = _write_settings(workspace, edited)
     original = settings_path.read_text(encoding="utf-8")
 
@@ -232,10 +246,16 @@ def test_workspace_settings_unchanged_are_not_rewritten(tmp_path: Path) -> None:
 
 
 def _with_changed_default(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Stand in for a later release whose defaults differ, as a catalog edit would."""
-    changed = _deep_merge_settings(
-        GEMINI_DEFAULT_NATIVE_SETTINGS, {"context": {"fileFiltering": {"respectGitIgnore": True}}}
-    )
+    """Stand in for a later release whose catalog adds a model needing its own override."""
+    model_configs = cast("dict[str, list[object]]", GEMINI_DEFAULT_NATIVE_SETTINGS["modelConfigs"])
+    added = {
+        "match": {"model": "gemini-9-flash"},
+        "modelConfig": {"generateContentConfig": {"thinkingConfig": {"thinkingLevel": "HIGH"}}},
+    }
+    changed = {
+        **GEMINI_DEFAULT_NATIVE_SETTINGS,
+        "modelConfigs": {"overrides": [*model_configs["overrides"], added]},
+    }
     monkeypatch.setattr("metaproc.adapters.gemini_cli.GEMINI_DEFAULT_NATIVE_SETTINGS", changed)
 
 
@@ -250,11 +270,11 @@ def test_workspace_settings_record_lets_a_later_default_change_replace_them(
     GeminiCliAdapter().prepare_env({}, config)
 
     settings = json.loads((tmp_path / ".gemini/settings.json").read_text(encoding="utf-8"))
-    assert settings["context"]["fileFiltering"]["respectGitIgnore"] is True
+    assert settings["modelConfigs"]["overrides"][-1]["match"] == {"model": "gemini-9-flash"}
     assert settings["tools"] == {"core": ["read_file"]}
-    assert "context.fileFiltering.respectGitIgnore" in caplog.text
+    assert "modelConfigs.overrides" in caplog.text
     record = json.loads((tmp_path / ".gemini/.metaproc-settings.json").read_text())
-    assert record["metaproc_default_native_settings"]["context"] == settings["context"]
+    assert record["metaproc_default_native_settings"]["modelConfigs"] == settings["modelConfigs"]
 
 
 def test_workspace_settings_without_their_record_are_not_claimed_after_a_change(
@@ -266,7 +286,7 @@ def test_workspace_settings_without_their_record_are_not_claimed_after_a_change(
     (tmp_path / ".gemini/.metaproc-settings.json").unlink()
     _with_changed_default(monkeypatch)
 
-    with pytest.raises(ValueError, match=r"context\.fileFiltering\.respectGitIgnore"):
+    with pytest.raises(ValueError, match=r"modelConfigs\.overrides"):
         GeminiCliAdapter().prepare_env({}, config)
 
 

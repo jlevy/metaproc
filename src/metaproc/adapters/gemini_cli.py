@@ -256,7 +256,7 @@ def _value_at(settings: dict[str, object], path: tuple[str, ...]) -> object:
     for key in path:
         if not isinstance(value, dict) or key not in value:
             return _ABSENT
-        value = cast("dict[str, object]", value)[key]
+        value = value[key]
     return value
 
 
@@ -285,6 +285,11 @@ def _differing_paths(
     for key in sorted(old.keys() | new.keys()):
         child = (*path, key)
         before, after = old.get(key, _ABSENT), new.get(key, _ABSENT)
+        # An object one side lacks is reported by the keys inside it.
+        if isinstance(before, dict) and after is _ABSENT:
+            after = {}
+        elif before is _ABSENT and isinstance(after, dict):
+            before = {}
         if isinstance(before, dict) and isinstance(after, dict):
             differing.extend(
                 _differing_paths(
@@ -414,8 +419,7 @@ def _materialize_workspace_settings(
                 if other:
                     raise _workspace_settings_refusal(
                         settings_path,
-                        f"sets {', '.join(other)} to values other than this step's native "
-                        "settings",
+                        f"differs from this step's native settings at {', '.join(other)}",
                     )
                 if owned:
                     # Narrow the window in which a writer that ignores the lock edits
