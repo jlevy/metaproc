@@ -354,7 +354,9 @@ def _log_bridge(codex_home: str) -> None:
     )
 
 
-def _bridged_codex_api_key(env: Mapping[str, str], merged_config: Mapping[str, object]) -> str | None:
+def _bridged_codex_api_key(
+    env: Mapping[str, str], merged_config: Mapping[str, object]
+) -> str | None:
     """Return the ``OPENAI_API_KEY`` value to hand ``codex exec`` as ``CODEX_API_KEY``, or None.
 
     ``codex exec`` (0.147.0 and 0.166.0) reads only ``CODEX_API_KEY`` from the
@@ -387,8 +389,7 @@ def _bridged_codex_api_key(env: Mapping[str, str], merged_config: Mapping[str, o
     blocker = _credential_store_blocker(codex_home, merged_config)
     if blocker is not None:
         log.info(
-            "codex-cli: not passing OPENAI_API_KEY to Codex; a login may be stored outside "
-            "%s: %s",
+            "codex-cli: not passing OPENAI_API_KEY to Codex; a login may be stored outside %s: %s",
             codex_home / "auth.json",
             blocker,
         )
@@ -448,7 +449,11 @@ class _CodexChildEnv(dict[str, str]):
     def _decide(self) -> None:
         name = MetaprocEnv.CODEX_API_KEY.name
         current = super().get(name)
-        if not self._step_named_codex_key and self._bridged is not None and current == self._bridged:
+        if (
+            not self._step_named_codex_key
+            and self._bridged is not None
+            and current == self._bridged
+        ):
             super().__delitem__(name)
             current = None
         if current == _CODEX_API_KEY_PLACEHOLDER:
@@ -851,9 +856,7 @@ class CodexCliAdapter:
             )
 
         if access_token:
-            details = (
-                f"{_CODEX_ACCESS_TOKEN_ENV} is set; Codex uses it ahead of any stored login"
-            )
+            details = f"{_CODEX_ACCESS_TOKEN_ENV} is set; Codex uses it ahead of any stored login"
             if api_key:
                 details += ", and runs do not pass OPENAI_API_KEY to Codex"
             return AuthStatus(
@@ -1241,15 +1244,32 @@ def codex_thread_id(stdout: str) -> str | None:
     return None
 
 
+def _read_rollout_text(rollout: Path) -> str | None:
+    """Return a rollout's text, decompressing a ``.jsonl.zst`` one; None when unreadable."""
+    if rollout.suffix != ".zst":
+        return rollout.read_text(encoding="utf-8")
+    try:
+        from compression import zstd  # noqa: PLC0415 -- CPython may be built without libzstd
+    except ImportError:
+        log.debug("codex-cli: cannot read %s; this Python has no compression.zstd", rollout)
+        return None
+    try:
+        with zstd.open(rollout, "rt", encoding="utf-8") as stream:
+            return stream.read()
+    except zstd.ZstdError, EOFError:
+        return None
+
+
 def codex_rollout_model(codex_home: Path, thread_id: str) -> str | None:
     """Return the model Codex recorded for a thread in its session rollout.
 
-    ``codex exec`` writes ``$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<thread>.jsonl``;
-    its ``turn_context`` record carries the model Codex sent the request for after
+    ``codex exec`` writes ``$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<thread>.jsonl``,
+    which Codex may later store compressed as ``.jsonl.zst``; both are read. Its
+    ``turn_context`` record carries the model Codex sent the request for after
     its own config and profile resolution. That is the *requested* model:
     ``codex exec`` (0.166.0) reports no model the provider served, in the event
-    stream or the rollout. Returns None when no plain-text rollout for the thread
-    exists (a compressed ``.jsonl.zst`` rollout is not read) or it names no model.
+    stream or the rollout. Returns None when no readable rollout for the thread
+    exists or it names no model.
     """
     sessions = codex_home / "sessions"
     # The thread ID becomes a glob pattern; accept only the UUID alphabet Codex uses.
@@ -1257,12 +1277,17 @@ def codex_rollout_model(codex_home: Path, thread_id: str) -> str | None:
         return None
     if not sessions.is_dir():
         return None
-    for rollout in sorted(sessions.rglob(f"rollout-*-{thread_id}.jsonl")):
+    rollouts = sorted(
+        path
+        for pattern in (f"rollout-*-{thread_id}.jsonl", f"rollout-*-{thread_id}.jsonl.zst")
+        for path in sessions.rglob(pattern)
+    )
+    for rollout in rollouts:
         try:
-            lines = rollout.read_text(encoding="utf-8").splitlines()
+            text = _read_rollout_text(rollout)
         except OSError, UnicodeDecodeError:
             continue
-        for line in lines:
+        for line in (text or "").splitlines():
             record = parse_jsonl_event(line, "turn_context")
             if record is None:
                 continue

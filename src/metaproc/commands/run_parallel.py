@@ -1487,9 +1487,11 @@ def _build_prepare_launch(  # noqa: PLR0913
         # steps that USE that adapter (process-item, retrieve-precedent).
         # Steps that use a DIFFERENT adapter — e.g. extract-items with
         # pi-cli + a managed model — must NOT lease a claude slot: the slot
-        # path appends adapter-specific debug flags (``claude -d api``) to
-        # the cmd, which pi-cli rejects with ``Unknown option: -d`` and
-        # exits 1 in <10s; the runpool then classifies this as a crash
+        # path appends adapter-specific debug flags (for Claude Code,
+        # ``--debug-file <slot>/claude-code-debug.log``) to the cmd. Another
+        # adapter's CLI fails on them: pi-cli exited 1 in <10s with
+        # ``Unknown option: -d`` when the flags were ``-d api``. The
+        # runpool then classifies this as a crash
         # and cools the underlying Claude credential, eventually
         # exhausting the pool. Skipping the pool path for non-matching
         # adapter types keeps extract-items on the legacy single-credential

@@ -304,7 +304,7 @@ REMOVED_MODELS: dict[str, RemovedModel] = {
         "gemini-3.5-flash-lite",
     ),
     "gemini-3-flash-preview": _removed(
-        "gemini-cli pi-cli", "superseded preview; " + _GEMINI_REWRITTEN, "gemini-3.8-flash"
+        "gemini-cli pi-cli", "superseded preview", "gemini-3.8-flash"
     ),
     "gemini-3-pro-preview": _removed(
         "gemini-cli", "preview shut down 2026-03-09", "gemini-3.1-pro-preview"

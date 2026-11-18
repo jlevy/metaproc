@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from typing import cast
 
 from metaproc.adapters.base import Adapter, AuthCapableCliAdapter
@@ -59,12 +60,63 @@ def _sanitize_tag(value: str) -> str:
     return re.sub(r"-{2,}", "-", sanitized).strip("-")
 
 
-def derive_variant(adapter_type: str, runtime_config: dict[str, object]) -> str:
-    """Derive a variant directory name from adapter type and config."""
+UNRECORDED_NAMESPACE_DEFAULT_MODELS: Mapping[str, str] = {"codex-cli": "gpt-5.5"}
+"""Adapter defaults a run created before ``run-config.yaml`` recorded them derived against.
+
+``namespace_default_models`` pins, for the life of a run, the adapter defaults its
+derived artifact namespaces compare against (``derive_variant``). A ``run-config.yaml``
+written before that field existed came from a release whose defaults were the current
+ones except for the adapters listed here: codex-cli defaulted to ``gpt-5.5`` until the
+2026-11-18 catalog review moved it to ``gpt-6.1-sol``.
+"""
+
+
+def current_default_models() -> dict[str, str]:
+    """Return each registered adapter's current default model."""
+    return {
+        name: adapter.default_model
+        for name, adapter in sorted(ADAPTER_REGISTRY.items())
+        if adapter.default_model
+    }
+
+
+def recorded_namespace_default_models(recorded: object) -> dict[str, str]:
+    """Return the adapter defaults a run's derived namespaces compare against.
+
+    *recorded* is the ``namespace_default_models`` value of the run's
+    ``run-config.yaml``, ``None`` when the config predates the field. The current
+    defaults fill every adapter it does not name, and a config without the field takes
+    ``UNRECORDED_NAMESPACE_DEFAULT_MODELS``, the defaults of the releases that wrote it.
+    """
+    defaults = current_default_models()
+    if not isinstance(recorded, Mapping):
+        return {**defaults, **UNRECORDED_NAMESPACE_DEFAULT_MODELS}
+    for adapter_type, model in cast("Mapping[object, object]", recorded).items():
+        if isinstance(adapter_type, str) and isinstance(model, str) and model:
+            defaults[adapter_type] = model
+    return defaults
+
+
+def derive_variant(
+    adapter_type: str,
+    runtime_config: Mapping[str, object],
+    *,
+    default_models: Mapping[str, str] | None = None,
+) -> str:
+    """Derive a variant directory name from adapter type and config.
+
+    A model equal to the adapter's default derives the bare adapter name; any other
+    model is appended. *default_models* replaces the current default of each adapter it
+    names, so a resume derives against the defaults its run was created with
+    (``recorded_namespace_default_models``) and a default moved by a later release does
+    not rename an existing run's namespace.
+    """
     adapter = ADAPTER_REGISTRY.get(adapter_type)
     short = adapter.short_name if adapter else _sanitize_tag(adapter_type)
     model = runtime_config.get("model") or None
-    default_model = adapter.default_model if adapter else None
+    default_model = (default_models or {}).get(adapter_type) or (
+        adapter.default_model if adapter else None
+    )
 
     if model is None or model == default_model:
         return short

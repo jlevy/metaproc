@@ -351,8 +351,9 @@ def _run_live_check(
       not read yet.
     - pi-cli: `message.model` on the first assistant `message_start` event.
     - codex-cli: the model Codex *requested*: a legacy config preamble if one is
-      printed, else the `turn_context` model in the thread's session rollout, else
-      the probe's `-m`. `codex exec` reports no model that served the call.
+      printed, else the `turn_context` model in the thread's session rollout. With
+      neither, the assertion fails as not verifiable; the probe's `-m` is not
+      evidence. `codex exec` reports no model that served the call.
     """
 
     adapter = ADAPTER_REGISTRY[adapter_type]
@@ -659,31 +660,36 @@ def _evaluate_model_assertion(
     )
 
 
-def _codex_requested_model(
-    stdout: str, env: Mapping[str, str] | None, cmd: list[str] | None
-) -> tuple[str, str] | None:
-    """Return Codex's requested model and where it was read, best evidence first.
+def _codex_requested_model(stdout: str, env: Mapping[str, str] | None) -> tuple[str, str] | None:
+    """Return Codex's requested model and where it was read, or None when Codex recorded none.
 
     1. An untyped config preamble, which codex-cli 0.124.0 printed and the pinned
        0.166.0 does not.
-    2. The `turn_context` record of the thread's session rollout under
-       `$CODEX_HOME/sessions`: the model Codex sent the request for after its own
-       config resolution.
-    3. The `-m` value in the probe's argv: what Metaproc asked for.
+    2. The `turn_context` record of the thread's session rollout (plain `.jsonl`
+       or compressed `.jsonl.zst`) under `$CODEX_HOME/sessions`: the model Codex
+       sent the request for after its own config resolution.
+
+    The probe's own `-m` argument is not evidence: it is what Metaproc asked for,
+    so comparing against it could never fail.
     """
     preamble = _extract_observed_model("codex-cli", stdout)
     if preamble is not None:
         return preamble, "the codex-cli config preamble"
     thread_id = codex_thread_id(stdout)
     if thread_id is not None:
-        codex_home = resolve_codex_home(dict(env) if env is not None else None)
+        codex_home = resolve_codex_home(env)
         recorded = codex_rollout_model(codex_home, thread_id)
         if recorded is not None:
             return recorded, f"Codex's session rollout for thread {thread_id}"
+    return None
+
+
+def _argv_model(cmd: list[str] | None) -> str | None:
+    """Return the `-m` value in the probe's argv, for the failure message only."""
     if cmd and "-m" in cmd:
         index = cmd.index("-m")
         if index + 1 < len(cmd):
-            return cmd[index + 1], "the probe's `-m` argument; Codex wrote no session rollout"
+            return cmd[index + 1]
     return None
 
 
@@ -700,14 +706,18 @@ def _evaluate_codex_model_assertion(
     `codex exec --json` (0.166.0) names no model in its events, and its rollout
     records only the requested model, so no evidence shows which model served the
     call. The assertion therefore confirms the request Codex made, not the answer,
-    and every message says so.
+    and every message says so. Without a rollout or preamble naming the model it
+    fails as not verifiable; the probe's `-m` is quoted but never matched.
     """
-    found = _codex_requested_model(stdout, env, cmd)
+    found = _codex_requested_model(stdout, env)
     unserved = "codex-cli reports no served model"
     if found is None:
+        argv_model = _argv_model(cmd)
+        asked = f"; the probe passed -m {argv_model!r}" if argv_model else ""
         missing = (
-            f"{label}: no requested model found ({unserved}); cannot confirm a model "
-            f"containing {expected!r}"
+            f"{label}: cannot verify a model containing {expected!r}: Codex recorded no "
+            f"requested model (no config preamble, no session rollout for the thread)"
+            f"{asked}, which is what Metaproc asked for, not evidence ({unserved})"
         )
         return (False, missing)
     requested, source = found
@@ -1000,8 +1010,9 @@ def auth_check(
             "request to; its result.modelUsage carries the models that billed but is "
             "not read yet. "
             "pi-cli: message.model on the first assistant message_start event. "
-            "codex-cli: the model Codex requested, read from the thread's session rollout "
-            "(else the probe's -m); codex exec reports no model that served the call."
+            "codex-cli: the model Codex requested, read from the thread's session rollout; "
+            "with no rollout the assertion fails as not verifiable. codex exec reports no "
+            "model that served the call."
         ),
     ),
     adapter: str | None = typer.Option(  # noqa: UP007
