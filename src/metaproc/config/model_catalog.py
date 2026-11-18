@@ -247,12 +247,131 @@ def known_model_ids(adapter: str) -> frozenset[str]:
     return names | packaged
 
 
+class RemovedModel(BaseModel):
+    """A model ID the catalog accepted before and has since dropped.
+
+    ``adapters`` are the adapters that accepted the ID until ``removed_on``; an adapter
+    that still accepts it (``gemini-3.6-flash`` on gemini-cli) is not listed.
+    ``replacement`` names the ID or IDs to select instead.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    removed_on: date
+    adapters: frozenset[str]
+    reason: str
+    replacement: str
+
+
+_REMOVED_2026_11_18 = date(2026, 11, 18)
+_GEMINI_REWRITTEN = "gemini-cli 0.62.0 and later rewrite it, so it could not be served as requested"
+_MAAS_RETIRED = "Vertex AI retired the MaaS model 2026-10-21"
+_MAAS_GLM = "zai-org/glm-5.2-maas"
+_MAAS_OTHER = "zai-org/glm-5.2-maas or deepseek-ai/deepseek-v4.1-flash-maas"
+
+
+def _removed(adapters: str, reason: str, replacement: str) -> RemovedModel:
+    return RemovedModel(
+        removed_on=_REMOVED_2026_11_18,
+        adapters=frozenset(adapters.split()),
+        reason=reason,
+        replacement=replacement,
+    )
+
+
+def _maas(qualified: str, reason: str, replacement: str) -> dict[str, RemovedModel]:
+    """Tombstone a Vertex MaaS ID under its publisher-qualified and short forms."""
+    short = qualified.rsplit("/", 1)[-1]
+    short_replacement = " or ".join(part.rsplit("/", 1)[-1] for part in replacement.split(" or "))
+    return {
+        qualified: _removed("pi-cli", reason, replacement),
+        short: _removed("pi-cli", reason, short_replacement),
+    }
+
+
+REMOVED_MODELS: dict[str, RemovedModel] = {
+    "gemini-3.7-flash": _removed(
+        "gemini-cli pi-cli",
+        "deprecated 2026-10-08; the Gemini API routes it to gemini-3.8-flash",
+        "gemini-3.8-flash or gemini-4-hydrogen",
+    ),
+    "gemini-3.5-flash": _removed(
+        "gemini-cli pi-cli", "deprecated 2026-10-08; " + _GEMINI_REWRITTEN, "gemini-4-hydrogen"
+    ),
+    "gemini-3.1-flash-lite": _removed(
+        "gemini-cli pi-cli",
+        "shutdown announced for 2027-05-07; " + _GEMINI_REWRITTEN,
+        "gemini-3.5-flash-lite",
+    ),
+    "gemini-3-flash-preview": _removed(
+        "gemini-cli pi-cli", "superseded preview; " + _GEMINI_REWRITTEN, "gemini-3.8-flash"
+    ),
+    "gemini-3-pro-preview": _removed(
+        "gemini-cli", "preview shut down 2026-03-09", "gemini-3.1-pro-preview"
+    ),
+    "gemini-3.1-flash-lite-preview": _removed(
+        "gemini-cli", "preview shut down 2026-05-25", "gemini-3.5-flash-lite"
+    ),
+    "auto-gemini-3": _removed("gemini-cli", "gemini-cli deprecated the alias", "auto"),
+    # gemini-cli still accepts gemini-3.6-flash; Pi's Vertex route retires it 2026-11-19.
+    "gemini-3.6-flash": _removed("pi-cli", "Vertex AI retires it 2026-11-19", "gemini-3.8-flash"),
+    "gpt-5.4": _removed(
+        "codex-cli", "retired from Codex with ChatGPT sign-in 2026-08-31", "gpt-6.1-sol"
+    ),
+    "gpt-5.4-mini": _removed(
+        "codex-cli pi-cli", "retired from Codex with ChatGPT sign-in 2026-08-31", "gpt-6-luna"
+    ),
+    "gpt-5.4-nano": _removed(
+        "pi-cli", "deprecated on the OpenAI API, shutdown 2027-04-01", "gpt-6-luna"
+    ),
+    "gpt-5.3-codex-spark": _removed(
+        "codex-cli", "Codex research preview retired 2026-09-14", "gpt-6.1-sol"
+    ),
+    "deepseek-v4-flash": _removed("pi-cli", "DeepSeek retired the legacy alias", "deepseek-flash"),
+    **_maas("zai-org/glm-5-maas", _MAAS_RETIRED, _MAAS_GLM),
+    **_maas("zai-org/glm-4.7-maas", _MAAS_RETIRED, _MAAS_GLM),
+    **_maas(
+        "deepseek-ai/deepseek-v3.2-maas", _MAAS_RETIRED, "deepseek-ai/deepseek-v4.1-flash-maas"
+    ),
+    **_maas("moonshotai/kimi-k2-thinking-maas", _MAAS_RETIRED, _MAAS_OTHER),
+    **_maas("qwen/qwen3-235b-a22b-instruct-2507-maas", _MAAS_RETIRED, _MAAS_OTHER),
+    **_maas("qwen/qwen3-coder-480b-a35b-instruct-maas", _MAAS_RETIRED, _MAAS_OTHER),
+}
+"""Model IDs dropped from the catalog, with why and what to select instead.
+
+``resolve_model`` and the adapters' config validation quote an entry when they reject
+its ID, so a process file or resumed run that named a model accepted by an earlier
+release learns why it is refused now rather than only that it is unknown.
+"""
+
+
+def removed_model_note(adapter: str, model: str) -> str | None:
+    """Return why *adapter* no longer accepts *model* and what replaces it, if recorded.
+
+    ``None`` when the ID is still known to *adapter* or was never one the catalog
+    removed for it.
+    """
+    removed = REMOVED_MODELS.get(model)
+    if removed is None or adapter not in removed.adapters or model in known_model_ids(adapter):
+        return None
+    return (
+        f"removed from Metaproc's model catalog on {removed.removed_on.isoformat()} "
+        f"({removed.reason}); use {removed.replacement}"
+    )
+
+
 def resolve_model(adapter: str, configured: object) -> str:
-    """Default omitted selections; reject unknown explicit selections without substitution."""
+    """Default omitted selections; reject unknown explicit selections without substitution.
+
+    A rejected ID that the catalog removed names the removal and its replacement
+    (``removed_model_note``).
+    """
     selected = MODEL_CATALOG.defaults[adapter] if configured is None else str(configured)
     if selected not in known_model_ids(adapter):
+        note = removed_model_note(adapter, selected)
+        remedy = note or "choose a known model or update Metaproc's model catalog"
         raise ValueError(
-            f"unknown {adapter} model {selected!r}; choose a known model or update "
-            "Metaproc's model catalog. An explicit model is never replaced by the default."
+            f"unknown {adapter} model {selected!r}; {remedy}. "
+            "An explicit model is never replaced by the default."
         )
     return selected
