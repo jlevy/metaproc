@@ -1062,6 +1062,21 @@ class TestCodex0166ExecJsonStream:
 # ── OPENAI_API_KEY → CODEX_API_KEY bridge ───────────────────────
 
 
+def _isolate_codex_config_layers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Point Codex's system layers and the working directory into *tmp_path*.
+
+    The bridge reads every config layer Codex 0.166.0 reads, so a host
+    `/etc/codex` or a `.codex/config.toml` above the checkout must not leak in.
+    """
+    system_dir = tmp_path / "etc-codex"
+    system_dir.mkdir()
+    monkeypatch.setattr("metaproc.adapters.codex_cli._CODEX_UNIX_SYSTEM_DIR", system_dir)
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.chdir(work)
+    monkeypatch.delenv("CODEX_ACCESS_TOKEN", raising=False)
+
+
 class TestCodexApiKeyBridge:
     """`codex exec` reads CODEX_API_KEY from the environment and ignores OPENAI_API_KEY."""
 
@@ -1069,12 +1084,231 @@ class TestCodexApiKeyBridge:
         self.adapter = CodexCliAdapter()  # pyright: ignore[reportUninitializedInstanceVariable]
 
     @pytest.fixture(autouse=True)
-    def _isolated(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def _isolated(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.delenv("CODEX_HOME", raising=False)
         monkeypatch.delenv("CODEX_API_KEY", raising=False)
+        _isolate_codex_config_layers(monkeypatch, tmp_path)
 
     def _env(self, tmp_path: Path, **extra: str) -> dict[str, str]:
         return {"HOME": str(tmp_path), "OPENAI_API_KEY": "sk-openai", **extra}
+
+    def test_access_token_blocks_the_bridge(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # Codex uses CODEX_ACCESS_TOKEN ahead of a stored login; the env key would outrank it.
+        with caplog.at_level(logging.INFO, logger="metaproc.adapters.codex_cli"):
+            out = self.adapter.prepare_env(self._env(tmp_path, CODEX_ACCESS_TOKEN="pat"), {})
+        assert "CODEX_API_KEY" not in out
+        assert any("CODEX_ACCESS_TOKEN" in r.getMessage() for r in caplog.records)
+
+    def test_blank_access_token_does_not_block(self, tmp_path: Path) -> None:
+        out = self.adapter.prepare_env(self._env(tmp_path, CODEX_ACCESS_TOKEN="  "), {})
+        assert out["CODEX_API_KEY"] == "sk-openai"
+
+    @pytest.mark.parametrize("blank", ["", "   ", "\t\n"])
+    def test_blank_codex_api_key_counts_as_unset(self, tmp_path: Path, blank: str) -> None:
+        # Codex trims CODEX_API_KEY and ignores a blank one, so it must not block the bridge.
+        out = self.adapter.prepare_env(self._env(tmp_path, CODEX_API_KEY=blank), {})
+        assert out["CODEX_API_KEY"] == "sk-openai"
+
+    def test_bridged_key_is_trimmed(self, tmp_path: Path) -> None:
+        out = self.adapter.prepare_env(self._env(tmp_path, OPENAI_API_KEY=" sk-openai\n"), {})
+        assert out["CODEX_API_KEY"] == "sk-openai"
+
+    def test_bridge_is_logged_at_info(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(logging.INFO, logger="metaproc.adapters.codex_cli"):
+            self.adapter.prepare_env(self._env(tmp_path), {})
+        assert any("billed to the API key" in r.getMessage() for r in caplog.records)
+
+    @pytest.mark.parametrize("name", ["config.toml", "requirements.toml", "managed_config.toml"])
+    @pytest.mark.parametrize("store", ["keyring", "auto"])
+    def test_keyring_store_in_a_system_layer_blocks_the_bridge(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture, name: str, store: str
+    ) -> None:
+        (tmp_path / "etc-codex" / name).write_text(f'cli_auth_credentials_store = "{store}"\n')
+        with caplog.at_level(logging.INFO, logger="metaproc.adapters.codex_cli"):
+            out = self.adapter.prepare_env(self._env(tmp_path), {})
+        assert "CODEX_API_KEY" not in out
+        assert any(name in r.getMessage() for r in caplog.records)
+
+    def test_file_store_in_a_system_layer_allows_the_bridge(self, tmp_path: Path) -> None:
+        (tmp_path / "etc-codex" / "config.toml").write_text('cli_auth_credentials_store = "file"\n')
+        out = self.adapter.prepare_env(self._env(tmp_path), {})
+        assert out["CODEX_API_KEY"] == "sk-openai"
+
+    def test_unparseable_system_layer_blocks_the_bridge(self, tmp_path: Path) -> None:
+        (tmp_path / "etc-codex" / "requirements.toml").write_text("not = [valid\n")
+        out = self.adapter.prepare_env(self._env(tmp_path), {})
+        assert "CODEX_API_KEY" not in out
+
+    def test_project_layer_in_working_directory_blocks_the_bridge(self, tmp_path: Path) -> None:
+        project = tmp_path / "project"
+        (project / ".codex").mkdir(parents=True)
+        (project / ".codex" / "config.toml").write_text('cli_auth_credentials_store = "keyring"\n')
+        cfg: dict[str, object] = {"working_directory": str(project / "sub")}
+        out = self.adapter.prepare_env(self._env(tmp_path), cfg)
+        assert "CODEX_API_KEY" not in out
+
+    def test_project_layer_in_process_cwd_blocks_the_bridge(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        project = tmp_path / "project"
+        (project / ".codex").mkdir(parents=True)
+        (project / ".codex" / "config.toml").write_text('cli_auth_credentials_store = "auto"\n')
+        monkeypatch.chdir(project)
+        out = self.adapter.prepare_env(self._env(tmp_path), {})
+        assert "CODEX_API_KEY" not in out
+
+    def test_codex_home_is_not_read_twice_as_a_project_layer(self, tmp_path: Path) -> None:
+        # HOME/.codex is CODEX_HOME here and also a parent's `.codex`; Codex skips it
+        # as a project layer, and a file store there must not block the bridge.
+        (tmp_path / ".codex").mkdir()
+        (tmp_path / ".codex" / "config.toml").write_text('cli_auth_credentials_store = "file"\n')
+        out = self.adapter.prepare_env(self._env(tmp_path), {"working_directory": str(tmp_path)})
+        assert out["CODEX_API_KEY"] == "sk-openai"
+
+    def test_file_override_does_not_clear_a_keyring_layer(self, tmp_path: Path) -> None:
+        # Fail safe: a lower layer that may hold a keyring login blocks the bridge
+        # whatever a higher layer says.
+        (tmp_path / "etc-codex" / "config.toml").write_text(
+            'cli_auth_credentials_store = "keyring"\n'
+        )
+        cfg: dict[str, object] = {"config_overrides": {"cli_auth_credentials_store": "file"}}
+        out = self.adapter.prepare_env(self._env(tmp_path), cfg)
+        assert "CODEX_API_KEY" not in out
+
+    def test_macos_managed_preferences_block_the_bridge(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        managed = tmp_path / "Managed Preferences"
+        (managed / "someone").mkdir(parents=True)
+        (managed / "someone" / "com.openai.codex.plist").write_bytes(b"")
+        monkeypatch.setattr("metaproc.adapters.codex_cli.sys.platform", "darwin")
+        monkeypatch.setattr("metaproc.adapters.codex_cli._MACOS_MANAGED_PREFERENCES_DIR", managed)
+        out = self.adapter.prepare_env(self._env(tmp_path), {})
+        assert "CODEX_API_KEY" not in out
+
+
+class TestCodexBridgeFollowsStepEnv:
+    """Launchers apply a step's `env` after prepare_env; the bridge decides on the merged env."""
+
+    def setup_method(self) -> None:
+        self.adapter = CodexCliAdapter()  # pyright: ignore[reportUninitializedInstanceVariable]
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.delenv("CODEX_HOME", raising=False)
+        monkeypatch.delenv("CODEX_API_KEY", raising=False)
+        _isolate_codex_config_layers(monkeypatch, tmp_path)
+
+    def _prepared(self, tmp_path: Path) -> dict[str, str]:
+        env = self.adapter.prepare_env({"HOME": str(tmp_path), "OPENAI_API_KEY": "sk-openai"}, {})
+        assert env["CODEX_API_KEY"] == "sk-openai"
+        return env
+
+    def test_step_codex_home_with_a_login_withdraws_the_bridge(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        step_home = tmp_path / "step-codex"
+        step_home.mkdir()
+        (step_home / "auth.json").write_text(_VALID_OAUTH_PAYLOAD)
+        env = self._prepared(tmp_path)
+        with caplog.at_level(logging.INFO, logger="metaproc.adapters.codex_cli"):
+            env.update({"CODEX_HOME": str(step_home)})
+        assert "CODEX_API_KEY" not in env
+        assert env["CODEX_HOME"] == str(step_home)
+        assert any("withdrew" in r.getMessage() for r in caplog.records)
+
+    def test_step_codex_home_with_keyring_store_withdraws_the_bridge(self, tmp_path: Path) -> None:
+        step_home = tmp_path / "step-codex"
+        step_home.mkdir()
+        (step_home / "config.toml").write_text('cli_auth_credentials_store = "keyring"\n')
+        env = self._prepared(tmp_path)
+        env["CODEX_HOME"] = str(step_home)
+        assert "CODEX_API_KEY" not in env
+
+    def test_step_codex_home_without_a_login_keeps_the_bridge(self, tmp_path: Path) -> None:
+        step_home = tmp_path / "step-codex"
+        step_home.mkdir()
+        env = self._prepared(tmp_path)
+        env.update({"CODEX_HOME": str(step_home)})
+        assert env["CODEX_API_KEY"] == "sk-openai"
+
+    def test_step_access_token_withdraws_the_bridge(self, tmp_path: Path) -> None:
+        env = self._prepared(tmp_path)
+        env.update({"CODEX_ACCESS_TOKEN": "pat"})
+        assert "CODEX_API_KEY" not in env
+
+    def test_step_openai_api_key_is_the_one_bridged(self, tmp_path: Path) -> None:
+        env = self._prepared(tmp_path)
+        env.update({"OPENAI_API_KEY": "sk-step"})
+        assert env["CODEX_API_KEY"] == "sk-step"
+
+    def test_step_blank_openai_api_key_withdraws_the_bridge(self, tmp_path: Path) -> None:
+        env = self._prepared(tmp_path)
+        env.update({"OPENAI_API_KEY": ""})
+        assert "CODEX_API_KEY" not in env
+
+    @pytest.mark.parametrize("value", ["", "sk-step-codex"])
+    def test_step_codex_api_key_is_left_as_written(self, tmp_path: Path, value: str) -> None:
+        env = self._prepared(tmp_path)
+        env.update({"CODEX_API_KEY": value})
+        assert env["CODEX_API_KEY"] == value
+        env.update({"CODEX_HOME": str(tmp_path / "elsewhere")})
+        assert env["CODEX_API_KEY"] == value
+
+    def test_unrelated_step_env_keeps_the_bridge(self, tmp_path: Path) -> None:
+        env = self._prepared(tmp_path)
+        env.update({"FOO": "bar"})
+        env["METAPROC_LANE_ID"] = "lane"
+        assert env["CODEX_API_KEY"] == "sk-openai"
+
+    def test_pickles_and_copies_as_a_plain_dict(self, tmp_path: Path) -> None:
+        env = self._prepared(tmp_path)
+        restored = pickle.loads(pickle.dumps(env))  # noqa: S301 -- round-trips our own object
+        assert type(restored) is dict
+        assert restored == dict(env)
+
+    def test_launch_step_applies_step_env_before_codex_sees_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Through the real launcher: a step CODEX_HOME with a ChatGPT login keeps that login."""
+        from metaproc.engine import runtime  # noqa: PLC0415 -- engine import kept local to this test
+
+        step_home = tmp_path / "step-codex"
+        step_home.mkdir()
+        (step_home / "auth.json").write_text(_VALID_OAUTH_PAYLOAD)
+        monkeypatch.setenv("HOME", str(tmp_path))
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+        monkeypatch.delenv("CODEX_ACCESS_TOKEN", raising=False)
+        seen: dict[str, dict[str, str]] = {}
+
+        class _Proc:
+            pid = 4242
+
+        def _popen(_cmd: list[str], **kwargs: Any) -> _Proc:
+            seen["env"] = dict(kwargs["env"])
+            return _Proc()
+
+        monkeypatch.setattr(runtime.subprocess, "Popen", _popen)
+        monkeypatch.setattr("metaproc.adapters.codex_cli._codex_version_drift", lambda: None)
+        logs = tmp_path / "logs"
+        logs.mkdir()
+        runtime.launch_step(
+            "step",
+            "prompt",
+            logs,
+            logs / "step.log",
+            "codex-cli",
+            {"permission_mode": "default"},
+            {},
+            "item",
+            step_env={"CODEX_HOME": str(step_home)},
+        )
+        assert seen["env"]["CODEX_HOME"] == str(step_home)
+        assert "CODEX_API_KEY" not in seen["env"]
 
     def test_bridges_when_no_stored_login(self, tmp_path: Path) -> None:
         out = self.adapter.prepare_env(self._env(tmp_path), {})
@@ -1165,6 +1399,46 @@ class TestCodexCheckAuthPrecedence:
         monkeypatch.setenv("CODEX_HOME", str(tmp_path))
         monkeypatch.delenv("CODEX_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+        _isolate_codex_config_layers(monkeypatch, tmp_path)
+
+    def test_access_token_wins_over_auth_json(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("CODEX_ACCESS_TOKEN", "pat")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+        (tmp_path / "auth.json").write_text(_VALID_OAUTH_PAYLOAD)
+        status = self.adapter.check_auth()
+        assert status.auth_mode == "access-token"
+        assert status.credentials_found is True
+        assert "do not pass OPENAI_API_KEY" in status.details
+
+    def test_codex_api_key_wins_over_access_token(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CODEX_ACCESS_TOKEN", "pat")
+        monkeypatch.setenv("CODEX_API_KEY", "sk-codex")
+        assert self.adapter.check_auth().auth_mode == "api-key"
+
+    @pytest.mark.parametrize("blank", ["", "   "])
+    def test_blank_codex_api_key_is_ignored(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, blank: str
+    ) -> None:
+        monkeypatch.setenv("CODEX_API_KEY", blank)
+        (tmp_path / "auth.json").write_text(_VALID_OAUTH_PAYLOAD)
+        assert self.adapter.check_auth().auth_mode == "interactive-login"
+
+    def test_blank_openai_api_key_is_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "  ")
+        assert self.adapter.check_auth().auth_mode == "none"
+
+    def test_openai_api_key_with_system_keyring_store_is_unknown(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+        (tmp_path / "etc-codex" / "config.toml").write_text(
+            'cli_auth_credentials_store = "keyring"\n'
+        )
+        status = self.adapter.check_auth()
+        assert status.auth_mode == "unknown"
+        assert "etc-codex" in status.details
 
     def test_auth_json_wins_over_openai_api_key(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
