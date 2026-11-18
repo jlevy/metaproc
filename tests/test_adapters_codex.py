@@ -1363,7 +1363,7 @@ class TestCodexBridgeFollowsStepEnv:
             seen["env"] = dict(kwargs["env"])
             return _Proc()
 
-        monkeypatch.setattr(engine_runtime.subprocess, "Popen", _popen)
+        monkeypatch.setattr("metaproc.engine.runtime.subprocess.Popen", _popen)
         monkeypatch.setattr("metaproc.adapters.codex_cli._codex_version_drift", lambda: None)
         logs = tmp_path / "logs"
         logs.mkdir()

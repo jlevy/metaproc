@@ -426,7 +426,7 @@ class _CodexChildEnv(dict[str, str]):
         super().__setitem__(key, value)
         self._changed({key})
 
-    def update(self, *args: Any, **kwargs: str) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
+    def update(self, *args: Any, **kwargs: str) -> None:
         incoming: dict[str, str] = dict(*args, **kwargs)
         super().update(incoming)
         self._changed(set(incoming))
