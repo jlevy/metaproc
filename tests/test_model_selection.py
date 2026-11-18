@@ -291,3 +291,26 @@ def test_unknown_explicit_model_raises(
 
     with pytest.raises(ValueError, match=rf"unknown {adapter_name} model"):
         builder(prompt, config | {"model": unknown_model}, {})
+
+
+@pytest.mark.parametrize(
+    ("adapter", "config", "replacement"),
+    [
+        (GeminiCliAdapter(), {"model": "gemini-3.5-flash"}, "gemini-4-hydrogen"),
+        (
+            CodexCliAdapter(),
+            {"permission_mode": "default", "model": "gpt-5.4"},
+            "gpt-6.1-sol",
+        ),
+        (PiCliAdapter(), {"provider": "vertex-maas", "model": "glm-5-maas"}, "glm-5.2-maas"),
+    ],
+)
+def test_removed_model_rejection_names_the_replacement(
+    adapter: CodexCliAdapter | GeminiCliAdapter | PiCliAdapter,
+    config: dict[str, object],
+    replacement: str,
+) -> None:
+    reasons = [r.reason for r in adapter.validate_config(config) if r.key == "model"]
+    assert reasons
+    assert "removed from Metaproc's model catalog" in reasons[0]
+    assert replacement in reasons[0]

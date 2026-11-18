@@ -90,6 +90,34 @@ development series.
 
 ### Fixed
 
+- **Resume keeps the artifact namespace across a default-model move.** A run now records
+  the adapter defaults its derived artifact namespaces compare against
+  (`namespace_default_models` in `run-config.yaml`), and a resume derives against them.
+  A run created before this release with
+  `--variant codex-cli --adapter-config model=gpt-5.5`, or a codex step with an explicit
+  `model: gpt-5.5`, keeps its `codex-cli` namespace and its completed steps instead of
+  moving to `codex-cli-gpt-5.5` and re-running; the resume warns what a new run would
+  derive.
+- **A moved default model is recorded on resume.** `run-config.yaml` records
+  `default_models`, the model each adapter’s agent steps with no `model:` resolved to.
+  A resume that resolves another one records `default_models.<adapter>` as a
+  launch-config change and warns that completed steps keep their earlier results (for
+  codex-cli runs created before this release, most likely `gpt-5.5`) while steps it runs
+  use the new default.
+  Nothing is refused or re-run.
+- **Runs on removed built-in execution profiles still resume.** A run that recorded
+  `gemini-flash-36`, `gemini-flash`, `pi-gemini-flash` or `pi-glm5` is rebuilt from the
+  profile’s former definition: `metaproc status` shows its plan, and a resume warns and
+  reuses completed steps.
+  Where the profile’s model is retired (`gemini-3.5-flash`, `glm-5-maas`), the resume is
+  refused with the retirement, the successor and the exact override
+  (`--variant <successor>`, or
+  `--variant <name> --adapter-config model=<successor model>` to keep the namespace).
+  A fresh launch naming a removed profile is refused with its successor.
+- **Removed model IDs say why.** Rejecting a model ID dropped from the catalog on
+  2026-11-18, at command construction or in adapter config validation, now names the
+  retirement and its replacement, for example `deepseek-v4-flash` → `deepseek-flash` or
+  `gpt-5.4` → `gpt-6.1-sol`.
 - **Codex runs with only `OPENAI_API_KEY` authenticate.** `codex exec` reads an API key
   only from `CODEX_API_KEY`, so such runs failed with HTTP 401. The adapter now passes
   the key under that name when no stored Codex login exists under a file-backed

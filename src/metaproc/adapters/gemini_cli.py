@@ -22,7 +22,7 @@ from metaproc.adapters.cli_version import (
     check_cli_version,
 )
 from metaproc.config.env_vars import MetaprocEnv
-from metaproc.config.model_catalog import resolve_model
+from metaproc.config.model_catalog import removed_model_note, resolve_model
 from metaproc.io import temp_output_dir, write_secret_text
 from metaproc.io.mkdir_lock import mkdir_lock
 from metaproc.settings import (
@@ -35,6 +35,13 @@ from metaproc.settings import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _unknown_model_reason(adapter: str, value: object) -> str:
+    """Name an unknown model, with its retirement and replacement when recorded."""
+    note = removed_model_note(adapter, str(value))
+    return f"unknown {adapter} model {value!r}" + (f"; {note}" if note else "")
+
 
 PINNED_GEMINI_CLI_VERSION = "0.66.0"
 # The auth hint and the version refusal quote one command, so a pin bump moves both.
@@ -899,7 +906,7 @@ class GeminiCliAdapter:
                 rejections.append(
                     ConfigRejection(
                         key=key,
-                        reason=f"unknown gemini-cli model {value!r}",
+                        reason=_unknown_model_reason("gemini-cli", value),
                     )
                 )
         scope = native_settings_scope(merged_config)

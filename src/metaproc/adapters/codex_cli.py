@@ -27,7 +27,7 @@ from metaproc.adapters.base import (
     resolve_templates,
 )
 from metaproc.config.env_vars import MetaprocEnv
-from metaproc.config.model_catalog import resolve_model
+from metaproc.config.model_catalog import removed_model_note, resolve_model
 from metaproc.dispatch.known_bugs import detect_known_bug
 from metaproc.io import write_secret_text
 from metaproc.settings import (
@@ -51,6 +51,13 @@ CODEX_CREDS_ENV_VAR = "CODEX_CREDS_JSON"
 _CODEX_SLOT_CONFIG_TOML = 'cli_auth_credentials_store = "file"\nforced_login_method = "chatgpt"\n'
 
 log = logging.getLogger(__name__)
+
+
+def _unknown_model_reason(adapter: str, value: object) -> str:
+    """Name an unknown model, with its retirement and replacement when recorded."""
+    note = removed_model_note(adapter, str(value))
+    return f"unknown {adapter} model {value!r}" + (f"; {note}" if note else "")
+
 
 PINNED_CODEX_CLI_VERSION = "0.166.0"
 CODEX_CLI_INSTALL_HINT = f"Install: npm install -g @openai/codex@{PINNED_CODEX_CLI_VERSION}"
@@ -713,7 +720,7 @@ class CodexCliAdapter:
                 rejections.append(
                     ConfigRejection(
                         key=key,
-                        reason=f"unknown codex-cli model {value!r}",
+                        reason=_unknown_model_reason("codex-cli", value),
                     )
                 )
             elif key == "effort" and str(value) not in CODEX_VALID_EFFORTS:

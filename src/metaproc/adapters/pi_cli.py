@@ -27,7 +27,7 @@ from metaproc.adapters.cli_version import (
 )
 from metaproc.cloud.gcp.resolve_token import resolve_gcp_token
 from metaproc.config.env_vars import MetaprocEnv
-from metaproc.config.model_catalog import resolve_model
+from metaproc.config.model_catalog import removed_model_note, resolve_model
 from metaproc.config.providers import provider_by_name, providers_with_api_keys
 from metaproc.settings import (
     PI_DEFAULT_MODEL,
@@ -37,6 +37,13 @@ from metaproc.settings import (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _unknown_model_reason(adapter: str, value: object) -> str:
+    """Name an unknown model, with its retirement and replacement when recorded."""
+    note = removed_model_note(adapter, str(value))
+    return f"unknown {adapter} model {value!r}" + (f"; {note}" if note else "")
+
 
 PINNED_PI_CODING_AGENT_VERSION = "1.5.2"
 # Pi ships no shrinkwrap since 1.0.2, so its third-party dependencies float. The
@@ -312,7 +319,7 @@ class PiCliAdapter:
                 )
             if key == "model" and str(value) not in PI_VALID_MODELS:
                 rejections.append(
-                    ConfigRejection(key=key, reason=f"unknown pi-cli model {value!r}")
+                    ConfigRejection(key=key, reason=_unknown_model_reason("pi-cli", value))
                 )
         return rejections
 

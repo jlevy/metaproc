@@ -30,7 +30,7 @@ from metaproc.adapters.base import (
     resolve_templates,
 )
 from metaproc.config.env_vars import MetaprocEnv
-from metaproc.config.model_catalog import resolve_model
+from metaproc.config.model_catalog import removed_model_note, resolve_model
 from metaproc.dispatch.auth_usage import query_label_headroom
 from metaproc.dispatch.credential_pool import Vehicle
 from metaproc.dispatch.known_bugs import detect_known_bug
@@ -64,6 +64,12 @@ CLAUDE_CODE_INSTALL_HINT = (
 )
 
 log = logging.getLogger(__name__)
+
+
+def _unknown_model_reason(adapter: str, value: object) -> str:
+    """Name an unknown model, with its retirement and replacement when recorded."""
+    note = removed_model_note(adapter, str(value))
+    return f"unknown {adapter} model {value!r}" + (f"; {note}" if note else "")
 
 
 class ClaudeCodeVersionMismatch(RuntimeError):
@@ -614,7 +620,7 @@ class ClaudeCodeCliAdapter:
                 rejections.append(
                     ConfigRejection(
                         key=key,
-                        reason=f"unknown claude-code-cli model {value!r}",
+                        reason=_unknown_model_reason("claude-code-cli", value),
                     )
                 )
         return rejections
