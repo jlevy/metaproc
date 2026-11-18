@@ -6,7 +6,9 @@ import json
 import logging
 import os
 import stat
+import pickle
 import subprocess
+from compression import zstd
 from pathlib import Path
 from typing import Any, ClassVar
 from unittest.mock import patch
@@ -477,10 +479,13 @@ class TestCodexCheckAuth:
         assert "not found" in status.details.lower()
 
     @pytest.fixture(autouse=True)
-    def _no_ambient_codex_api_key(self, monkeypatch):
+    def _no_ambient_codex_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("CODEX_API_KEY", raising=False)
+        monkeypatch.delenv("CODEX_ACCESS_TOKEN", raising=False)
 
-    def test_openai_api_key_without_stored_login_is_api_key(self, monkeypatch, tmp_path):
+    def test_openai_api_key_without_stored_login_is_api_key(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         monkeypatch.setattr("metaproc.adapters.codex_cli.shutil.which", lambda _: "/usr/bin/codex")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
         monkeypatch.setenv("CODEX_HOME", str(tmp_path))
@@ -1305,7 +1310,8 @@ class TestCodexAssertModel:
         assert not ok
         assert "does not match" in msg
 
-    def test_argv_fallback_when_no_rollout(self, tmp_path: Path) -> None:
+    def test_argv_alone_is_not_verifiable(self, tmp_path: Path) -> None:
+        # The probe's own `-m` is what Metaproc asked for; matching it would be a tautology.
         ok, msg = _evaluate_model_assertion(
             "codex-cli",
             _CODEX_0166_EXEC_JSON,
@@ -1314,8 +1320,32 @@ class TestCodexAssertModel:
             env={"CODEX_HOME": str(tmp_path)},
             cmd=["/bin/sh", "-c", "x", "metaproc-codex", "p", "codex", "-m", "gpt-6.1-sol", "exec"],
         )
+        assert not ok
+        assert "cannot verify" in msg
+        assert "-m 'gpt-6.1-sol'" in msg
+        assert "reports no served model" in msg
+
+    def test_compressed_rollout_is_read(self, tmp_path: Path) -> None:
+        plain = _write_rollout(tmp_path, _THREAD_ID, "gpt-6.1-sol")
+        compressed = plain.with_name(plain.name + ".zst")
+        compressed.write_bytes(zstd.compress(plain.read_bytes()))
+        plain.unlink()
+        ok, msg = _evaluate_model_assertion(
+            "codex-cli",
+            _CODEX_0166_EXEC_JSON,
+            "gpt-6.1",
+            "codex-cli",
+            env={"CODEX_HOME": str(tmp_path)},
+            cmd=None,
+        )
         assert ok, msg
-        assert "`-m` argument" in msg
+        assert "requested model 'gpt-6.1-sol'" in msg
+
+    def test_corrupt_compressed_rollout_is_skipped(self, tmp_path: Path) -> None:
+        day = tmp_path / "sessions" / "2026" / "11" / "18"
+        day.mkdir(parents=True)
+        (day / f"rollout-2026-11-18T02-35-25-{_THREAD_ID}.jsonl.zst").write_bytes(b"not zstd")
+        assert codex_rollout_model(tmp_path, _THREAD_ID) is None
 
     def test_nothing_found_fails(self, tmp_path: Path) -> None:
         ok, msg = _evaluate_model_assertion(
@@ -1327,7 +1357,8 @@ class TestCodexAssertModel:
             cmd=None,
         )
         assert not ok
-        assert "no requested model found" in msg
+        assert "cannot verify" in msg
+        assert "recorded no requested model" in msg
 
     def test_live_check_threads_env_and_cmd_through(self, tmp_path: Path) -> None:
         """End to end through `_run_live_check` with a stubbed codex subprocess."""
