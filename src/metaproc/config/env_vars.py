@@ -203,6 +203,12 @@ class MetaprocEnv(EnvEnum):
         "OpenAI API key used by the PI CLI adapter and the codex-cli adapter "
         "(Vehicle A, API-key mode)."
     )
+    CODEX_API_KEY = secret(
+        "OpenAI API key `codex exec` reads from the environment; it ignores OPENAI_API_KEY. "
+        "Normally keep this placeholder or delete the line: the codex-cli adapter ignores "
+        "the placeholder and copies OPENAI_API_KEY here for a run with no stored Codex "
+        "login. A real value outranks every stored Codex login, ChatGPT sign-in included."
+    )
     DEEPSEEK_API_KEY = secret(
         "DeepSeek API key for the pi-cli `deepseek` provider (DeepSeek V4 family, direct API)."
     )
@@ -427,6 +433,7 @@ SECRET_VARS: frozenset[MetaprocEnv] = frozenset(
         MetaprocEnv.PERPLEXITY_API_KEY,
         MetaprocEnv.ANTHROPIC_API_KEY,
         MetaprocEnv.OPENAI_API_KEY,
+        MetaprocEnv.CODEX_API_KEY,
         MetaprocEnv.DEEPSEEK_API_KEY,
         MetaprocEnv.MOONSHOT_API_KEY,
         MetaprocEnv.GEMINI_API_KEY,

@@ -24,6 +24,7 @@ import typer
 from strif import temp_output_file
 
 from metaproc.adapters.base import agent_seed_env, parse_jsonl_event
+from metaproc.adapters.codex_cli import codex_rollout_model, codex_thread_id, resolve_codex_home
 from metaproc.adapters.gemini_cli import format_served_models
 from metaproc.adapters.gemini_cli import served_models as gemini_served_models
 from metaproc.adapters.pi_cli import resolve_pi_binary
@@ -219,8 +220,8 @@ def _pi_validate_registration(
 # Adapter-specific matchers for the identity event that carries model ID.
 # Each entry is (event type or None, event subtype or None, dotted-path to
 # model within the event). `None` for type means "any line" — used for
-# codex-cli, whose config-dump preamble carries `{"model": ..., ...}` with
-# no `type` field. The first JSONL line matching both type/subtype (when
+# the config-dump preamble older codex-cli releases printed, `{"model": ..., ...}`
+# with no `type` field. The first JSONL line matching both type/subtype (when
 # specified) and containing a non-empty string at *model_path* wins.
 #
 # An identity event is not billing accounting, so it need not name the model
@@ -233,11 +234,11 @@ _MODEL_EVENT_MATCHERS: dict[str, tuple[str | None, str | None, tuple[str, ...]]]
     # assistant turn. Matching `message_start` directly gives us the
     # identity event even when agent_start is empty.
     "pi-cli": ("message_start", None, ("message", "model")),
-    # codex-cli 0.124.0 prints an untyped config-dump line as its first
-    # stdout line (e.g. `{"model":"gpt-5","provider":"openai",...}`). The
-    # typed event stream (thread.started → turn.started → item.* →
-    # turn.completed) does NOT carry a model ID, so this preamble is the
-    # only place the observed model shows up.
+    # Older codex-cli releases (0.124.0) printed an untyped config-dump line
+    # first (e.g. `{"model":"gpt-5","provider":"openai",...}`). The pinned
+    # 0.166.0 prints none under `--json`, and its typed stream carries no model
+    # at all, so `_evaluate_codex_model_assertion` falls back to the session
+    # rollout and then the argv.
     "codex-cli": (None, None, ("model",)),
 }
 
@@ -341,8 +342,9 @@ def _run_live_check(
       request to. Its `result.modelUsage` carries the models that billed but is
       not read yet.
     - pi-cli: `message.model` on the first assistant `message_start` event.
-    - codex-cli: the `model` field of the untyped config preamble it prints
-      before its event stream; the assertion fails when the preamble is absent.
+    - codex-cli: the model Codex *requested*: a legacy config preamble if one is
+      printed, else the `turn_context` model in the thread's session rollout, else
+      the probe's `-m`. `codex exec` reports no model that served the call.
     """
 
     adapter = ADAPTER_REGISTRY[adapter_type]
@@ -486,7 +488,12 @@ def _run_live_check(
                 if assert_model:
                     results.append(
                         _evaluate_model_assertion(
-                            adapter_type, proc.stdout or "", assert_model, label
+                            adapter_type,
+                            proc.stdout or "",
+                            assert_model,
+                            label,
+                            env=env,
+                            cmd=cmd,
                         )
                     )
             elif proc.returncode == 0 and jsonl_error is not None:
@@ -609,16 +616,23 @@ def _evaluate_model_assertion(
     stdout: str,
     expected: str,
     label: str,
+    *,
+    env: Mapping[str, str] | None = None,
+    cmd: list[str] | None = None,
 ) -> tuple[bool, str]:
     """Compare the model the probe's output names against *expected* substring.
 
     For an adapter in `_SERVED_MODEL_READERS` this reads the terminal event's
     served-model accounting, so a CLI that rewrites the request to another model
-    fails the assertion. Every other adapter's assertion reads the model named by
-    its identity event in `_MODEL_EVENT_MATCHERS`.
+    fails the assertion. codex-cli reports no model at all, so its assertion reads
+    the requested model (`_evaluate_codex_model_assertion`); *env* and *cmd* are
+    the probe's child environment and argv it needs. Every other adapter's
+    assertion reads the model named by its identity event in `_MODEL_EVENT_MATCHERS`.
     """
     if adapter_type in _SERVED_MODEL_READERS:
         return _evaluate_served_model_assertion(adapter_type, stdout, expected, label)
+    if adapter_type == "codex-cli":
+        return _evaluate_codex_model_assertion(stdout, expected, label, env=env, cmd=cmd)
 
     observed = _extract_observed_model(adapter_type, stdout)
     if observed is None:
@@ -634,6 +648,71 @@ def _evaluate_model_assertion(
     return (
         False,
         f"{label}: observed model {observed!r} does not match expected {expected!r}",
+    )
+
+
+def _codex_requested_model(
+    stdout: str, env: Mapping[str, str] | None, cmd: list[str] | None
+) -> tuple[str, str] | None:
+    """Return Codex's requested model and where it was read, best evidence first.
+
+    1. An untyped config preamble, which codex-cli 0.124.0 printed and the pinned
+       0.166.0 does not.
+    2. The `turn_context` record of the thread's session rollout under
+       `$CODEX_HOME/sessions`: the model Codex sent the request for after its own
+       config resolution.
+    3. The `-m` value in the probe's argv: what Metaproc asked for.
+    """
+    preamble = _extract_observed_model("codex-cli", stdout)
+    if preamble is not None:
+        return preamble, "the codex-cli config preamble"
+    thread_id = codex_thread_id(stdout)
+    if thread_id is not None:
+        codex_home = resolve_codex_home(dict(env) if env is not None else None)
+        recorded = codex_rollout_model(codex_home, thread_id)
+        if recorded is not None:
+            return recorded, f"Codex's session rollout for thread {thread_id}"
+    if cmd and "-m" in cmd:
+        index = cmd.index("-m")
+        if index + 1 < len(cmd):
+            return cmd[index + 1], "the probe's `-m` argument; Codex wrote no session rollout"
+    return None
+
+
+def _evaluate_codex_model_assertion(
+    stdout: str,
+    expected: str,
+    label: str,
+    *,
+    env: Mapping[str, str] | None,
+    cmd: list[str] | None,
+) -> tuple[bool, str]:
+    """Assert *expected* against the model Codex *requested*, labelled as such.
+
+    `codex exec --json` (0.166.0) names no model in its events, and its rollout
+    records only the requested model, so no evidence shows which model served the
+    call. The assertion therefore confirms the request Codex made, not the answer,
+    and every message says so.
+    """
+    found = _codex_requested_model(stdout, env, cmd)
+    unserved = "codex-cli reports no served model"
+    if found is None:
+        return (
+            False,
+            f"{label}: no requested model found ({unserved}); cannot confirm a model "
+            f"containing {expected!r}",
+        )
+    requested, source = found
+    if expected in requested:
+        return (
+            True,
+            f"{label}: requested model {requested!r} matches expected {expected!r} "
+            f"(from {source}; {unserved})",
+        )
+    return (
+        False,
+        f"{label}: requested model {requested!r} does not match expected {expected!r} "
+        f"(from {source}; {unserved})",
     )
 
 
@@ -909,8 +988,8 @@ def auth_check(
             "request to; its result.modelUsage carries the models that billed but is "
             "not read yet. "
             "pi-cli: message.model on the first assistant message_start event. "
-            "codex-cli: the model field of the config preamble it prints before its "
-            "event stream; the check fails when the preamble is absent."
+            "codex-cli: the model Codex requested, read from the thread's session rollout "
+            "(else the probe's -m); codex exec reports no model that served the call."
         ),
     ),
     adapter: str | None = typer.Option(  # noqa: UP007

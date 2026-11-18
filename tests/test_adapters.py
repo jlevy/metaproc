@@ -761,17 +761,17 @@ class TestGeminiCliAdapter:
             "status": "success",
             "stats": {
                 "models": {
-                    "gemini-3.1-flash-lite": {"total_tokens": 0, "input_tokens": 0},
-                    "gemini-3.5-flash": {"total_tokens": 11815, "input_tokens": 11678},
+                    "gemini-3.5-flash-lite": {"total_tokens": 0, "input_tokens": 0},
+                    "gemini-3.8-flash": {"total_tokens": 11815, "input_tokens": 11678},
                 }
             },
         }
 
-        error = self.adapter.validate_result_event(event, {"model": "gemini-3.1-flash-lite"})
+        error = self.adapter.validate_result_event(event, {"model": "gemini-3.5-flash-lite"})
 
         assert error is not None
-        assert "requested model 'gemini-3.1-flash-lite'" in error
-        assert "reported gemini-3.5-flash (11815 tokens)." in error
+        assert "requested model 'gemini-3.5-flash-lite'" in error
+        assert "reported gemini-3.8-flash (11815 tokens)." in error
 
     def test_a_two_model_result_passes_when_the_requested_model_billed(self):
         """The trace fixture's result: the requested model and a utility model both billed."""
@@ -784,7 +784,12 @@ class TestGeminiCliAdapter:
             "gemini-3.5-flash": 1650379,
             "gemini-3-flash-preview": 23966,
         }
-        assert self.adapter.validate_result_event(result, {"model": "gemini-3.5-flash"}) is None
+        # The capture predates the 2026-11-18 catalog, which no longer accepts
+        # gemini-3.5-flash; rename its billed model to a current ID to exercise
+        # the same two-model shape.
+        stats = result["stats"]
+        stats["models"]["gemini-3.8-flash"] = stats["models"].pop("gemini-3.5-flash")
+        assert self.adapter.validate_result_event(result, {"model": "gemini-3.8-flash"}) is None
 
     def test_unsuccessful_result_keeps_its_original_failure(self):
         event: dict[str, object] = {

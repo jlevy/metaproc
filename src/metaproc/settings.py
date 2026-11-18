@@ -133,11 +133,8 @@ CODEX_VALID_APPROVAL_POLICIES: set[str] = {
 }
 
 # `-c model_reasoning_effort=<EFFORT>` — codex-cli config-path override.
-# Named values in the pinned 0.166.0 parser. Availability is model-specific;
+# Named reasoning levels in the pinned 0.166.0 parser. Availability is model-specific;
 # accepting the syntax does not mean every model supports every effort.
-# `persistent` selects Codex's persistent-execution mode rather than a deeper
-# reasoning level; no model in the 0.166.0 bundle lists it, and on the API-key
-# route (2026-11-18) gpt-6.1-sol rejected it with HTTP 400.
 CODEX_VALID_EFFORTS: set[str] = {
     "none",
     "minimal",
@@ -147,7 +144,6 @@ CODEX_VALID_EFFORTS: set[str] = {
     "xhigh",
     "max",
     "ultra",
-    "persistent",
 }
 
 # ── Pi ───────────────────────────────────────────────────────────
@@ -206,13 +202,16 @@ GEMINI_SESSION_RETENTION_SETTINGS: dict[str, object] = {
 # replaced that test with an exact list, and in the pinned 0.66.0 the static path
 # sends every concrete catalog id unchanged. The dynamic path now does the opposite
 # of what it was enabled for: its `modelIdResolutions` table rewrites an explicit
-# gemini-3.1-pro-preview to gemini-3.1-pro-preview-customtools under API-key auth,
-# and it judges preview status and multimodal tool output from model definitions
-# that 3.6 Flash and Gemini 4 do not have. Both paths still send gemini-3.5-flash
-# and gemini-3-flash as gemini-3.8-flash, and gemini-3.1-flash-lite as
-# gemini-3.5-flash-lite, under Vertex, API-key and gateway auth; the catalog no
-# longer accepts those ids. The key is asserted false, not left out, so a working
-# directory's settings cannot switch the rewriting path back on unnoticed.
+# gemini-3.1-pro-preview to gemini-3.1-pro-preview-customtools under API-key auth
+# (observed live on 2026-11-18), and it judges preview status and multimodal tool
+# output from model definitions that 3.6 Flash and Gemini 4 do not have. The flag
+# does not change thought-signature handling, which tests the id's name on both
+# paths; Gemini 4 tool calls round-tripped with either setting. Both paths still
+# send gemini-3.5-flash and gemini-3-flash as gemini-3.8-flash, and
+# gemini-3.1-flash-lite as gemini-3.5-flash-lite, under Vertex, API-key and
+# gateway auth; the catalog no longer accepts those ids. The key is asserted
+# false, not left out, so a working directory's settings cannot switch the
+# rewriting path back on unnoticed.
 GEMINI_DYNAMIC_MODEL_SETTINGS: dict[str, object] = {
     "experimental": {
         "dynamicModelConfiguration": False,

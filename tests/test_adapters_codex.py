@@ -8,10 +8,12 @@ import os
 import stat
 import subprocess
 from pathlib import Path
+from typing import Any, ClassVar
+from unittest.mock import patch
 
 import pytest
 
-from metaproc.adapters.base import Adapter, AuthCapableCliAdapter
+from metaproc.adapters.base import Adapter, AuthCapableCliAdapter, AuthStatus
 from metaproc.adapters.codex_cli import (
     CODEX_CREDS_ENV_VAR,
     CODEX_LEGACY_APPROVAL_POLICIES,
@@ -20,10 +22,17 @@ from metaproc.adapters.codex_cli import (
     CodexCliVersionMismatch,
     _warn_legacy_approval_policy,  # pyright: ignore[reportPrivateUsage]
     codex_auth_json_mode,
+    codex_rollout_model,
+    codex_thread_id,
     verify_codex_version,
 )
+from metaproc.commands.auth_check import _evaluate_model_assertion, _run_live_check
+from metaproc.config.env_vars import SECRET_VARS, MetaprocEnv
+from metaproc.engine.command_diagnostics import redact_diagnostic
 from metaproc.logutil.parsing import LogFile
-from metaproc.logutil.usage import sum_codex_usage
+from metaproc.logutil.usage import UsageStats, compute_cost, load_pricing, sum_codex_usage
+from metaproc.osutils.resource_context import _redact as _redact_resource_env
+from metaproc.runpool.backend import write_invocation_sidecar
 from metaproc.settings import CODEX_DEFAULT_MODEL, CODEX_VALID_EFFORTS, CODEX_VALID_MODELS
 
 # The shape Codex writes after a ChatGPT login (`AuthDotJson` in
@@ -467,13 +476,19 @@ class TestCodexCheckAuth:
         assert status.auth_mode == "none"
         assert "not found" in status.details.lower()
 
-    def test_openai_api_key_wins(self, monkeypatch):
+    @pytest.fixture(autouse=True)
+    def _no_ambient_codex_api_key(self, monkeypatch):
+        monkeypatch.delenv("CODEX_API_KEY", raising=False)
+
+    def test_openai_api_key_without_stored_login_is_api_key(self, monkeypatch, tmp_path):
         monkeypatch.setattr("metaproc.adapters.codex_cli.shutil.which", lambda _: "/usr/bin/codex")
         monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path))
         status = self.adapter.check_auth()
         assert status.auth_mode == "api-key"
         assert status.credentials_found is True
         assert "OPENAI_API_KEY" in status.details
+        assert "CODEX_API_KEY" in status.details
 
     def test_chatgpt_oauth_session(self, monkeypatch, tmp_path):
         monkeypatch.setattr("metaproc.adapters.codex_cli.shutil.which", lambda _: "/usr/bin/codex")
@@ -639,6 +654,8 @@ class TestCodexAuthCapableSubprotocol:
         # acquisition on that signal instead, parallel to the
         # ANTHROPIC_API_KEY rule for Claude.
         assert "OPENAI_API_KEY" not in scrub
+        # The CODEX_API_KEY bridge prepare_env may add never reaches an OAuth slot.
+        assert scrub["CODEX_API_KEY"] == ""
 
     def test_materialize_credential_writes_auth_json_and_config_toml(self, tmp_path):
         slot = tmp_path / "slot"
@@ -832,11 +849,13 @@ class TestCodexEffortAndModels:
         prompt.write_text("Say hello.")
         return self.adapter.build_command(prompt, cfg, {})
 
-    def test_persistent_effort_validates_and_is_emitted(self, tmp_path: Path) -> None:
-        assert "persistent" in CODEX_VALID_EFFORTS
-        assert self.adapter.validate_config({"effort": "persistent"}) == []
-        cmd = self._cmd(tmp_path, {"permission_mode": "default", "effort": "persistent"})
-        assert "model_reasoning_effort=persistent" in cmd
+    def test_persistent_effort_is_rejected(self) -> None:
+        # Codex 0.166.0 parses `persistent`, but it selects persistent-execution
+        # mode, no bundled model lists it, and the API answered HTTP 400 for
+        # gpt-6.1-sol (2026-11-18), so Metaproc refuses it at plan time.
+        assert "persistent" not in CODEX_VALID_EFFORTS
+        rejections = self.adapter.validate_config({"effort": "persistent"})
+        assert [r.key for r in rejections] == ["effort"]
 
     @pytest.mark.parametrize("model", sorted(CODEX_VALID_MODELS))
     def test_every_accepted_model_reaches_argv_unchanged(self, tmp_path: Path, model: str) -> None:
@@ -941,6 +960,7 @@ class TestCodexAuthJsonShapes:
             lambda **_kwargs: PINNED_CODEX_CLI_VERSION,
         )
         monkeypatch.setattr("metaproc.adapters.codex_cli.shutil.which", lambda _: "/usr/bin/codex")
+        monkeypatch.delenv("CODEX_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.setenv("CODEX_HOME", str(tmp_path))
         (tmp_path / "auth.json").write_text(blob)
@@ -958,6 +978,7 @@ class TestCodexAuthJsonShapes:
             lambda **_kwargs: PINNED_CODEX_CLI_VERSION,
         )
         monkeypatch.setattr("metaproc.adapters.codex_cli.shutil.which", lambda _: "/usr/bin/codex")
+        monkeypatch.delenv("CODEX_API_KEY", raising=False)
         monkeypatch.delenv("OPENAI_API_KEY", raising=False)
         monkeypatch.setenv("CODEX_HOME", str(tmp_path))
         (tmp_path / "auth.json").write_text(json.dumps({"auth_mode": "bedrockApiKey"}))
@@ -1031,3 +1052,361 @@ class TestCodex0166ExecJsonStream:
         tool_events = [e for e in events if e.tool_name]
         assert tool_events, "the command_execution item must surface as a tool event"
         assert any("probe-ok" in e.summary for e in events)
+
+
+# ── OPENAI_API_KEY → CODEX_API_KEY bridge ───────────────────────
+
+
+class TestCodexApiKeyBridge:
+    """`codex exec` reads CODEX_API_KEY from the environment and ignores OPENAI_API_KEY."""
+
+    def setup_method(self) -> None:
+        self.adapter = CodexCliAdapter()  # pyright: ignore[reportUninitializedInstanceVariable]
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("CODEX_HOME", raising=False)
+        monkeypatch.delenv("CODEX_API_KEY", raising=False)
+
+    def _env(self, tmp_path: Path, **extra: str) -> dict[str, str]:
+        return {"HOME": str(tmp_path), "OPENAI_API_KEY": "sk-openai", **extra}
+
+    def test_bridges_when_no_stored_login(self, tmp_path: Path) -> None:
+        out = self.adapter.prepare_env(self._env(tmp_path), {})
+        assert out["CODEX_API_KEY"] == "sk-openai"
+        assert out["OPENAI_API_KEY"] == "sk-openai"
+
+    def test_stored_auth_json_keeps_its_login(self, tmp_path: Path) -> None:
+        # A ChatGPT login keeps its subscription billing; Codex would let the
+        # env key outrank it.
+        (tmp_path / ".codex").mkdir()
+        (tmp_path / ".codex" / "auth.json").write_text(_VALID_OAUTH_PAYLOAD)
+        out = self.adapter.prepare_env(self._env(tmp_path), {})
+        assert "CODEX_API_KEY" not in out
+
+    def test_explicit_codex_home_is_the_one_checked(self, tmp_path: Path) -> None:
+        codex_home = tmp_path / "alt"
+        codex_home.mkdir()
+        (codex_home / "auth.json").write_text(_VALID_OAUTH_PAYLOAD)
+        out = self.adapter.prepare_env(self._env(tmp_path, CODEX_HOME=str(codex_home)), {})
+        assert "CODEX_API_KEY" not in out
+
+    def test_operator_codex_api_key_is_left_alone(self, tmp_path: Path) -> None:
+        out = self.adapter.prepare_env(self._env(tmp_path, CODEX_API_KEY="sk-codex"), {})
+        assert out["CODEX_API_KEY"] == "sk-codex"
+
+    def test_env_example_placeholder_is_dropped_then_bridged(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        env = self._env(tmp_path, CODEX_API_KEY="REPLACE_WITH_CODEX_API_KEY")
+        with caplog.at_level(logging.WARNING, logger="metaproc.adapters.codex_cli"):
+            out = self.adapter.prepare_env(env, {})
+        assert out["CODEX_API_KEY"] == "sk-openai"
+        assert any("placeholder" in r.getMessage() for r in caplog.records)
+
+    def test_placeholder_is_dropped_even_with_a_stored_login(self, tmp_path: Path) -> None:
+        (tmp_path / ".codex").mkdir()
+        (tmp_path / ".codex" / "auth.json").write_text(_VALID_OAUTH_PAYLOAD)
+        env = self._env(tmp_path, CODEX_API_KEY="REPLACE_WITH_CODEX_API_KEY")
+        out = self.adapter.prepare_env(env, {})
+        assert "CODEX_API_KEY" not in out
+
+    def test_no_openai_key_means_no_bridge(self, tmp_path: Path) -> None:
+        out = self.adapter.prepare_env({"HOME": str(tmp_path)}, {})
+        assert "CODEX_API_KEY" not in out
+
+    @pytest.mark.parametrize("store", ["keyring", "auto"])
+    def test_keyring_store_in_config_toml_blocks_the_bridge(
+        self, tmp_path: Path, store: str
+    ) -> None:
+        (tmp_path / ".codex").mkdir()
+        (tmp_path / ".codex" / "config.toml").write_text(
+            f'cli_auth_credentials_store = "{store}"\n'
+        )
+        out = self.adapter.prepare_env(self._env(tmp_path), {})
+        assert "CODEX_API_KEY" not in out
+
+    def test_file_store_in_config_toml_allows_the_bridge(self, tmp_path: Path) -> None:
+        (tmp_path / ".codex").mkdir()
+        (tmp_path / ".codex" / "config.toml").write_text('cli_auth_credentials_store = "file"\n')
+        out = self.adapter.prepare_env(self._env(tmp_path), {})
+        assert out["CODEX_API_KEY"] == "sk-openai"
+
+    def test_config_override_keyring_store_blocks_the_bridge(self, tmp_path: Path) -> None:
+        cfg: dict[str, object] = {"config_overrides": {"cli_auth_credentials_store": "keyring"}}
+        out = self.adapter.prepare_env(self._env(tmp_path), cfg)
+        assert "CODEX_API_KEY" not in out
+
+    def test_unreadable_config_toml_blocks_the_bridge(self, tmp_path: Path) -> None:
+        (tmp_path / ".codex").mkdir()
+        (tmp_path / ".codex" / "config.toml").write_text("not = [valid toml\n")
+        out = self.adapter.prepare_env(self._env(tmp_path), {})
+        assert "CODEX_API_KEY" not in out
+
+
+class TestCodexCheckAuthPrecedence:
+    """check_auth names the credential Codex will use: CODEX_API_KEY, auth.json, then the bridge."""
+
+    def setup_method(self) -> None:
+        self.adapter = CodexCliAdapter()  # pyright: ignore[reportUninitializedInstanceVariable]
+
+    @pytest.fixture(autouse=True)
+    def _isolated(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(
+            "metaproc.adapters.codex_cli.verify_codex_version",
+            lambda **_kwargs: PINNED_CODEX_CLI_VERSION,
+        )
+        monkeypatch.setattr("metaproc.adapters.codex_cli.shutil.which", lambda _: "/usr/bin/codex")
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+        monkeypatch.delenv("CODEX_API_KEY", raising=False)
+        monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    def test_auth_json_wins_over_openai_api_key(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+        (tmp_path / "auth.json").write_text(_VALID_OAUTH_PAYLOAD)
+        status = self.adapter.check_auth()
+        assert status.auth_mode == "interactive-login"
+        assert "OPENAI_API_KEY is set but Codex uses this stored login" in status.details
+
+    def test_codex_api_key_wins_over_auth_json(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("CODEX_API_KEY", "sk-codex")
+        (tmp_path / "auth.json").write_text(_VALID_OAUTH_PAYLOAD)
+        status = self.adapter.check_auth()
+        assert status.auth_mode == "api-key"
+        assert "CODEX_API_KEY" in status.details
+
+    def test_codex_api_key_placeholder_is_ignored(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("CODEX_API_KEY", "REPLACE_WITH_CODEX_API_KEY")
+        (tmp_path / "auth.json").write_text(_VALID_OAUTH_PAYLOAD)
+        status = self.adapter.check_auth()
+        assert status.auth_mode == "interactive-login"
+
+    def test_openai_api_key_with_keyring_store_is_unknown(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-openai")
+        (tmp_path / "config.toml").write_text('cli_auth_credentials_store = "keyring"\n')
+        status = self.adapter.check_auth()
+        assert status.auth_mode == "unknown"
+        assert status.credentials_found is True
+        assert "keyring" in status.details
+
+    def test_nothing_configured_is_none(self) -> None:
+        status = self.adapter.check_auth()
+        assert status.auth_mode == "none"
+        assert status.credentials_found is False
+
+
+class TestCodexApiKeyRedaction:
+    """CODEX_API_KEY is masked wherever Metaproc masks secrets."""
+
+    def test_registered_as_secret(self) -> None:
+        assert MetaprocEnv.CODEX_API_KEY.kind == "SECRET"
+        assert MetaprocEnv.CODEX_API_KEY in SECRET_VARS
+
+    def test_invocation_sidecar_redacts_it(self, tmp_path: Path) -> None:
+        sidecar = tmp_path / "invocation.json"
+        write_invocation_sidecar(
+            target=sidecar,
+            argv=["codex", "exec"],
+            env={"CODEX_API_KEY": "sk-codex-secret-value"},
+            cwd=tmp_path,
+        )
+        text = sidecar.read_text()
+        assert "sk-codex-secret-value" not in text
+        assert "CODEX_API_KEY" in text
+
+    def test_command_diagnostics_redact_it(self) -> None:
+        detail = redact_diagnostic(
+            "codex failed with key sk-codex-distinct-1234567890",
+            env={"CODEX_API_KEY": "sk-codex-distinct-1234567890"},
+        )
+        assert "sk-codex-distinct-1234567890" not in detail
+        assert "[redacted]" in detail
+
+    def test_resource_context_dump_redacts_it(self) -> None:
+        shown = _redact_resource_env(
+            "CODEX_API_KEY", "sk-codex-secret-value", secret_targets=frozenset()
+        )
+        assert "sk-codex-secret-value" not in shown
+
+
+# ── Codex --assert-model (auth-check) ───────────────────────────
+
+
+def _write_rollout(codex_home: Path, thread_id: str, model: str) -> Path:
+    day = codex_home / "sessions" / "2026" / "11" / "18"
+    day.mkdir(parents=True)
+    rollout = day / f"rollout-2026-11-18T02-35-25-{thread_id}.jsonl"
+    rollout.write_text(
+        json.dumps({"type": "session_meta", "payload": {"id": thread_id}})
+        + "\n"
+        + json.dumps({"type": "turn_context", "payload": {"model": model, "effort": "medium"}})
+        + "\n"
+    )
+    return rollout
+
+
+_THREAD_ID = "01a1ec82-4ce4-7883-b842-8ecab3846d7b"
+
+
+class TestCodexRolloutModel:
+    def test_thread_id_from_exec_json(self) -> None:
+        assert codex_thread_id(_CODEX_0166_EXEC_JSON) == _THREAD_ID
+        assert codex_thread_id('{"type":"turn.started"}\n') is None
+
+    def test_reads_turn_context_model(self, tmp_path: Path) -> None:
+        _write_rollout(tmp_path, _THREAD_ID, "gpt-6.1-sol")
+        assert codex_rollout_model(tmp_path, _THREAD_ID) == "gpt-6.1-sol"
+
+    def test_missing_rollout_is_none(self, tmp_path: Path) -> None:
+        assert codex_rollout_model(tmp_path, _THREAD_ID) is None
+
+    @pytest.mark.parametrize("thread_id", ["", "*", "../x", "a?b"])
+    def test_unsafe_thread_id_is_refused(self, tmp_path: Path, thread_id: str) -> None:
+        _write_rollout(tmp_path, _THREAD_ID, "gpt-6.1-sol")
+        assert codex_rollout_model(tmp_path, thread_id) is None
+
+
+class TestCodexAssertModel:
+    """codex exec reports no served model; the assertion reads the requested one, labelled."""
+
+    def test_rollout_model_passes_and_is_labelled_requested(self, tmp_path: Path) -> None:
+        _write_rollout(tmp_path, _THREAD_ID, "gpt-6.1-sol")
+        ok, msg = _evaluate_model_assertion(
+            "codex-cli",
+            _CODEX_0166_EXEC_JSON,
+            "gpt-6.1",
+            "codex-cli",
+            env={"CODEX_HOME": str(tmp_path)},
+            cmd=["codex", "-m", "gpt-5.5", "exec", "--json", "-"],
+        )
+        assert ok, msg
+        assert "requested model 'gpt-6.1-sol'" in msg
+        assert "session rollout" in msg
+        assert "reports no served model" in msg
+
+    def test_rollout_model_mismatch_fails(self, tmp_path: Path) -> None:
+        _write_rollout(tmp_path, _THREAD_ID, "gpt-6.1-sol")
+        ok, msg = _evaluate_model_assertion(
+            "codex-cli",
+            _CODEX_0166_EXEC_JSON,
+            "bogus-xyz-nomatch",
+            "codex-cli",
+            env={"CODEX_HOME": str(tmp_path)},
+            cmd=None,
+        )
+        assert not ok
+        assert "does not match" in msg
+
+    def test_argv_fallback_when_no_rollout(self, tmp_path: Path) -> None:
+        ok, msg = _evaluate_model_assertion(
+            "codex-cli",
+            _CODEX_0166_EXEC_JSON,
+            "gpt-6.1-sol",
+            "codex-cli",
+            env={"CODEX_HOME": str(tmp_path)},
+            cmd=["/bin/sh", "-c", "x", "metaproc-codex", "p", "codex", "-m", "gpt-6.1-sol", "exec"],
+        )
+        assert ok, msg
+        assert "`-m` argument" in msg
+
+    def test_nothing_found_fails(self, tmp_path: Path) -> None:
+        ok, msg = _evaluate_model_assertion(
+            "codex-cli",
+            '{"type":"turn.completed","usage":{}}\n',
+            "gpt",
+            "codex-cli",
+            env={"CODEX_HOME": str(tmp_path)},
+            cmd=None,
+        )
+        assert not ok
+        assert "no requested model found" in msg
+
+    def test_live_check_threads_env_and_cmd_through(self, tmp_path: Path) -> None:
+        """End to end through `_run_live_check` with a stubbed codex subprocess."""
+        codex_home = tmp_path / "codex-home"
+        codex_home.mkdir()
+        _write_rollout(codex_home, _THREAD_ID, CODEX_DEFAULT_MODEL)
+        adapter = CodexCliAdapter()
+        auth_status = AuthStatus(
+            adapter_type="codex-cli",
+            cli_found=True,
+            cli_path="/usr/bin/codex",
+            credentials_found=True,
+            auth_mode="api-key",
+            details="",
+            setup_hint="",
+        )
+        proc = subprocess.CompletedProcess(
+            args=["codex"], returncode=0, stdout=_CODEX_0166_EXEC_JSON, stderr=""
+        )
+        with (
+            patch.dict("metaproc.commands.auth_check.ADAPTER_REGISTRY", {"codex-cli": adapter}),
+            patch.object(adapter, "check_auth", return_value=auth_status),
+            patch("metaproc.adapters.codex_cli._codex_version_drift", return_value=None),
+            patch("metaproc.commands.auth_check.run_command_in_process_group", return_value=proc),
+            patch.dict(os.environ, {"CODEX_HOME": str(codex_home)}),
+        ):
+            results = _run_live_check("codex-cli", None, timeout_s=5, assert_model="gpt")
+
+        assert all(ok for ok, _ in results), results
+        assert any(f"requested model {CODEX_DEFAULT_MODEL!r}" in msg for _, msg in results)
+
+
+# ── Cost: cache writes on rows without a write rate ─────────────
+
+
+class TestCodexCacheWriteCost:
+    _STATS_USAGE: ClassVar[dict[str, int]] = {
+        "input_tokens": 3_000_000,
+        "cached_input_tokens": 1_000_000,
+        "cache_write_input_tokens": 1_000_000,
+        "output_tokens": 0,
+    }
+
+    @staticmethod
+    def _pricing(provider: str, **rates: float) -> dict[str, dict[str, Any]]:
+        return {"m": {"provider": provider, "actual_price": {"output_per_1m": 0.0, **rates}}}
+
+    def _stats(self) -> UsageStats:
+        stats = sum_codex_usage({"type": "turn.completed", "usage": self._STATS_USAGE})
+        stats.model = "m"
+        return stats
+
+    def test_openai_row_without_write_rate_bills_writes_at_input_rate(self) -> None:
+        pricing = self._pricing("openai", input_per_1m=2.0, cache_read_per_1m=0.1)
+        # 1M uncached + 1M written at $2, 1M cached at $0.10: as before the split.
+        assert compute_cost(self._stats(), pricing) == pytest.approx(4.1)
+
+    def test_openai_row_with_write_rate_uses_it(self) -> None:
+        pricing = self._pricing(
+            "openai", input_per_1m=2.0, cache_read_per_1m=0.1, cache_write_per_1m=2.5
+        )
+        assert compute_cost(self._stats(), pricing) == pytest.approx(4.6)
+
+    def test_anthropic_row_keeps_its_written_rate(self) -> None:
+        # The Claude path is unchanged: an absent write rate still prices at 0.
+        pricing = self._pricing("anthropic", input_per_1m=2.0, cache_read_per_1m=0.1)
+        assert compute_cost(self._stats(), pricing) == pytest.approx(2.1)
+
+    def test_packaged_gpt_5_5_row_is_unchanged(self) -> None:
+        stats = sum_codex_usage(
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 1_000_000,
+                    "cached_input_tokens": 0,
+                    "cache_write_input_tokens": 0,
+                    "output_tokens": 1_000_000,
+                },
+            }
+        )
+        stats.model = "gpt-5.5"
+        assert compute_cost(stats, load_pricing()) == pytest.approx(35.0, abs=0.01)

@@ -193,7 +193,7 @@ class TestAuthCheckCLI:
                 side_effect=lambda adapter_type: [(True, f"{adapter_type} ok")],
             ) as mock_check_adapter,
         ):
-            result = runner.invoke(app, ["auth-check", "--variant", "pi-glm5"])
+            result = runner.invoke(app, ["auth-check", "--variant", "pi-glm52"])
 
         assert result.exit_code == 0
         assert mock_check_adapter.call_count == 1
@@ -531,8 +531,9 @@ class TestRunLiveCheckAssertModel:
             )
 
         assert all(ok for ok, _ in results), results
+        # Codex names no served model, so the assertion reports the requested one.
         assert any(
-            "observed model" in msg and "gpt-5.4" in msg and "gpt-5" in msg for _, msg in results
+            "requested model 'gpt-5.4'" in msg and "config preamble" in msg for _, msg in results
         )
 
     def test_assert_model_substring_match(self):

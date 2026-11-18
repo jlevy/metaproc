@@ -782,8 +782,8 @@ uv run metaproc auth-check --live --variant <execution-profile>
 
 ### Agent CLI Versions
 
-Each adapter pins the CLI version it was tested against: Claude Code 2.1.234, Codex
-0.147.0, Gemini CLI 0.59.0 and Pi 0.84.2 (the `PINNED_*_VERSION` constants in
+Each adapter pins the CLI version it was tested against: Claude Code 2.1.325, Codex
+0.166.0, Gemini CLI 0.66.0 and Pi 1.5.2 (the `PINNED_*_VERSION` constants in
 `src/metaproc/adapters/`). At launch, `run-process` checks every adapter the launched
 process’s own agent steps use against its pin and prints a drift banner when they
 differ; drift does not stop the run.
@@ -797,12 +797,17 @@ A deployment image that installs a CLI must be rebuilt when its pin moves.
 drift banner and, for Gemini, the minimum-version refusal as well; use them only where
 the binary is never launched, such as CI or tests.
 
-Gemini CLI answers any model id ending in `flash`, other than its own flash default,
-with that default, unless `experimental.dynamicModelConfiguration` is on.
-Whether it recognizes the id is not the test: ids it ships a definition for are
-rewritten too. Metaproc turns the flag on in the settings it writes for every Gemini
-step. A step’s own `native_settings` override Metaproc’s, so a step or adapter config
-transform must not turn it off.
+Metaproc keeps Gemini CLI on its static model resolution: the settings it writes for
+every Gemini step set `experimental.dynamicModelConfiguration` to false, because the
+dynamic path sends an explicit `gemini-3.1-pro-preview` as
+`gemini-3.1-pro-preview-customtools` under API-key auth.
+Under Vertex, API-key and gateway auth either path sends `gemini-3.5-flash` and
+`gemini-3-flash` as `gemini-3.8-flash` and `gemini-3.1-flash-lite` as
+`gemini-3.5-flash-lite`, so the catalog does not accept those IDs.
+The same settings set thinking level `HIGH` for every chat model, including Gemini 4
+and 3.6 Flash, which the CLI would otherwise run at the server default.
+A step’s own `native_settings` override Metaproc’s, so a step or adapter config
+transform must not turn the flag on or replace `modelConfigs.overrides`.
 
 By default each Gemini launch reads those settings from a private Gemini home
 (`native_settings_scope: user`) rather than the operator’s `~/.gemini`; authentication
@@ -841,7 +846,7 @@ uv run metaproc auth-check --live --variant <execution-profile> --assert-model <
 ```
 
 The probe runs with the profile’s own adapter config, `native_settings` included, so a
-profile that turns the flag off fails it.
+profile that turns the flag on fails it.
 A step’s own adapter config and a config transform apply only inside a run, where the
 run’s terminal-result check still refuses a rewritten result.
 For Gemini that assertion reads the terminal result event’s `stats.models` and counts
@@ -851,6 +856,10 @@ requested model failed, therefore fails the check, and so does a terminal event 
 no model billed. The pass and fail lines list each model that billed with its token
 count. A run holds every Gemini step to the same rule and refuses a result in which the
 requested model billed no tokens.
+For the moving aliases `flash`, `flash-lite`, `pro` and `auto`, a run accepts the model
+Gemini CLI 0.66.0 resolves the alias to (`flash`: `gemini-3.8-flash`; `flash-lite`:
+`gemini-3.5-flash-lite`; `pro`: `gemini-3.1-pro-preview` or its `-customtools` variant;
+`auto`: either Pro ID or `gemini-3.8-flash`); any other model is refused.
 
 For the other adapters the assertion reads a model the CLI names for the call, not the
 models that billed it:

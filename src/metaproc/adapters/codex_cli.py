@@ -8,6 +8,7 @@ import logging
 import os
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 from typing import Any, cast
 
@@ -215,6 +216,76 @@ def resolve_codex_home(env: dict[str, str] | None = None) -> Path:
     if override:
         return Path(override)
     return Path.home() / ".codex"
+
+
+# The `.env.example` placeholder for CODEX_API_KEY. A copied template that still
+# carries it must not outrank a real login: Codex gives the env key precedence.
+_CODEX_API_KEY_PLACEHOLDER = f"REPLACE_WITH_{MetaprocEnv.CODEX_API_KEY.name}"
+
+# `cli_auth_credentials_store` values under which a login may live in the OS
+# keyring instead of auth.json, so a missing auth.json proves nothing.
+_KEYRING_CREDENTIAL_STORES = frozenset({"keyring", "auto"})
+
+
+def _configured_credential_store(codex_home: Path, merged_config: dict[str, object]) -> str | None:
+    """Return the effective `cli_auth_credentials_store`, or None when unknowable.
+
+    A step's `config_overrides` reach Codex as `-c` flags, which win over
+    config.toml. Codex's own default is `file`. An unreadable config.toml yields
+    None, since Codex would read it differently or not start.
+    """
+    overrides = merged_config.get("config_overrides")
+    if isinstance(overrides, dict):
+        override = cast("dict[str, Any]", overrides).get("cli_auth_credentials_store")
+        if override is not None:
+            return str(override)
+    config_file = codex_home / "config.toml"
+    if not config_file.is_file():
+        return "file"
+    try:
+        doc = tomllib.loads(config_file.read_text(encoding="utf-8"))
+    except OSError, UnicodeDecodeError, tomllib.TOMLDecodeError:
+        return None
+    store = doc.get("cli_auth_credentials_store", "file")
+    return store if isinstance(store, str) else None
+
+
+def _bridge_openai_api_key(out: dict[str, str], merged_config: dict[str, object]) -> None:
+    """Hand ``OPENAI_API_KEY`` to ``codex exec`` as ``CODEX_API_KEY`` when nothing else can log in.
+
+    ``codex exec`` (0.147.0 and 0.166.0) reads only ``CODEX_API_KEY`` from the
+    environment; it ignores ``OPENAI_API_KEY``, which Metaproc documents as the
+    Codex API-key vehicle. Codex gives that env key precedence over every stored
+    login, so it is set only when no stored login can exist: no ``auth.json`` in
+    the effective ``CODEX_HOME`` and a file credential store. A run that worked
+    before therefore keeps its credential and billing; only a run that would
+    otherwise fail with 401 gains the key. An operator-set ``CODEX_API_KEY`` is
+    left alone, except the untouched ``.env.example`` placeholder, which is
+    dropped.
+    """
+    codex_key_name = MetaprocEnv.CODEX_API_KEY.name
+    if out.get(codex_key_name) == _CODEX_API_KEY_PLACEHOLDER:
+        log.warning(
+            "codex-cli: ignoring the %s placeholder copied from .env.example", codex_key_name
+        )
+        del out[codex_key_name]
+    if out.get(codex_key_name):
+        return
+    api_key = out.get(MetaprocEnv.OPENAI_API_KEY.name, "").strip()
+    if not api_key:
+        return
+    codex_home = resolve_codex_home(out)
+    if (codex_home / "auth.json").is_file():
+        return
+    store = _configured_credential_store(codex_home, merged_config)
+    if store is None or store in _KEYRING_CREDENTIAL_STORES:
+        log.info(
+            "codex-cli: not passing OPENAI_API_KEY to Codex; cli_auth_credentials_store=%r "
+            "may hold a keyring login",
+            store,
+        )
+        return
+    out[codex_key_name] = api_key
 
 
 _CODEX_ALLOWED_KEYS = frozenset(
@@ -510,9 +581,15 @@ class CodexCliAdapter:
     def prepare_env(
         self,
         env: dict[str, str],
-        _merged_config: dict[str, object],
+        merged_config: dict[str, object],
     ) -> dict[str, str]:
         out = dict(env)
+        self._pin_codex_home(out)
+        _bridge_openai_api_key(out, merged_config)
+        return out
+
+    @staticmethod
+    def _pin_codex_home(out: dict[str, str]) -> None:
         home = out.get("HOME")
         if home:
             # Pin CODEX_HOME so codex-cli uses the bootstrapped credentials
@@ -535,7 +612,6 @@ class CodexCliAdapter:
                 log.warning(
                     "codex-cli: failed to pre-create CODEX_HOME=%s", codex_home, exc_info=True
                 )
-        return out
 
     def working_directory(self, merged_config: dict[str, object]) -> Path | None:
         value = merged_config.get("working_directory")
@@ -552,6 +628,7 @@ class CodexCliAdapter:
     def check_auth(self) -> AuthStatus:
         cli_path = shutil.which("codex")
         api_key = MetaprocEnv.OPENAI_API_KEY.read_str(default=None)
+        codex_api_key = MetaprocEnv.CODEX_API_KEY.read_str(default=None)
         # Honor $CODEX_HOME via the shared helper so this stays in sync with
         # codex_auth.py and codex-cli itself. Without this, an operator
         # using a non-default CODEX_HOME would see "no creds found" here
@@ -582,19 +659,24 @@ class CodexCliAdapter:
                 setup_hint=CODEX_CLI_INSTALL_HINT,
             )
 
-        if api_key:
+        # Report the credential Codex will actually use, in Codex's order: an
+        # explicit CODEX_API_KEY, then the stored auth.json, then OPENAI_API_KEY,
+        # which reaches Codex only through prepare_env's CODEX_API_KEY bridge.
+        if codex_api_key and codex_api_key != _CODEX_API_KEY_PLACEHOLDER:
             return AuthStatus(
                 adapter_type=self.adapter_type,
                 cli_found=True,
                 cli_path=cli_path,
                 credentials_found=True,
                 auth_mode="api-key",
-                details="OPENAI_API_KEY is set (Vehicle A)",
+                details="CODEX_API_KEY is set; Codex prefers it over any stored login",
                 setup_hint="",
             )
 
         if auth_json.is_file():
             auth_mode_str, details = _inspect_auth_json(auth_json)
+            if api_key:
+                details += "; OPENAI_API_KEY is set but Codex uses this stored login"
             return AuthStatus(
                 adapter_type=self.adapter_type,
                 cli_found=True,
@@ -602,6 +684,33 @@ class CodexCliAdapter:
                 credentials_found=True,
                 auth_mode=auth_mode_str,
                 details=details,
+                setup_hint="",
+            )
+
+        if api_key:
+            store = _configured_credential_store(auth_json.parent, {})
+            if store is None or store in _KEYRING_CREDENTIAL_STORES:
+                return AuthStatus(
+                    adapter_type=self.adapter_type,
+                    cli_found=True,
+                    cli_path=cli_path,
+                    credentials_found=True,
+                    auth_mode="unknown",
+                    details=(
+                        f"OPENAI_API_KEY is set, but cli_auth_credentials_store={store!r} "
+                        "may hold a keyring login, so runs do not pass the key to Codex"
+                    ),
+                    setup_hint="",
+                )
+            return AuthStatus(
+                adapter_type=self.adapter_type,
+                cli_found=True,
+                cli_path=cli_path,
+                credentials_found=True,
+                auth_mode="api-key",
+                details=(
+                    "OPENAI_API_KEY is set (Vehicle A); runs pass it to Codex as CODEX_API_KEY"
+                ),
                 setup_hint="",
             )
 
@@ -729,8 +838,12 @@ class CodexCliAdapter:
         single-vehicle adapter today.
         """
         del vehicle  # Protocol parity; unused for codex.
+        # CODEX_API_KEY is what prepare_env bridges OPENAI_API_KEY into; the
+        # slot's `forced_login_method = "chatgpt"` already makes Codex skip it,
+        # and dropping it keeps an API key out of an OAuth slot's child env.
         return {
             CODEX_CREDS_ENV_VAR: "",
+            MetaprocEnv.CODEX_API_KEY.name: "",
         }
 
     def materialize_credential(
@@ -923,3 +1036,47 @@ def _inspect_auth_json(path: Path) -> tuple[str, str]:
     if mode is None:
         return ("unknown", f"{path} exists but holds no recognized Codex credential")
     return ("unknown", f"{path} uses Codex auth_mode={mode!r}, which Metaproc does not classify")
+
+
+def codex_thread_id(stdout: str) -> str | None:
+    """Return the thread ID from a ``codex exec --json`` stream's ``thread.started`` event."""
+    for line in stdout.splitlines():
+        event = parse_jsonl_event(line, "thread.started")
+        if event is not None:
+            thread_id = event.get("thread_id")
+            return thread_id if isinstance(thread_id, str) and thread_id else None
+    return None
+
+
+def codex_rollout_model(codex_home: Path, thread_id: str) -> str | None:
+    """Return the model Codex recorded for a thread in its session rollout.
+
+    ``codex exec`` writes ``$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<thread>.jsonl``;
+    its ``turn_context`` record carries the model Codex sent the request for after
+    its own config and profile resolution. That is the *requested* model:
+    ``codex exec`` (0.166.0) reports no model the provider served, in the event
+    stream or the rollout. Returns None when no plain-text rollout for the thread
+    exists (a compressed ``.jsonl.zst`` rollout is not read) or it names no model.
+    """
+    sessions = codex_home / "sessions"
+    # The thread ID becomes a glob pattern; accept only the UUID alphabet Codex uses.
+    if not thread_id or not all(ch.isalnum() or ch == "-" for ch in thread_id):
+        return None
+    if not sessions.is_dir():
+        return None
+    for rollout in sorted(sessions.rglob(f"rollout-*-{thread_id}.jsonl")):
+        try:
+            lines = rollout.read_text(encoding="utf-8").splitlines()
+        except OSError, UnicodeDecodeError:
+            continue
+        for line in lines:
+            record = parse_jsonl_event(line, "turn_context")
+            if record is None:
+                continue
+            payload = record.get("payload")
+            model = (
+                cast("dict[str, Any]", payload).get("model") if isinstance(payload, dict) else None
+            )
+            if isinstance(model, str) and model:
+                return model
+    return None

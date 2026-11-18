@@ -118,7 +118,7 @@ profiles:
 
   gemini-flash-38:
     schema: metaproc:ExecutionProfile/0.1
-    status: tested
+    status: experimental
     adapter: gemini-cli
     provider: google-vertex
     model: gemini-3.8-flash
@@ -126,7 +126,9 @@ profiles:
       Gemini 3.8 Flash (GA 2026-09-02) via gemini-cli through Vertex AI.
       Newest Gemini 3 Flash model; Vertex availability until at least
       2027-09-02. gemini-cli 0.62.0 and later also send it for the flash
-      alias.
+      alias. Demoted to experimental on 2026-11-18: operator comparisons rated
+      it below 3.6 Flash, so gemini-hydrogen is the recommended Flash-class
+      lane.
     capabilities:
       native_tools: [Read, Write, Edit, Bash, WebSearch, Glob, Grep, LS]
       native_web_search: true

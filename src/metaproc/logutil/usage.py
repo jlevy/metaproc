@@ -191,8 +191,28 @@ def compute_cost(
     cost += stats.input_tokens * rates.get("input_per_1m", 0) / 1_000_000
     cost += stats.output_tokens * rates.get("output_per_1m", 0) / 1_000_000
     cost += stats.cache_read_tokens * rates.get("cache_read_per_1m", 0) / 1_000_000
-    cost += stats.cache_write_tokens * rates.get("cache_write_per_1m", 0) / 1_000_000
+    cost += stats.cache_write_tokens * _cache_write_rate(entry, rates) / 1_000_000
     return cost
+
+
+# Providers whose cache-write tokens are a share of billed input. Codex reports
+# OpenAI cache writes inside `input_tokens` (see `sum_codex_usage`), so a pricing
+# row without a cache-write rate still bills them, at least at the input rate.
+_INPUT_RATE_CACHE_WRITE_PROVIDERS = frozenset({"openai"})
+
+
+def _cache_write_rate(entry: dict[str, Any], rates: dict[str, float]) -> float:
+    """Return the per-1M rate for cache writes under *entry*.
+
+    The schema defaults an absent ``cache_write_per_1m`` to 0. For an OpenAI row
+    that would price as free the writes Codex now splits out of input, so such a
+    row falls back to its input rate, which is how those tokens were priced before
+    the split. Other providers keep the row's rate as written.
+    """
+    write_rate = rates.get("cache_write_per_1m", 0)
+    if write_rate > 0 or entry.get("provider") not in _INPUT_RATE_CACHE_WRITE_PROVIDERS:
+        return write_rate
+    return rates.get("input_per_1m", 0)
 
 
 def estimate_list_cost(

@@ -44,8 +44,12 @@ GEMINI_CLI_INSTALL_HINT = f"Install: {GEMINI_CLI_INSTALL_COMMAND}"
 # Where gemini-cli 0.66.0 sends each moving alias under the auth types Metaproc
 # documents (Gemini API key, Vertex AI, gateway). `flash` and `flash-lite` resolve to
 # one model there (`hasLatestFlashGAAccess` is true for all three). `pro` resolves to
-# gemini-3.1-pro-preview-customtools with an API key and gemini-3.1-pro-preview
-# otherwise. `auto` is routed per turn between the `pro` model and the `flash` model.
+# gemini-3.1-pro-preview through the default router; the routing strategies `auto`
+# uses pass the custom-tools flag, which with an API key selects
+# gemini-3.1-pro-preview-customtools, so both Pro ids count for either alias. `auto`
+# is routed per turn between that Pro model and the `flash` model. Live on the Gemini
+# API (2026-11-18): flash -> gemini-3.8-flash, flash-lite -> gemini-3.5-flash-lite,
+# pro -> gemini-3.1-pro-preview, auto -> gemini-3.8-flash for a one-command prompt.
 # `result.stats.models` is keyed by the model that answered, never by the alias, so
 # the terminal-result check accepts these in place of the requested name. Login with
 # Google can resolve the aliases to older models; those results are still refused.
