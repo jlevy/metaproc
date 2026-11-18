@@ -697,23 +697,18 @@ def _evaluate_codex_model_assertion(
     found = _codex_requested_model(stdout, env, cmd)
     unserved = "codex-cli reports no served model"
     if found is None:
-        return (
-            False,
+        missing = (
             f"{label}: no requested model found ({unserved}); cannot confirm a model "
-            f"containing {expected!r}",
+            f"containing {expected!r}"
         )
+        return (False, missing)
     requested, source = found
-    if expected in requested:
-        return (
-            True,
-            f"{label}: requested model {requested!r} matches expected {expected!r} "
-            f"(from {source}; {unserved})",
-        )
-    return (
-        False,
-        f"{label}: requested model {requested!r} does not match expected {expected!r} "
-        f"(from {source}; {unserved})",
+    verdict = "matches" if expected in requested else "does not match"
+    message = (
+        f"{label}: requested model {requested!r} {verdict} expected {expected!r} "
+        f"(from {source}; {unserved})"
     )
+    return (expected in requested, message)
 
 
 def _evaluate_served_model_assertion(
