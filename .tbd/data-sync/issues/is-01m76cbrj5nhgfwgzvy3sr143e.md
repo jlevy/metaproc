@@ -3,14 +3,18 @@ type: is
 id: is-01m76cbrj5nhgfwgzvy3sr143e
 title: Drop the expired certifi pin and take certifi 2026.10.23
 kind: bug
-status: open
+status: closed
 priority: 1
-version: 1
+version: 2
 labels: []
 dependencies: []
 parent_id: is-01m76a31xm6ap52ytabzbmhdt1
 created_at: 2026-11-11T22:41:23.012Z
-updated_at: 2026-11-11T22:41:23.012Z
+updated_at: 2026-11-18T01:17:54.146Z
+closed_at: 2026-11-18T01:17:54.146Z
+close_reason: "Done in c1eebd8: certifi exclude-newer-package entry removed, certifi locked at 2026.10.23, SUPPLY-CHAIN-SECURITY.md records the two removed emSign roots"
+resolution: null
+duplicate_of: null
 ---
 Deferred from PR #122 (https://github.com/jlevy/metaproc/pull/122), which stays a one-package pyasn1 security bump. Covers two findings:
 
