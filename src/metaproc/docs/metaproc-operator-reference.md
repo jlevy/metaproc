@@ -827,7 +827,11 @@ to `--adapter-config native_settings_scope=workspace` on a run whose Gemini step
 set `working_directory` to their own run scope.
 The adapter writes the merged native settings to that directory’s
 `.gemini/settings.json`; the existing `--skip-trust` flag allows Gemini to load them.
-It refuses a conflicting existing settings file or a symlink.
+It refuses a symlink, and an existing settings file that differs anywhere other than the
+defaults Metaproc itself wrote there.
+When only those defaults changed, as after an upgrade, it replaces them and logs a
+warning naming the keys; it records the defaults it wrote in
+`.gemini/.metaproc-settings.json` beside the file.
 Workspace settings remain after the invocation so retries use the same bytes.
 
 Under the default scope each private home has its own Gemini project registry, so

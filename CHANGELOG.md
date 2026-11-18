@@ -112,6 +112,11 @@ development series.
   the Workload Identity Federation token, service-account and workspace variables are
   unset before a slot launches; Claude Code ranks them above stored `/login`
   credentials.
+- **Gemini workspace-scope relaunches survive the upgrade.** Relaunching a
+  `native_settings_scope: workspace` run started by v0.6.1 or earlier replaces
+  Metaproc’s stale defaults in `.gemini/settings.json` with a warning naming the keys,
+  where the changed defaults used to make every relaunch refuse; operator-authored
+  settings are still never overwritten.
 - **The `vertex` and `bedrock` pi-cli provider names are replaced.** Neither was ever a
   Pi provider ID, so they failed at run time; use `google-vertex` or `amazon-bedrock`.
 
