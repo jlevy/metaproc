@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Cloud Execution
 
-**Date:** 2026-04-12 (last updated 2026-11-12) **Status:** Approved
+**Date:** 2026-04-12 (last updated 2026-11-18) **Status:** Approved
 
 For the overall metaproc framework design, see [metaproc-design.md](metaproc-design.md);
 for the run pool process management subsystem, see [arch-runpool.md](arch-runpool.md).
@@ -641,10 +641,12 @@ All GCP infrastructure parameters are configurable via env vars:
 
 ### 3.12 Vertex AI MaaS Integration
 
-Third-party models in Vertex AI Model Garden (GLM-5, Kimi K2, etc.)
-expose an OpenAI-compatible chat/completions endpoint.
-The Pi CLI adapter connects to these via a custom `vertex-maas` provider configured in
-`~/.pi/agent/models.json`:
+Third-party models in Vertex AI Model Garden (GLM-5.2, DeepSeek V4.1 Flash) expose an
+OpenAI-compatible chat/completions endpoint.
+The Pi CLI adapter connects to these via a custom `vertex-maas` provider.
+The packaged default `src/metaproc/data/pi-models.default.json` declares it, and an
+operator `~/.pi/agent/models.json` can extend it.
+An abridged form of the packaged provider:
 
 ```json
 {
@@ -652,25 +654,25 @@ The Pi CLI adapter connects to these via a custom `vertex-maas` provider configu
     "vertex-maas": {
       "baseUrl": "https://aiplatform.googleapis.com/v1/projects/<PROJECT>/locations/global/endpoints/openapi",
       "api": "openai-completions",
-      "apiKey": "<injected-by-metaproc-at-runtime>",
+      "apiKey": "!sh -c 'if [ -n \"$METAPROC_PI_API_KEY\" ]; then printf \"%s\" \"$METAPROC_PI_API_KEY\"; else exec gcp-access-token.sh; fi'",
       "authHeader": true,
       "compat": { "supportsDeveloperRole": false },
       "models": [
         {
-          "id": "zai-org/glm-5-maas",
-          "name": "GLM-5 (Vertex AI MaaS)",
+          "id": "zai-org/glm-5.2-maas",
+          "name": "GLM-5.2 (Vertex AI MaaS, preview)",
           "reasoning": true,
           "input": ["text"],
-          "contextWindow": 200000,
-          "maxTokens": 128000
+          "contextWindow": 1000000,
+          "maxTokens": 64000
         },
         {
-          "id": "moonshotai/kimi-k2-thinking-maas",
-          "name": "Kimi K2 Thinking (Vertex AI MaaS)",
+          "id": "deepseek-ai/deepseek-v4.1-flash-maas",
+          "name": "DeepSeek V4.1 Flash (Vertex AI MaaS, preview)",
           "reasoning": true,
           "input": ["text"],
-          "contextWindow": 262144,
-          "maxTokens": 262144
+          "contextWindow": 1048576,
+          "maxTokens": 1048576
         }
       ]
     }
@@ -678,18 +680,23 @@ The Pi CLI adapter connects to these via a custom `vertex-maas` provider configu
 }
 ```
 
-Key configuration details (validated 2026-03-31):
+Key configuration details:
 
 - **Endpoint**: Must use the global endpoint (`aiplatform.googleapis.com`), not
-  regional. Some models (e.g., GLM-5) are not available in all regions.
-- **Model IDs**: Must include the publisher prefix (e.g., `zai-org/glm-5-maas`,
-  `moonshotai/kimi-k2-thinking-maas`).
-- **Auth**: The `apiKey` field is injected at runtime by metaproc via
-  `google.auth.default()` auto-refreshing credentials (`metaproc[gcp]` extra).
-  `"authHeader": true` sends it as `Authorization: Bearer <token>`. No manual token
-  refresh or shell commands needed.
-- **Compat**: `"supportsDeveloperRole": false` is required because Kimi K2 Thinking
-  rejects the `developer` message role that Pi sends by default.
+  regional. Not every MaaS model is available in every region.
+- **Model IDs**: The packaged entries carry the publisher prefix (e.g.,
+  `zai-org/glm-5.2-maas`, `deepseek-ai/deepseek-v4.1-flash-maas`), which is what Vertex
+  receives. Pi also resolves the short form (`glm-5.2-maas`), which the shipped
+  `pi-glm52` profile uses.
+- **Availability**: Vertex AI MaaS preview models carry only a 45-day minimum
+  availability, so the packaged list changes as Google retires models.
+- **Auth**: Metaproc resolves the bearer token at run time via `google.auth.default()`
+  auto-refreshing credentials (`metaproc[gcp]` extra) and passes it to Pi as
+  `METAPROC_PI_API_KEY`, which the `apiKey` command prints.
+  Without it, the command runs the container’s `gcp-access-token.sh` helper.
+  `"authHeader": true` sends the token as `Authorization: Bearer <token>`.
+- **Compat**: `"supportsDeveloperRole": false` keeps Pi from sending the `developer`
+  message role, which some MaaS models reject.
 - **`models.json` hot-reloads**: Pi reads the file each time you open `/model`, so edits
   take effect without restarting.
 

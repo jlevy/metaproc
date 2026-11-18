@@ -466,15 +466,15 @@ class TestGeminiCliAdapter:
         assert written["general"]["sessionRetention"]["enabled"] is False
 
     def test_dynamic_model_configuration_is_asserted_by_default(self) -> None:
-        """gemini-cli rewrites an unknown *flash id to its own default without it."""
+        """Asserted off: in 0.66.0 it sends an explicit gemini-3.1-pro-preview as -customtools."""
         env = self.adapter.prepare_env({}, {})
         emitted = _home_settings(env)
-        assert emitted["experimental"]["dynamicModelConfiguration"] is True
+        assert emitted["experimental"]["dynamicModelConfiguration"] is False
 
     def test_dynamic_model_configuration_survives_a_partial_override(self) -> None:
         env = self.adapter.prepare_env({}, {"native_settings": {"tools": {"core": ["read_file"]}}})
         emitted = _home_settings(env)
-        assert emitted["experimental"]["dynamicModelConfiguration"] is True
+        assert emitted["experimental"]["dynamicModelConfiguration"] is False
         assert emitted["tools"] == {"core": ["read_file"]}
 
     def test_validate_config_rejects_no_session_persistence(self) -> None:
@@ -571,6 +571,7 @@ class TestPiCliAdapter:
             "-p",
             f"@{self.prompt_file}",
             "--no-session",
+            "--no-mcp",
             "--provider",
             "openai",
             "--model",

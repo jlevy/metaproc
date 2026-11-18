@@ -11,10 +11,10 @@ process:
     `docs/runbooks/adapter-compatibility.runbook.md` §1 for the 2026 r5
     400-storm that motivated this smoke.
 
-    Defaults to `gemini-3.1-pro-preview` (registered in
-    `pi-models.default.json`); override per cell via
-    `PI_GEMINI_SMOKE_MODEL`. Uses GCP Application Default Credentials —
-    no API key needed.
+    Defaults to `gemini-3.1-pro-preview` (a Pi built-in google-vertex
+    model); override per cell via `PI_GEMINI_SMOKE_MODEL`, for example
+    with `gemini-4-hydrogen` from `pi-models.default.json`. Uses GCP
+    Application Default Credentials — no API key needed.
 
   steps:
     - id: binary-check
@@ -35,7 +35,7 @@ process:
     - id: live-probe
       mode: code
       command: >-
-        bash -lc "cd ../../.. && SMOKE_MODEL=\"${PI_GEMINI_SMOKE_MODEL:-gemini-3.1-pro-preview}\" && SMOKE_ASSERT=\"${PI_GEMINI_SMOKE_ASSERT_MODEL:-$SMOKE_MODEL}\" && uv run metaproc auth-check --live --variant \"pi-cli-$SMOKE_MODEL\" --provider google-vertex --assert-model \"$SMOKE_ASSERT\""
+        bash -lc "cd ../../.. && SMOKE_MODEL=\"${PI_GEMINI_SMOKE_MODEL:-gemini-3.1-pro-preview}\" && SMOKE_ASSERT=\"${PI_GEMINI_SMOKE_ASSERT_MODEL:-$SMOKE_MODEL}\" && uv run metaproc auth-check --live --adapter pi-cli --model \"$SMOKE_MODEL\" --provider google-vertex --assert-model \"$SMOKE_ASSERT\""
       description: >-
         Trivial "Respond with exactly: OK" prompt through pi-cli with
         `--provider google-vertex` and the requested Gemini model.
@@ -66,8 +66,8 @@ end-to-end including tool use.
 
 ## Why a separate smoke
 
-The existing `smoke-adapter-pi` exercises `vertex-maas/glm-5-maas`, which is a different
-API (Vertex MaaS, openai-completions-shaped).
+The existing `smoke-adapter-pi` exercises `vertex-maas/glm-5.2-maas`, which is a
+different API (Vertex MaaS, openai-completions-shaped).
 The google-vertex path used for Gemini has its own auth flow and its own tool-call
 contract — most critically the Gemini-3 `thought_signature` requirement that produced
 the 2026 r5 400-storm on the openai-completions path
@@ -79,7 +79,7 @@ the 2026 r5 400-storm on the openai-completions path
 2. **auth-check-dry** — `metaproc auth-check --variant pi-cli` (covers GCP ADC for
    google-vertex by virtue of the gcloud-token check).
 3. **live-probe** —
-   `metaproc auth-check --live --variant pi-cli-<model> --provider google-vertex --assert-model <model>`.
+   `metaproc auth-check --live --adapter pi-cli --model <model> --provider google-vertex --assert-model <model>`.
    Defaults to `gemini-3.1-pro-preview`; override with `PI_GEMINI_SMOKE_MODEL`.
 4. **tool-probe** —
    `metaproc probe-tool-use --harness pi-cli --provider google-vertex --model <model>`.
@@ -87,15 +87,15 @@ the 2026 r5 400-storm on the openai-completions path
 
 ## Per-model overrides
 
-Used by `smoke-gemini-matrix` to exercise three Gemini models on this harness:
+Used by `smoke-gemini-matrix` to exercise several Gemini models on this harness:
 
 ```bash
-PI_GEMINI_SMOKE_MODEL=gemini-3.5-flash \
+PI_GEMINI_SMOKE_MODEL=gemini-4-hydrogen \
   uv run metaproc run-process process/self-test/smoke-adapter-pi-gemini.process.md
 ```
 
 If Vertex returns an observed model ID that differs from the requested one (e.g.
-`models/gemini-3.5-flash-001`), `--assert-model` does substring matching so the bare ID
+`models/gemini-4-hydrogen-001`), `--assert-model` does substring matching so the bare ID
 is still tight; override `PI_GEMINI_SMOKE_ASSERT_MODEL` only if you need a different
 substring.
 
@@ -115,6 +115,6 @@ No `GEMINI_API_KEY` or `GOOGLE_API_KEY` required — the google-vertex path uses
 uv run metaproc run-process process/self-test/smoke-adapter-pi-gemini.process.md
 
 # Specific model
-PI_GEMINI_SMOKE_MODEL=gemini-3.5-flash \
+PI_GEMINI_SMOKE_MODEL=gemini-4-hydrogen \
   uv run metaproc run-process process/self-test/smoke-adapter-pi-gemini.process.md
 ```

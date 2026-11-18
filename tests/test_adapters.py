@@ -370,12 +370,13 @@ class TestClaudeCodeCliAdapterAuthCapable:
         assert env == {"CLAUDE_CONFIG_DIR": str(tmp_path)}
 
     def test_debug_capture_args_under_slot(self, tmp_path):
-        # Workers must launch with `claude -d api
-        # --debug-file=<slot>/claude-code-debug.log` so the OAuth refresh
-        # attempt boundaries and per-attempt API errors land in a
-        # slot-scoped file the classifier can read post-run.
+        # Workers launch with `claude --debug-file <slot>/claude-code-debug.log`
+        # (unfiltered): a category filter such as `--debug=api` drops the
+        # uncategorized `[ERROR] API error` lines the classifier reads, so the
+        # OAuth refresh boundaries and per-attempt API errors land in a
+        # slot-scoped file only when no filter is set.
         args = self.adapter.debug_capture_args(tmp_path)
-        assert args == ["-d", "api", "--debug-file", str(tmp_path / "claude-code-debug.log")]
+        assert args == ["--debug-file", str(tmp_path / "claude-code-debug.log")]
 
     def test_debug_capture_args_isolates_slots(self, tmp_path):
         # Each slot gets its own debug file; concurrent items must not
@@ -760,17 +761,17 @@ class TestGeminiCliAdapter:
             "status": "success",
             "stats": {
                 "models": {
-                    "gemini-3.1-flash-lite": {"total_tokens": 0, "input_tokens": 0},
-                    "gemini-3.5-flash": {"total_tokens": 11815, "input_tokens": 11678},
+                    "gemini-3.5-flash-lite": {"total_tokens": 0, "input_tokens": 0},
+                    "gemini-3.8-flash": {"total_tokens": 11815, "input_tokens": 11678},
                 }
             },
         }
 
-        error = self.adapter.validate_result_event(event, {"model": "gemini-3.1-flash-lite"})
+        error = self.adapter.validate_result_event(event, {"model": "gemini-3.5-flash-lite"})
 
         assert error is not None
-        assert "requested model 'gemini-3.1-flash-lite'" in error
-        assert "reported gemini-3.5-flash (11815 tokens)." in error
+        assert "requested model 'gemini-3.5-flash-lite'" in error
+        assert "reported gemini-3.8-flash (11815 tokens)." in error
 
     def test_a_two_model_result_passes_when_the_requested_model_billed(self):
         """The trace fixture's result: the requested model and a utility model both billed."""
@@ -783,7 +784,12 @@ class TestGeminiCliAdapter:
             "gemini-3.5-flash": 1650379,
             "gemini-3-flash-preview": 23966,
         }
-        assert self.adapter.validate_result_event(result, {"model": "gemini-3.5-flash"}) is None
+        # The capture predates the 2026-11-18 catalog, which no longer accepts
+        # gemini-3.5-flash; rename its billed model to a current ID to exercise
+        # the same two-model shape.
+        stats = result["stats"]
+        stats["models"]["gemini-3.8-flash"] = stats["models"].pop("gemini-3.5-flash")
+        assert self.adapter.validate_result_event(result, {"model": "gemini-3.8-flash"}) is None
 
     def test_unsuccessful_result_keeps_its_original_failure(self):
         event: dict[str, object] = {
@@ -918,6 +924,14 @@ class TestPiCliAdapter:
         assert "--provider" in cmd
         assert "--model" in cmd
 
+    def test_build_command_disables_builtin_mcp(self, tmp_path):
+        """Pi 1.x loads MCP by default; `--no-mcp` keeps `--tools` the whole surface."""
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("x")
+        cmd = self.adapter.build_command(prompt, {"tools": ["Read"]}, {})
+        assert "--no-mcp" in cmd
+        assert "--no-extensions" not in cmd
+
     def test_build_command_custom_config(self, tmp_path):
         prompt = tmp_path / "prompt.md"
         prompt.write_text("x")
@@ -938,6 +952,18 @@ class TestPiCliAdapter:
         result = self.adapter.prepare_env(env, {})
         assert result["PI_SKIP_VERSION_CHECK"] == "1"
         assert "PATH" in result
+
+    def test_prepare_env_turns_telemetry_off(self):
+        env = {"PATH": "/bin", "HOME": "/workspace/user", "PI_TELEMETRY": "1"}
+        result = self.adapter.prepare_env(env, {})
+        assert result["PI_TELEMETRY"] == "0"
+        assert "PI_OFFLINE" not in result
+
+    def test_install_hint_keeps_release_age_gate(self):
+        """Pi ships no shrinkwrap, so only the first-party scope skips the cool-off."""
+        assert "--min-release-age=14" in PI_CLI_INSTALL_HINT
+        assert "--min-release-age-exclude='@earendil-works/*'" in PI_CLI_INSTALL_HINT
+        assert "--ignore-scripts" in PI_CLI_INSTALL_HINT
 
     def test_parse_result_event_detects_agent_end(self):
 

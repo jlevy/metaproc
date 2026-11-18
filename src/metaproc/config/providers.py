@@ -64,9 +64,8 @@ class ProviderSpec:
 
 PROVIDERS: tuple[ProviderSpec, ...] = (
     # vertex-maas comes first so any "*-maas" model ID (e.g.
-    # `deepseek-v3.2-maas`, `moonshotai/kimi-k2-thinking-maas`) infers the
-    # Vertex MaaS provider rather than the direct-API provider whose
-    # prefix would otherwise match.
+    # `deepseek-v4.1-flash-maas`) infers the Vertex MaaS provider rather
+    # than the direct-API provider whose prefix would otherwise match.
     ProviderSpec(
         name="vertex-maas",
         label="Vertex MaaS",
@@ -78,7 +77,9 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         name="anthropic",
         label="Anthropic",
         api_key_env=MetaprocEnv.ANTHROPIC_API_KEY,
-        model_name_match=lambda n: n.startswith("claude-") or n in {"opus", "sonnet", "haiku"},
+        model_name_match=lambda n: (
+            n.startswith("claude-") or n in {"fable", "opus", "sonnet", "haiku"}
+        ),
     ),
     ProviderSpec(
         name="openai",
@@ -94,16 +95,14 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         api_key_env=MetaprocEnv.DEEPSEEK_API_KEY,
         gcp_secret_ref_env=MetaprocEnv.METAPROC_GCP_SECRET_DEEPSEEK_API_KEY,
         gcp_secret_description=("DeepSeek API key (pi-cli deepseek provider, V4 direct API)"),
-        model_name_match=lambda n: n.startswith("deepseek-v"),
+        model_name_match=lambda n: n.startswith("deepseek-"),
     ),
     ProviderSpec(
         name="moonshot",
         label="Moonshot",
         api_key_env=MetaprocEnv.MOONSHOT_API_KEY,
         gcp_secret_ref_env=MetaprocEnv.METAPROC_GCP_SECRET_MOONSHOT_API_KEY,
-        gcp_secret_description=(
-            "Moonshot API key (pi-cli moonshot provider, Kimi K2.6 direct API)"
-        ),
+        gcp_secret_description=("Moonshot API key (pi-cli moonshot provider, Kimi direct API)"),
         model_name_match=lambda n: n.startswith("kimi-"),
     ),
     ProviderSpec(
@@ -131,10 +130,12 @@ _PI_EXTRA_VALID_PROVIDER_NAMES: frozenset[str] = frozenset(
         # Pi-cli supports these vendor-cloud providers via its built-in
         # catalog. Metaproc does not actively wire credentials or Batch
         # injection for them today, so they live here rather than as full
-        # ProviderSpec entries.
-        "vertex",
+        # ProviderSpec entries. The names are Pi's own provider IDs: `azure`
+        # from Pi 1.0.3, `amazon-bedrock` throughout. The former `vertex` and
+        # `bedrock` tokens were never Pi IDs and failed at run time; Vertex AI
+        # is the registered `google-vertex` provider.
         "azure",
-        "bedrock",
+        "amazon-bedrock",
     }
 )
 

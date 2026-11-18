@@ -1,47 +1,226 @@
 ---
-last_updated: '2026-09-14'
+last_updated: '2026-11-18'
 
 providers:
   openai:
     models:
+      gpt-6.2-astra:
+        actual_price:
+          input_per_1m: 8.00
+          output_per_1m: 40.00
+          cache_read_per_1m: 0.40
+          cache_write_per_1m: 10.00
+        cost_source: computed
+        source_url: 'https://developers.openai.com/api/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against OpenAI's Standard pricing table. Released 2026-11-17. Stored rates are the short-context tier (<=272K input tokens); long context bills $16.00 input, $0.80 cached input, and $60.00 output. cache_write_per_1m is the 30-minute cache-write rate ($20.00 for the 12-hour write). Background-window discounts (30% and 40%) and Ultrafast rates are not modelled. Model availability and lifecycle are maintained in model_catalog.py."
+      gpt-6.2-sol:
+        actual_price:
+          input_per_1m: 2.00
+          output_per_1m: 10.00
+          cache_read_per_1m: 0.10
+          cache_write_per_1m: 2.50
+        cost_source: computed
+        source_url: 'https://developers.openai.com/api/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against OpenAI's Standard pricing table. Released 2026-11-17. Short-context tier (<=272K input); long context bills $4.00 input, $0.20 cached input, and $15.00 output. cache_write_per_1m is the 30-minute write rate ($5.00 for 12 hours). Background-window discounts and Ultrafast rates are not modelled."
+      gpt-6.1-sol:
+        actual_price:
+          input_per_1m: 2.00
+          output_per_1m: 10.00
+          cache_read_per_1m: 0.10
+          cache_write_per_1m: 2.50
+        cost_source: computed
+        source_url: 'https://developers.openai.com/api/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against OpenAI's Standard pricing table. Short-context tier (<=272K input); long context bills $4.00 input, $0.20 cached input, and $15.00 output. cache_write_per_1m is the 30-minute write rate ($5.00 for 12 hours). These are API-key (metered) rates; ChatGPT sign-in dispatch is subscription-billed. Model availability and lifecycle are maintained in model_catalog.py."
+      gpt-6.1-terra:
+        actual_price:
+          input_per_1m: 1.00
+          output_per_1m: 5.00
+          cache_read_per_1m: 0.05
+          cache_write_per_1m: 1.25
+        cost_source: computed
+        source_url: 'https://developers.openai.com/api/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against OpenAI's Standard pricing table. Short-context tier (<=272K input); long context bills $2.00 input, $0.10 cached input, and $7.50 output. cache_write_per_1m is the 30-minute write rate ($2.50 for 12 hours). Background-window discounts are not modelled."
+      gpt-6-astra:
+        actual_price:
+          input_per_1m: 10.00
+          output_per_1m: 50.00
+          cache_read_per_1m: 1.00
+          cache_write_per_1m: 12.50
+        cost_source: computed
+        source_url: 'https://developers.openai.com/api/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against OpenAI's Standard pricing table. Short-context tier (<=272K input); long context bills $20.00 input, $2.00 cached input, and $75.00 output. cache_write_per_1m is the 30-minute write rate ($25.00 for 12 hours). Ultrafast rates are not modelled."
+      gpt-6-sol:
+        actual_price:
+          input_per_1m: 2.00
+          output_per_1m: 10.00
+          cache_read_per_1m: 0.20
+          cache_write_per_1m: 2.50
+        cost_source: computed
+        source_url: 'https://developers.openai.com/api/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against OpenAI's Standard pricing table. Short-context tier (<=272K input); long context bills $4.00 input, $0.40 cached input, and $15.00 output. cache_write_per_1m is the 30-minute write rate ($5.00 for 12 hours)."
+      gpt-6-luna:
+        actual_price:
+          input_per_1m: 0.10
+          output_per_1m: 0.50
+          cache_read_per_1m: 0.01
+          cache_write_per_1m: 0.125
+        cost_source: computed
+        source_url: 'https://developers.openai.com/api/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against OpenAI's Standard pricing table. Short-context tier (<=272K input); long context bills $0.20 input, $0.02 cached input, and $0.75 output. cache_write_per_1m is the 30-minute write rate ($0.25 for 12 hours). Background-window discounts are not modelled."
+      gpt-5.6-sol:
+        actual_price:
+          input_per_1m: 4.00
+          output_per_1m: 20.00
+          cache_read_per_1m: 0.40
+          cache_write_per_1m: 5.00
+        cost_source: computed
+        source_url: 'https://developers.openai.com/api/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against OpenAI's Standard pricing table and the GPT-5.6 Sol model page. These are promotional rates that OpenAI says are available until 2026-11-30. OpenAI has not published the rate that applies afterwards, so no list_price is stored; recheck after 2026-11-30. Short-context tier (<=272K input); long context bills $8.00 input, $0.80 cached input, and $30.00 output. cache_write_per_1m is the 30-minute write rate ($10.00 for 12 hours)."
+      gpt-5.6:
+        actual_price:
+          input_per_1m: 4.00
+          output_per_1m: 20.00
+          cache_read_per_1m: 0.40
+          cache_write_per_1m: 5.00
+        cost_source: computed
+        source_url: 'https://developers.openai.com/api/docs/models/gpt-5.6-sol'
+        last_reviewed: '2026-11-18'
+        notes: "Alias row. OpenAI's GPT-5.6 Sol model page says the gpt-5.6 alias routes requests to GPT-5.6 Sol, and codex-cli records the requested slug, so this row carries the gpt-5.6-sol rate card and must change with it. Omitted from the comparison table because it duplicates gpt-5.6-sol."
+      gpt-5.6-terra:
+        actual_price:
+          input_per_1m: 2.00
+          output_per_1m: 12.00
+          cache_read_per_1m: 0.20
+          cache_write_per_1m: 2.50
+        cost_source: computed
+        source_url: 'https://developers.openai.com/api/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against OpenAI's Standard pricing table. Short-context tier (<=272K input); long context bills $4.00 input, $0.40 cached input, and $18.00 output. cache_write_per_1m is the 30-minute write rate ($5.00 for 12 hours)."
+      gpt-5.6-luna:
+        actual_price:
+          input_per_1m: 0.20
+          output_per_1m: 1.20
+          cache_read_per_1m: 0.02
+          cache_write_per_1m: 0.25
+        cost_source: computed
+        source_url: 'https://developers.openai.com/api/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against OpenAI's Standard pricing table. Short-context tier (<=272K input); long context bills $0.40 input, $0.04 cached input, and $1.80 output. cache_write_per_1m is the 30-minute write rate ($0.50 for 12 hours)."
       gpt-5.5:
         actual_price:
           input_per_1m: 5.00
           output_per_1m: 30.00
           cache_read_per_1m: 0.50
         cost_source: computed
-        source_url: 'https://openai.com/api/pricing'
-        last_reviewed: '2026-04-27'
-        notes: "Reviewed 2026-04-27. Released 2026-04-23, API 2026-04-24. 1M context. Per OpenAI's public announcement: $5/M input, $30/M output. 90% cached-input discount per the GPT-5 family formula. Model availability and lifecycle are maintained in model_catalog.py."
+        source_url: 'https://developers.openai.com/api/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against OpenAI's Standard pricing table; rates unchanged since the 2026-04-27 review. Short-context tier (<272K); long context bills $10.00 input, $1.00 cached input, and $45.00 output. No cache-write rate is published. Model availability and lifecycle are maintained in model_catalog.py."
       gpt-5.5-pro:
         actual_price:
           input_per_1m: 30.00
           output_per_1m: 180.00
         cost_source: computed
-        source_url: 'https://openai.com/api/pricing'
-        last_reviewed: '2026-04-27'
-        notes: "GPT-5.5 Pro — extra-compute reasoning variant. Released alongside gpt-5.5 (2026-04-24 API). $30/M input, $180/M output per OpenAI's public announcement. No public cached-input rate listed; if one appears on openai.com/api/pricing, add `cache_read_per_1m`."
+        source_url: 'https://developers.openai.com/api/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against OpenAI's Standard pricing table; rates unchanged. Short-context tier (<272K); long context bills $60.00 input and $270.00 output. OpenAI publishes no cached-input rate for this model."
+      gpt-5.4:
+        actual_price:
+          input_per_1m: 2.50
+          output_per_1m: 15.00
+          cache_read_per_1m: 0.25
+        cost_source: computed
+        source_url: 'https://developers.openai.com/api/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Historical: not in the 2026-11-18 codex-cli catalog; retained so earlier run logs still price. Reviewed 2026-11-18 against OpenAI's Standard pricing table. Short-context tier (<272K); long context bills $5.00 input, $0.50 cached input, and $22.50 output."
       gpt-5.4-mini:
         actual_price:
           input_per_1m: 0.75
           output_per_1m: 4.50
           cache_read_per_1m: 0.075
         cost_source: computed
-        source_url: 'https://openai.com/api/pricing'
-        last_reviewed: '2026-04-27'
-        notes: "Reviewed 2026-04-27. 90% cached-input discount per the GPT-5 family formula. Cross-verified via OpenRouter 2026-04-14. Model availability and lifecycle are maintained in model_catalog.py."
+        source_url: 'https://developers.openai.com/api/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Historical: not in the 2026-11-18 codex-cli catalog; retained so earlier run logs still price. Reviewed 2026-11-18 against OpenAI's Standard pricing table; rates unchanged since 2026-04-27."
       gpt-5.4-nano:
         actual_price:
           input_per_1m: 0.20
           output_per_1m: 1.25
           cache_read_per_1m: 0.02
         cost_source: computed
-        source_url: 'https://openai.com/api/pricing'
-        last_reviewed: '2026-04-27'
-        notes: "Reviewed 2026-04-27 and cross-verified via OpenRouter 2026-04-14. Model availability and lifecycle are maintained in model_catalog.py."
+        source_url: 'https://developers.openai.com/api/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Historical: not in the 2026-11-18 codex-cli catalog; retained so earlier run logs still price. Reviewed 2026-11-18 against OpenAI's Standard pricing table; rates unchanged since 2026-04-27."
 
   anthropic:
     models:
+      claude-fable-5-2:
+        actual_price:
+          input_per_1m: 8.00
+          output_per_1m: 40.00
+          cache_read_per_1m: 0.20
+          cache_write_per_1m: 10.00
+        cost_source: self-reported
+        source_url: 'https://platform.claude.com/docs/en/about-claude/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Anthropic's pricing page. Cache reads are 0.025x base input. cache_write_per_1m is the 5-minute write rate ($16.00 for 1-hour writes). Fast mode ($16.00 / $80.00) is not modelled. Model availability and lifecycle are maintained in model_catalog.py."
+      claude-fable-5-1:
+        actual_price:
+          input_per_1m: 10.00
+          output_per_1m: 50.00
+          cache_read_per_1m: 0.25
+          cache_write_per_1m: 12.50
+        cost_source: self-reported
+        source_url: 'https://platform.claude.com/docs/en/about-claude/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Anthropic's pricing page. Cache reads are 0.025x base input. cache_write_per_1m is the 5-minute write rate ($20.00 for 1-hour writes)."
+      claude-fable-5:
+        actual_price:
+          input_per_1m: 10.00
+          output_per_1m: 50.00
+          cache_read_per_1m: 1.00
+          cache_write_per_1m: 12.50
+        cost_source: self-reported
+        source_url: 'https://platform.claude.com/docs/en/about-claude/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Anthropic's pricing page. Cache reads are 0.1x base input. cache_write_per_1m is the 5-minute write rate ($20.00 for 1-hour writes)."
+      claude-opus-5-5:
+        actual_price:
+          input_per_1m: 4.00
+          output_per_1m: 20.00
+          cache_read_per_1m: 0.20
+          cache_write_per_1m: 5.00
+        cost_source: self-reported
+        source_url: 'https://platform.claude.com/docs/en/about-claude/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Anthropic's pricing page. Cache reads are 0.05x base input. cache_write_per_1m is the 5-minute write rate ($8.00 for 1-hour writes). Fast mode ($8.00 / $40.00) is not modelled. The claude-code-cli opus alias resolves here on the pinned client. Model availability and lifecycle are maintained in model_catalog.py."
+      claude-opus-5:
+        actual_price:
+          input_per_1m: 5.00
+          output_per_1m: 25.00
+          cache_read_per_1m: 0.50
+          cache_write_per_1m: 6.25
+        cost_source: self-reported
+        source_url: 'https://platform.claude.com/docs/en/about-claude/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Anthropic's pricing page. cache_write_per_1m is the 5-minute write rate ($10.00 for 1-hour writes). Fast mode ($10.00 / $50.00) is not modelled."
+      claude-opus-4-8:
+        actual_price:
+          input_per_1m: 5.00
+          output_per_1m: 25.00
+          cache_read_per_1m: 0.50
+          cache_write_per_1m: 6.25
+        cost_source: self-reported
+        source_url: 'https://platform.claude.com/docs/en/about-claude/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Anthropic's pricing page. cache_write_per_1m is the 5-minute write rate ($10.00 for 1-hour writes). Fast mode ($10.00 / $50.00, deprecated for this model) is not modelled."
       claude-opus-4-7:
         actual_price:
           input_per_1m: 5.00
@@ -50,8 +229,8 @@ providers:
           cache_write_per_1m: 6.25
         cost_source: self-reported
         source_url: 'https://platform.claude.com/docs/en/about-claude/pricing'
-        last_reviewed: '2026-04-24'
-        notes: "Rates carried over from 4.6, not independently verified for this model. Cross-verify against platform.claude.com/docs/en/about-claude/pricing before production cost rollups. cache_write_per_1m uses the 5-minute prompt-cache write rate. Model availability and lifecycle are maintained in model_catalog.py."
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Anthropic's pricing page, which lists Opus 4.7 at these rates (the 2026-04-24 values had been carried over from 4.6). cache_write_per_1m is the 5-minute write rate."
       claude-opus-4-6:
         actual_price:
           input_per_1m: 5.00
@@ -60,8 +239,28 @@ providers:
           cache_write_per_1m: 6.25
         cost_source: self-reported
         source_url: 'https://platform.claude.com/docs/en/about-claude/pricing'
-        last_reviewed: '2026-04-02'
-        notes: "Anthropic direct API pricing. cache_write_per_1m uses Anthropic's 5-minute prompt-cache write rate."
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Anthropic's pricing page. cache_write_per_1m uses Anthropic's 5-minute prompt-cache write rate."
+      claude-sonnet-5-5:
+        actual_price:
+          input_per_1m: 2.00
+          output_per_1m: 10.00
+          cache_read_per_1m: 0.10
+          cache_write_per_1m: 2.50
+        cost_source: self-reported
+        source_url: 'https://platform.claude.com/docs/en/about-claude/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Anthropic's pricing page. Cache reads are 0.05x base input. cache_write_per_1m is the 5-minute write rate ($4.00 for 1-hour writes). The sonnet alias resolves here on the pinned Claude Code and Pi clients."
+      claude-sonnet-5:
+        actual_price:
+          input_per_1m: 2.00
+          output_per_1m: 10.00
+          cache_read_per_1m: 0.20
+          cache_write_per_1m: 2.50
+        cost_source: self-reported
+        source_url: 'https://platform.claude.com/docs/en/about-claude/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Anthropic's pricing page. The $2 / $10 launch price is now the standard price; the increase to $3 / $15 scheduled for 2026-09-01 did not occur. cache_write_per_1m is the 5-minute write rate ($4.00 for 1-hour writes)."
       claude-sonnet-4-6:
         actual_price:
           input_per_1m: 3.00
@@ -70,8 +269,8 @@ providers:
           cache_write_per_1m: 3.75
         cost_source: self-reported
         source_url: 'https://platform.claude.com/docs/en/about-claude/pricing'
-        last_reviewed: '2026-04-02'
-        notes: "Anthropic direct API pricing. cache_write_per_1m uses Anthropic's 5-minute prompt-cache write rate."
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Anthropic's pricing page. cache_write_per_1m uses Anthropic's 5-minute prompt-cache write rate."
       claude-sonnet-4-5:
         actual_price:
           input_per_1m: 3.00
@@ -80,8 +279,18 @@ providers:
           cache_write_per_1m: 3.75
         cost_source: self-reported
         source_url: 'https://platform.claude.com/docs/en/about-claude/pricing'
-        last_reviewed: '2026-04-02'
-        notes: "Anthropic direct API pricing. cache_write_per_1m uses Anthropic's 5-minute prompt-cache write rate."
+        last_reviewed: '2026-11-18'
+        notes: "Historical: not in the 2026-11-18 model catalog; Anthropic lists Sonnet 4.5 as deprecated. Retained so earlier run logs still price. Reviewed 2026-11-18 against Anthropic's pricing page. cache_write_per_1m uses the 5-minute write rate."
+      claude-haiku-5-5:
+        actual_price:
+          input_per_1m: 0.10
+          output_per_1m: 0.50
+          cache_read_per_1m: 0.01
+          cache_write_per_1m: 0.125
+        cost_source: self-reported
+        source_url: 'https://platform.claude.com/docs/en/about-claude/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Anthropic's pricing page. TIERED: stored rates are for requests whose prompt (input plus cache reads and writes) is up to 100,000 tokens. A request over 100,000 prompt tokens bills $0.50 input, $0.625 5-minute cache write, $0.05 cache read, and $2.50 output, 5x these rates. The schema has one rate card per model, so computed costs for long-prompt work are a lower bound; Claude CLI's self-reported cost remains the actual_cost when present. 1-hour cache writes are $0.20 (or $1.00 over 100K)."
       claude-haiku-4-5:
         actual_price:
           input_per_1m: 1.00
@@ -90,11 +299,58 @@ providers:
           cache_write_per_1m: 1.25
         cost_source: self-reported
         source_url: 'https://platform.claude.com/docs/en/about-claude/pricing'
-        last_reviewed: '2026-04-02'
-        notes: "Anthropic direct API pricing. cache_write_per_1m uses Anthropic's 5-minute prompt-cache write rate."
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Anthropic's pricing page. The catalog accepts the dated ID claude-haiku-4-5-20251001, which has its own row. cache_write_per_1m uses Anthropic's 5-minute prompt-cache write rate."
+      claude-haiku-4-5-20251001:
+        actual_price:
+          input_per_1m: 1.00
+          output_per_1m: 5.00
+          cache_read_per_1m: 0.10
+          cache_write_per_1m: 1.25
+        cost_source: self-reported
+        source_url: 'https://platform.claude.com/docs/en/about-claude/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Dated-ID row for Haiku 4.5. Claude Code reports this ID in modelUsage, and price lookup matches IDs exactly, so this row carries the claude-haiku-4-5 rate card and must change with it. Omitted from the comparison table because it duplicates claude-haiku-4-5."
 
   google:
     models:
+      gemini-4-carbon:
+        actual_price:
+          input_per_1m: 2.00
+          output_per_1m: 10.00
+          cache_read_per_1m: 0.10
+        list_price:
+          input_per_1m: 4.00
+          output_per_1m: 20.00
+          cache_read_per_1m: 0.20
+        cost_source: computed
+        source_url: 'https://aistudio.google.com/docs/pricing'
+        list_source_url: 'https://aistudio.google.com/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Google's Gemini API pricing page and cross-checked against the Vertex AI pricing page. GA 2026-11-10; paid tier only. actual_price is Google's promotional rate through 2026-11-30; list_price is the standard rate from 2026-12-01. After 2026-11-30 the promotional rate no longer applies, so move list_price into actual_price at the next review. No context-length tier; output includes thinking tokens. Implicit caching only. Vertex delivers the promotion as 50% credits back, and its non-global regions charge 10% more. The cyber-permissive variant has no promotion. Model availability and lifecycle are maintained in model_catalog.py."
+      gemini-4-argon:
+        actual_price:
+          input_per_1m: 2.00
+          output_per_1m: 10.00
+          cache_read_per_1m: 0.10
+        list_price:
+          input_per_1m: 4.00
+          output_per_1m: 20.00
+          cache_read_per_1m: 0.20
+        cost_source: computed
+        source_url: 'https://aistudio.google.com/docs/pricing'
+        list_source_url: 'https://aistudio.google.com/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Google's Gemini API pricing page and cross-checked against the Vertex AI pricing page. GA 2026-10-13; paid tier only. actual_price is Google's promotional rate through 2026-11-30; list_price is the standard rate from 2026-12-01. After 2026-11-30 the promotional rate no longer applies, so move list_price into actual_price at the next review. No context-length tier; output includes thinking tokens. Implicit caching only. Vertex delivers the promotion as 50% credits back, and its non-global regions charge 10% more."
+      gemini-4-hydrogen:
+        actual_price:
+          input_per_1m: 1.50
+          output_per_1m: 7.50
+          cache_read_per_1m: 0.075
+        cost_source: computed
+        source_url: 'https://aistudio.google.com/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Google's Gemini API pricing page and cross-checked against the Vertex AI pricing page. GA 2026-11-12; a free tier is also available. Standard paid tier with no context-length tier; output includes thinking tokens. Implicit caching only (cache read is 0.05x input). Vertex publishes a $1.875 cache-write rate effective 2027-01-12, which is not stored yet; its non-global regions charge 10% more."
       gemini-3.8-flash:
         actual_price:
           input_per_1m: 0.75
@@ -105,46 +361,74 @@ providers:
           output_per_1m: 7.50
           cache_read_per_1m: 0.15
         cost_source: computed
-        source_url: 'https://ai.google.dev/gemini-api/docs/pricing'
-        list_source_url: 'https://ai.google.dev/gemini-api/docs/pricing'
-        last_reviewed: '2026-09-14'
-        notes: "Reviewed 2026-09-14 against Google's Gemini API pricing page (last updated 2026-09-11) and cross-checked against the Vertex AI pricing page. Gemini 3.8 Flash was GA 2026-09-02. Standard paid tier with no context-length tiers; output includes thinking tokens. actual_price is Google's introductory rate through 2026-12-31; list_price is the standard rate Google publishes from 2027-01-01. Context-cache storage ($0.50 per 1M tokens per hour through 2026-12-31, $1.00 from 2027-01-01) is not modelled. Vertex AI's global endpoint charges the same rates; its non-global regions charge 10% more. Model availability and lifecycle are maintained in model_catalog.py."
-      gemini-3.6-flash:
+        source_url: 'https://aistudio.google.com/docs/pricing'
+        list_source_url: 'https://aistudio.google.com/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Google's Gemini API pricing page and the Vertex AI pricing page; rates unchanged since 2026-09-14. GA 2026-09-02. Standard paid tier with no context-length tiers; output includes thinking tokens. actual_price is Google's introductory rate through 2026-12-31; list_price is the standard rate from 2027-01-01. Context-cache storage ($0.50 per 1M tokens per hour through 2026-12-31, $1.00 from 2027-01-01) is not modelled. Vertex AI's global endpoint charges the same rates; its non-global regions charge 10% more. Model availability and lifecycle are maintained in model_catalog.py."
+      gemini-3.7-flash:
         actual_price:
+          input_per_1m: 0.75
+          output_per_1m: 3.75
+          cache_read_per_1m: 0.075
+        list_price:
           input_per_1m: 1.50
           output_per_1m: 7.50
           cache_read_per_1m: 0.15
         cost_source: computed
-        source_url: 'https://ai.google.dev/gemini-api/docs/pricing'
-        last_reviewed: '2026-07-24'
-        notes: "Reviewed 2026-07-24. Gemini 3.6 Flash was GA 2026-07-21. Google listed the same input price as Gemini 3.5 Flash with a lower output price, 1M input context, 64K maximum output, and medium default thinking. Model availability and lifecycle are maintained in model_catalog.py."
+        source_url: 'https://cloud.google.com/model-garden/pricing'
+        list_source_url: 'https://cloud.google.com/model-garden/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Historical: not in the 2026-11-18 model catalog; added so earlier run logs price. Reviewed 2026-11-18 against the Vertex AI pricing page (global endpoint). The Gemini API deprecated this model and routes it to gemini-3.8-flash, so it has no Gemini API price row. actual_price is the introductory rate through 2026-12-31; list_price is the standard rate from 2027-01-01."
+      gemini-3.6-flash:
+        actual_price:
+          input_per_1m: 0.75
+          output_per_1m: 3.75
+          cache_read_per_1m: 0.075
+        list_price:
+          input_per_1m: 1.50
+          output_per_1m: 7.50
+          cache_read_per_1m: 0.15
+        cost_source: computed
+        source_url: 'https://aistudio.google.com/docs/pricing'
+        list_source_url: 'https://aistudio.google.com/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Google's Gemini API pricing page and the Vertex AI pricing page. GA 2026-07-21. Corrected: the 2026-07-24 row stored the standard rate as actual_price, but Google charges an introductory $0.75 / $3.75 / $0.075 through 2026-12-31 and the standard $1.50 / $7.50 / $0.15 from 2027-01-01, so actual_price now holds the introductory rate and list_price the standard rate. Context-cache storage is not modelled. Model availability and lifecycle are maintained in model_catalog.py."
       gemini-3.5-flash:
         actual_price:
           input_per_1m: 1.50
           output_per_1m: 9.00
           cache_read_per_1m: 0.15
         cost_source: computed
-        source_url: 'https://ai.google.dev/gemini-api/docs/pricing'
-        last_reviewed: '2026-05-23'
-        notes: "Reviewed 2026-05-23. Gemini 3.5 Flash was GA 2026-05-19 at Google I/O. Google positioned it for agentic tool use. 1M input context. Rate card was 3x the 2.5-flash rate. Model availability and lifecycle are maintained in model_catalog.py."
+        source_url: 'https://cloud.google.com/model-garden/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Historical: not in the 2026-11-18 model catalog; retained so earlier run logs still price. Reviewed 2026-11-18 against the Vertex AI pricing page (global endpoint); rates unchanged since 2026-05-23. The Gemini API deprecated this model and routes it to gemini-3.6-flash, so the Gemini API page no longer lists it."
+      gemini-3.5-flash-lite:
+        actual_price:
+          input_per_1m: 0.30
+          output_per_1m: 2.50
+          cache_read_per_1m: 0.03
+        cost_source: computed
+        source_url: 'https://aistudio.google.com/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Google's Gemini API pricing page (text, image, video, and audio input share one rate) and cross-checked against the Vertex AI pricing page. GA 2026-07-21. Context-cache storage ($1.00 per 1M tokens per hour) is not modelled. Model availability and lifecycle are maintained in model_catalog.py."
       gemini-3.1-pro-preview:
         actual_price:
           input_per_1m: 2.00
           output_per_1m: 12.00
           cache_read_per_1m: 0.20
         cost_source: computed
-        source_url: 'https://ai.google.dev/gemini-api/docs/pricing'
-        last_reviewed: '2026-04-02'
-        notes: "Standard paid-tier pricing for prompts <=200K tokens. Same rate card as -customtools."
+        source_url: 'https://aistudio.google.com/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18. Standard paid-tier pricing for prompts <=200K tokens; prompts over 200K bill $4.00 input, $0.40 cached input, and $18.00 output. Same rate card as -customtools."
       gemini-3.1-pro-preview-customtools:
         actual_price:
           input_per_1m: 2.00
           output_per_1m: 12.00
           cache_read_per_1m: 0.20
         cost_source: computed
-        source_url: 'https://ai.google.dev/gemini-api/docs/pricing'
-        last_reviewed: '2026-04-02'
-        notes: "Standard paid-tier pricing for prompts <=200K tokens. Omitted from the comparison table because it matches gemini-3.1-pro-preview."
+        source_url: 'https://aistudio.google.com/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18. Standard paid-tier pricing for prompts <=200K tokens. Omitted from the comparison table because it matches gemini-3.1-pro-preview."
       gemini-3-pro-preview:
         actual_price:
           input_per_1m: 2.00
@@ -153,16 +437,16 @@ providers:
         cost_source: computed
         source_url: 'https://ai.google.dev/gemini-api/docs/pricing'
         last_reviewed: '2026-04-02'
-        notes: "Google pricing page rate card reviewed 2026-04-02. Model availability and lifecycle are maintained in model_catalog.py."
+        notes: "Historical: shut down on the Gemini API 2026-03-09 and no longer on Google's pricing page, so the rate was not re-verified on 2026-11-18. Retained so earlier run logs still price. Rate card from the 2026-04-02 review."
       gemini-3-flash-preview:
         actual_price:
           input_per_1m: 0.50
           output_per_1m: 3.00
           cache_read_per_1m: 0.05
         cost_source: computed
-        source_url: 'https://ai.google.dev/gemini-api/docs/pricing'
-        last_reviewed: '2026-04-02'
-        notes: "Standard paid-tier pricing."
+        source_url: 'https://aistudio.google.com/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Historical: not in the 2026-11-18 model catalog; retained so earlier run logs still price. Reviewed 2026-11-18: standard paid-tier text, image, and video rate (audio input bills $1.00, cached $0.10)."
       gemini-3.1-flash-lite-preview:
         actual_price:
           input_per_1m: 0.25
@@ -171,75 +455,117 @@ providers:
         cost_source: computed
         source_url: 'https://ai.google.dev/gemini-api/docs/pricing'
         last_reviewed: '2026-04-02'
-        notes: "Standard paid-tier pricing. Same rate card as gemini-3.1-flash-lite (GA)."
+        notes: "Historical: shut down 2026-05-25 and no longer on Google's pricing page, so the rate was not re-verified on 2026-11-18. Retained so earlier run logs still price. Same rate card as gemini-3.1-flash-lite (GA)."
       gemini-3.1-flash-lite:
         actual_price:
           input_per_1m: 0.25
           output_per_1m: 1.50
           cache_read_per_1m: 0.025
         cost_source: computed
-        source_url: 'https://ai.google.dev/gemini-api/docs/pricing'
-        last_reviewed: '2026-05-23'
-        notes: "Reviewed 2026-05-23. Gemini 3.1 Flash-Lite was GA 2026-05-07. Identical rate card to gemini-3.1-flash-lite-preview. Model availability and lifecycle are maintained in model_catalog.py."
+        source_url: 'https://aistudio.google.com/docs/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Historical: not in the 2026-11-18 model catalog; retained so earlier run logs still price. Reviewed 2026-11-18: standard paid-tier text, image, and video rate (audio input bills $0.50, cached $0.05); unchanged since 2026-05-23."
 
   deepseek:
     models:
       deepseek-v4-pro:
         actual_price:
-          input_per_1m: 0.435
-          output_per_1m: 0.87
-          cache_read_per_1m: 0.003625
-        list_price:
-          input_per_1m: 1.74
-          output_per_1m: 3.48
-          cache_read_per_1m: 0.0145
+          input_per_1m: 1.32
+          output_per_1m: 3.96
+          cache_read_per_1m: 0.044
         cost_source: computed
         source_url: 'https://api-docs.deepseek.com/quick_start/pricing/'
-        list_source_url: 'https://api-docs.deepseek.com/news/news260424'
-        last_reviewed: '2026-05-23'
-        notes: "DeepSeek V4 Pro (1.6T total / 49B active) via direct API. 1M context, 384K max output. Released 2026-04-24. actual_price reflects the 75% preview promo, EXTENDED to 2026-05-31 15:59 UTC (was 2026-05-05). list_price is the post-promo rate. Same model ID handles thinking and non-thinking modes. CACHE PRICE UPDATE: effective 2026-04-26 12:15 UTC, DeepSeek dropped cache-read to ~1/100 of cache-miss (was ~1/10); cache_read_per_1m updated accordingly."
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against DeepSeek's pricing page. Served by DeepSeek-V4-Pro-0813; 1M context, 384K max output; thinking and non-thinking modes share the ID. TIME-OF-DAY PRICING: stored rates are the peak rate (01:00-04:00 and 06:00-10:00 UTC, Monday to Friday, excluding Chinese public holidays). All other hours bill the off-peak rate, half of peak ($0.66 input, $0.022 cache hit, $1.98 output). Usage logs do not let this file tell the two apart, so computed costs are an upper bound. The 2026-05-23 row's promotional actual_price and $1.74 / $3.48 list_price are superseded and were removed."
+      deepseek-flash:
+        actual_price:
+          input_per_1m: 0.30
+          output_per_1m: 1.20
+          cache_read_per_1m: 0.006
+        cost_source: computed
+        source_url: 'https://api-docs.deepseek.com/quick_start/pricing/'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against DeepSeek's pricing page. Current Flash ID, served by DeepSeek-V4.1-Flash-1017; 1M context, 384K max output; thinking and non-thinking modes share the ID. TIME-OF-DAY PRICING: stored rates are the peak rate; off-peak is half ($0.15 input, $0.003 cache hit, $0.60 output). Computed costs are an upper bound."
       deepseek-v4-flash:
         actual_price:
-          input_per_1m: 0.14
-          output_per_1m: 0.28
-          cache_read_per_1m: 0.0028
+          input_per_1m: 0.30
+          output_per_1m: 1.20
+          cache_read_per_1m: 0.006
         cost_source: computed
         source_url: 'https://api-docs.deepseek.com/quick_start/pricing/'
-        last_reviewed: '2026-05-23'
-        notes: "DeepSeek V4 Flash (284B total / 13B active) via direct API. 1M context, 384K max output. No introductory promo. Same model ID handles thinking and non-thinking modes. Cache-read reduced 2026-04-26 to ~1/50 of cache-miss (was ~1/5)."
+        last_reviewed: '2026-11-18'
+        notes: "Legacy ID. Reviewed 2026-11-18: DeepSeek still accepts deepseek-v4-flash, but the model behind it is retired; requests are served by DeepSeek-V4.1-Flash-1017 and billed at the deepseek-flash price, so this row carries the deepseek-flash peak rate card. Runs made before that cutover were billed $0.14 / $0.28 / $0.0028 (2026-05-23 review); the schema stores one rate card per ID, so re-pricing those runs now overstates them."
 
   moonshot:
     models:
+      kimi-k3.1-pro:
+        actual_price:
+          input_per_1m: 2.00
+          output_per_1m: 10.00
+          cache_read_per_1m: 0.20
+          cache_write_per_1m: 2.00
+        cost_source: computed
+        source_url: 'https://platform.kimi.ai/docs/pricing/chat'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Kimi's model inference pricing page (platform.moonshot.ai now redirects to platform.kimi.ai). Current K3-series flagship; 1,048,576-token context; flat pricing with no context-length tier. cache_write_per_1m is the 5-minute TTL write rate ($4.00 for 1-hour writes); cache hits bill only the cached-input rate. Not yet in the model catalog."
+      kimi-k3:
+        actual_price:
+          input_per_1m: 3.00
+          output_per_1m: 15.00
+          cache_read_per_1m: 0.30
+          cache_write_per_1m: 3.00
+        cost_source: computed
+        source_url: 'https://platform.kimi.ai/docs/pricing/chat'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Kimi's model inference pricing page. K3-series model; 1,048,576-token context; flat pricing with no context-length tier. cache_write_per_1m is the 5-minute TTL write rate ($6.00 for 1-hour writes). Not yet in the model catalog."
       kimi-k2.6:
         actual_price:
           input_per_1m: 0.95
           output_per_1m: 4.00
           cache_read_per_1m: 0.16
         cost_source: computed
-        source_url: 'https://platform.moonshot.ai/'
-        last_reviewed: '2026-04-27'
-        notes: "Moonshot direct-API pricing reviewed 2026-04-27. The exact current model ID and availability were not established in the 2026-09-10 model catalog review."
+        source_url: 'https://platform.kimi.ai/docs/pricing/chat'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Kimi's model inference pricing page; rates unchanged since 2026-04-27. K2-series models closed to newly registered users on 2026-10-31, and Kimi plans to retire them by the end of December 2026. Model availability and lifecycle are maintained in model_catalog.py."
 
   vertex-maas:
     models:
+      glm-5.2-maas:
+        actual_price:
+          input_per_1m: 1.40
+          output_per_1m: 4.40
+          cache_read_per_1m: 0.14
+        cost_source: computed
+        source_url: 'https://cloud.google.com/model-garden/partner-models/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Google's partner and open model pricing page. Pi reports the org-prefixed ID zai-org/glm-5.2-maas, which price lookup resolves to this row. Preview on the global endpoint, replacing the retired GLM-5 and GLM-4.7 MaaS models. No separate Zhipu direct-API list_price is stored."
+      deepseek-v4.1-flash-maas:
+        actual_price:
+          input_per_1m: 0.30
+          output_per_1m: 1.20
+          cache_read_per_1m: 0.03
+        cost_source: computed
+        source_url: 'https://cloud.google.com/model-garden/partner-models/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Reviewed 2026-11-18 against Google's partner and open model pricing page. Pi reports the org-prefixed ID deepseek-ai/deepseek-v4.1-flash-maas. Preview on the global endpoint, replacing the retired DeepSeek V3.2 MaaS model; Google charged nothing until 2026-10-16. No DeepSeek direct list_price is stored: the direct API serves a different snapshot (V4.1-Flash-1017) with time-of-day pricing. The deepseek-v4.1-flash-1017-maas endpoint has no published price yet and has no row."
       glm-5-maas:
         actual_price:
           input_per_1m: 1.00
           output_per_1m: 3.20
           cache_read_per_1m: 0.10
         cost_source: computed
-        source_url: 'https://cloud.google.com/vertex-ai/generative-ai/pricing'
-        last_reviewed: '2026-04-02'
-        notes: "Vertex AI published pay-as-you-go pricing. Google's public no-charge note expired on 2026-02-19. No separate direct-vendor list_price is stored until a current Zhipu public rate can be independently verified."
+        source_url: 'https://cloud.google.com/model-garden/partner-models/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Historical: Vertex retired this MaaS model on 2026-10-21 (replacement glm-5.2-maas); retained so earlier run logs still price. Reviewed 2026-11-18: Google's pricing page still lists this rate. Google's no-charge note expired 2026-02-19. No separate Zhipu direct-API list_price is stored."
       glm-4.7-maas:
         actual_price:
           input_per_1m: 0.60
           output_per_1m: 2.20
           cache_read_per_1m: 0.06
         cost_source: computed
-        source_url: 'https://cloud.google.com/vertex-ai/generative-ai/pricing'
-        last_reviewed: '2026-04-17'
-        notes: "Vertex AI published pay-as-you-go pricing (verify against https://cloud.google.com/vertex-ai/generative-ai/pricing when reviewing)."
+        source_url: 'https://cloud.google.com/model-garden/partner-models/pricing'
+        last_reviewed: '2026-11-18'
+        notes: "Historical: Vertex retired this MaaS model on 2026-10-21 (replacement glm-5.2-maas); retained so earlier run logs still price. Reviewed 2026-11-18: Google's pricing page still lists this rate."
       kimi-k2-thinking-maas:
         actual_price:
           input_per_1m: 0.60
@@ -250,10 +576,10 @@ providers:
           output_per_1m: 2.50
           cache_read_per_1m: 0.15
         cost_source: computed
-        source_url: 'https://cloud.google.com/vertex-ai/generative-ai/pricing'
+        source_url: 'https://cloud.google.com/model-garden/partner-models/pricing'
         list_source_url: 'https://platform.moonshot.ai/'
-        last_reviewed: '2026-04-02'
-        notes: "Vertex AI pay-as-you-go pricing vs Moonshot Kimi API pricing."
+        last_reviewed: '2026-11-18'
+        notes: "Historical: Vertex retired this MaaS model on 2026-10-21 with no Kimi successor on Vertex; retained so earlier run logs still price. actual_price re-verified 2026-11-18 on Google's pricing page. list_price is frozen at the 2026-04-02 Moonshot rate; Kimi's current pricing page no longer lists this model."
       deepseek-v3.2-maas:
         actual_price:
           input_per_1m: 0.56
@@ -264,10 +590,10 @@ providers:
           output_per_1m: 0.28
           cache_read_per_1m: 0.0028
         cost_source: computed
-        source_url: 'https://cloud.google.com/vertex-ai/generative-ai/pricing'
+        source_url: 'https://cloud.google.com/model-garden/partner-models/pricing'
         list_source_url: 'https://api-docs.deepseek.com/quick_start/pricing/'
-        last_reviewed: '2026-05-23'
-        notes: "Vertex AI pay-as-you-go pricing for V3.2 vs DeepSeek's direct-API rate card. The direct V3.2 surface retires 2026-07-24 and is rolled into the V4-Flash alias chain, so list_price tracks V4-Flash rates ($0.14 / $0.28 / $0.0028) rather than the retiring V3.2 numbers."
+        last_reviewed: '2026-11-18'
+        notes: "Historical: Vertex retired this MaaS model on 2026-10-21 (replacement deepseek-v4.1-flash-maas); retained so earlier run logs still price. actual_price re-verified 2026-11-18 on Google's pricing page. list_price is frozen at the V4-Flash direct rate from the 2026-05-23 review ($0.14 / $0.28 / $0.0028), the comparison point while this model served; DeepSeek's current Flash price is not applied to historical runs."
       qwen3-235b-a22b-instruct-2507-maas:
         actual_price:
           input_per_1m: 0.22
@@ -276,10 +602,10 @@ providers:
           input_per_1m: 0.287
           output_per_1m: 0.92
         cost_source: computed
-        source_url: 'https://cloud.google.com/vertex-ai/generative-ai/pricing'
+        source_url: 'https://cloud.google.com/model-garden/partner-models/pricing'
         list_source_url: 'https://www.alibabacloud.com/help/en/model-studio/model-pricing'
-        last_reviewed: '2026-04-02'
-        notes: "Vertex AI pay-as-you-go pricing vs Alibaba Cloud Model Studio Global deployment mode pricing."
+        last_reviewed: '2026-11-18'
+        notes: "Historical: Vertex retired this MaaS model on 2026-10-21 with no Qwen chat successor on Vertex; retained so earlier run logs still price. actual_price re-verified 2026-11-18 on Google's pricing page. list_price is frozen at the 2026-04-02 Alibaba Cloud Model Studio Global deployment rate and was not re-verified."
       qwen3-coder-480b-a35b-instruct-maas:
         actual_price:
           input_per_1m: 0.22
@@ -289,10 +615,10 @@ providers:
           input_per_1m: 0.861
           output_per_1m: 3.441
         cost_source: computed
-        source_url: 'https://cloud.google.com/vertex-ai/generative-ai/pricing'
+        source_url: 'https://cloud.google.com/model-garden/partner-models/pricing'
         list_source_url: 'https://www.alibabacloud.com/help/en/model-studio/model-pricing'
-        last_reviewed: '2026-04-02'
-        notes: "Vertex AI pay-as-you-go pricing vs Alibaba Cloud Model Studio Global deployment mode pricing for the 0-32K input tier."
+        last_reviewed: '2026-11-18'
+        notes: "Historical: Vertex retired this MaaS model on 2026-10-21 with no Qwen chat successor on Vertex; retained so earlier run logs still price. actual_price re-verified 2026-11-18 on Google's pricing page. list_price is frozen at the 2026-04-02 Alibaba Cloud Model Studio Global deployment rate for the 0-32K input tier and was not re-verified."
 ---
 # Model Pricing Reference
 
@@ -301,6 +627,9 @@ adapter does not self-report cost (for example Gemini CLI, or Pi CLI runs agains
 AI MaaS models).
 For adapters that self-report cost (for example Claude CLI via Anthropic
 API), the self-reported value still takes precedence for `actual_cost`.
+
+Rows for models that the model catalog no longer accepts are kept, with a “Historical”
+note, because earlier run logs still need prices.
 
 ## All Models — List Price Comparison
 
@@ -315,46 +644,101 @@ the legacy `deepseek-chat` baseline used when the Norm column was introduced.
 The baseline is held constant so Norm values stay stable across pricing refreshes, even
 after `deepseek-chat` itself was retired as a separate row.
 
+Three rows are omitted from the table because they duplicate another row’s rate card:
+`gemini-3.1-pro-preview-customtools` (same as `gemini-3.1-pro-preview`), the `gpt-5.6`
+alias (same as `gpt-5.6-sol`), and the dated `claude-haiku-4-5-20251001` ID (same as
+`claude-haiku-4-5`).
+
 | Model | Provider | Input | Norm | Output | Cache Read | Cache Write | Source |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| gpt-5.5-pro | OpenAI | $30.00 | 107.14x | $180.00 | -- | -- | [openai](https://openai.com/api/pricing) |
-| gpt-5.5 | OpenAI | $5.00 | 17.86x | $30.00 | $0.50 | -- | [openai](https://openai.com/api/pricing) |
+| gpt-5.5-pro | OpenAI | $30.00 | 107.14x | $180.00 | -- | -- | [openai](https://developers.openai.com/api/docs/pricing) |
+| gpt-6-astra | OpenAI | $10.00 | 35.71x | $50.00 | $1.00 | $12.50 | [openai](https://developers.openai.com/api/docs/pricing) |
+| claude-fable-5-1 | Anthropic | $10.00 | 35.71x | $50.00 | $0.25 | $12.50 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
+| claude-fable-5 | Anthropic | $10.00 | 35.71x | $50.00 | $1.00 | $12.50 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
+| gpt-6.2-astra | OpenAI | $8.00 | 28.57x | $40.00 | $0.40 | $10.00 | [openai](https://developers.openai.com/api/docs/pricing) |
+| claude-fable-5-2 | Anthropic | $8.00 | 28.57x | $40.00 | $0.20 | $10.00 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
+| gpt-5.5 | OpenAI | $5.00 | 17.86x | $30.00 | $0.50 | -- | [openai](https://developers.openai.com/api/docs/pricing) |
+| claude-opus-5 | Anthropic | $5.00 | 17.86x | $25.00 | $0.50 | $6.25 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
+| claude-opus-4-8 | Anthropic | $5.00 | 17.86x | $25.00 | $0.50 | $6.25 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
 | claude-opus-4-7 | Anthropic | $5.00 | 17.86x | $25.00 | $0.50 | $6.25 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
 | claude-opus-4-6 | Anthropic | $5.00 | 17.86x | $25.00 | $0.50 | $6.25 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
+| gpt-5.6-sol | OpenAI | $4.00 | 14.29x | $20.00 | $0.40 | $5.00 | [openai](https://developers.openai.com/api/docs/pricing) |
+| claude-opus-5-5 | Anthropic | $4.00 | 14.29x | $20.00 | $0.20 | $5.00 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
+| gemini-4-carbon | Google | $4.00 | 14.29x | $20.00 | $0.20 | -- | [google](https://aistudio.google.com/docs/pricing) |
+| gemini-4-argon | Google | $4.00 | 14.29x | $20.00 | $0.20 | -- | [google](https://aistudio.google.com/docs/pricing) |
+| gpt-5.4 | OpenAI | $2.50 | 8.93x | $15.00 | $0.25 | -- | [openai](https://developers.openai.com/api/docs/pricing) |
 | claude-sonnet-4-6 | Anthropic | $3.00 | 10.71x | $15.00 | $0.30 | $3.75 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
 | claude-sonnet-4-5 | Anthropic | $3.00 | 10.71x | $15.00 | $0.30 | $3.75 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
-| gemini-3.1-pro-preview | Google | $2.00 | 7.14x | $12.00 | $0.20 | -- | [google](https://ai.google.dev/gemini-api/docs/pricing) |
+| kimi-k3 | Moonshot | $3.00 | 10.71x | $15.00 | $0.30 | $3.00 | [moonshot](https://platform.kimi.ai/docs/pricing/chat) |
+| gpt-5.6-terra | OpenAI | $2.00 | 7.14x | $12.00 | $0.20 | $2.50 | [openai](https://developers.openai.com/api/docs/pricing) |
+| gemini-3.1-pro-preview | Google | $2.00 | 7.14x | $12.00 | $0.20 | -- | [google](https://aistudio.google.com/docs/pricing) |
 | gemini-3-pro-preview | Google | $2.00 | 7.14x | $12.00 | $0.20 | -- | [google](https://ai.google.dev/gemini-api/docs/pricing) |
-| gemini-3.5-flash | Google | $1.50 | 5.36x | $9.00 | $0.15 | -- | [google](https://ai.google.dev/gemini-api/docs/pricing) |
-| gemini-3.8-flash | Google | $1.50 | 5.36x | $7.50 | $0.15 | -- | [google](https://ai.google.dev/gemini-api/docs/pricing) |
-| gemini-3.6-flash | Google | $1.50 | 5.36x | $7.50 | $0.15 | -- | [google](https://ai.google.dev/gemini-api/docs/pricing) |
+| gpt-6.2-sol | OpenAI | $2.00 | 7.14x | $10.00 | $0.10 | $2.50 | [openai](https://developers.openai.com/api/docs/pricing) |
+| gpt-6.1-sol | OpenAI | $2.00 | 7.14x | $10.00 | $0.10 | $2.50 | [openai](https://developers.openai.com/api/docs/pricing) |
+| gpt-6-sol | OpenAI | $2.00 | 7.14x | $10.00 | $0.20 | $2.50 | [openai](https://developers.openai.com/api/docs/pricing) |
+| claude-sonnet-5-5 | Anthropic | $2.00 | 7.14x | $10.00 | $0.10 | $2.50 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
+| claude-sonnet-5 | Anthropic | $2.00 | 7.14x | $10.00 | $0.20 | $2.50 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
+| kimi-k3.1-pro | Moonshot | $2.00 | 7.14x | $10.00 | $0.20 | $2.00 | [moonshot](https://platform.kimi.ai/docs/pricing/chat) |
+| gemini-3.5-flash | Google | $1.50 | 5.36x | $9.00 | $0.15 | -- | [vertex](https://cloud.google.com/model-garden/pricing) |
+| gemini-4-hydrogen | Google | $1.50 | 5.36x | $7.50 | $0.075 | -- | [google](https://aistudio.google.com/docs/pricing) |
+| gemini-3.8-flash | Google | $1.50 | 5.36x | $7.50 | $0.15 | -- | [google](https://aistudio.google.com/docs/pricing) |
+| gemini-3.7-flash | Google | $1.50 | 5.36x | $7.50 | $0.15 | -- | [vertex](https://cloud.google.com/model-garden/pricing) |
+| gemini-3.6-flash | Google | $1.50 | 5.36x | $7.50 | $0.15 | -- | [google](https://aistudio.google.com/docs/pricing) |
+| gpt-6.1-terra | OpenAI | $1.00 | 3.57x | $5.00 | $0.05 | $1.25 | [openai](https://developers.openai.com/api/docs/pricing) |
 | claude-haiku-4-5 | Anthropic | $1.00 | 3.57x | $5.00 | $0.10 | $1.25 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
-| gpt-5.4-mini | OpenAI | $0.75 | 2.68x | $4.50 | $0.075 | -- | [openai](https://openai.com/api/pricing) |
-| kimi-k2.6 | Moonshot | $0.95 | 3.39x | $4.00 | $0.16 | -- | [moonshot](https://platform.moonshot.ai/) |
-| deepseek-v4-pro | DeepSeek | $1.74 | 6.21x | $3.48 | $0.0145 | -- | [deepseek](https://api-docs.deepseek.com/news/news260424) |
+| gpt-5.4-mini | OpenAI | $0.75 | 2.68x | $4.50 | $0.075 | -- | [openai](https://developers.openai.com/api/docs/pricing) |
+| glm-5.2-maas | Vertex MaaS | $1.40 | 5.00x | $4.40 | $0.14 | -- | [vertex](https://cloud.google.com/model-garden/partner-models/pricing) |
+| kimi-k2.6 | Moonshot | $0.95 | 3.39x | $4.00 | $0.16 | -- | [moonshot](https://platform.kimi.ai/docs/pricing/chat) |
+| deepseek-v4-pro | DeepSeek | $1.32 | 4.71x | $3.96 | $0.044 | -- | [deepseek](https://api-docs.deepseek.com/quick_start/pricing/) |
 | qwen3-coder-480b | Vertex MaaS | $0.861 | 3.08x | $3.441 | -- | -- | [alibaba](https://www.alibabacloud.com/help/en/model-studio/model-pricing) |
-| glm-5 | Vertex MaaS | $1.00 | 3.57x | $3.20 | $0.10 | -- | [vertex](https://cloud.google.com/vertex-ai/generative-ai/pricing) |
-| gemini-3-flash-preview | Google | $0.50 | 1.79x | $3.00 | $0.05 | -- | [google](https://ai.google.dev/gemini-api/docs/pricing) |
+| glm-5 | Vertex MaaS | $1.00 | 3.57x | $3.20 | $0.10 | -- | [vertex](https://cloud.google.com/model-garden/partner-models/pricing) |
+| gemini-3-flash-preview | Google | $0.50 | 1.79x | $3.00 | $0.05 | -- | [google](https://aistudio.google.com/docs/pricing) |
+| gemini-3.5-flash-lite | Google | $0.30 | 1.07x | $2.50 | $0.03 | -- | [google](https://aistudio.google.com/docs/pricing) |
 | kimi-k2-thinking | Vertex MaaS | $0.60 | 2.14x | $2.50 | $0.15 | -- | [moonshot](https://platform.moonshot.ai/) |
-| glm-4.7-maas | Vertex MaaS | $0.60 | 2.14x | $2.20 | $0.06 | -- | [vertex](https://cloud.google.com/vertex-ai/generative-ai/pricing) |
+| glm-4.7-maas | Vertex MaaS | $0.60 | 2.14x | $2.20 | $0.06 | -- | [vertex](https://cloud.google.com/model-garden/partner-models/pricing) |
 | gemini-3.1-flash-lite-preview | Google | $0.25 | 0.89x | $1.50 | $0.025 | -- | [google](https://ai.google.dev/gemini-api/docs/pricing) |
-| gemini-3.1-flash-lite | Google | $0.25 | 0.89x | $1.50 | $0.025 | -- | [google](https://ai.google.dev/gemini-api/docs/pricing) |
-| gpt-5.4-nano | OpenAI | $0.20 | 0.71x | $1.25 | $0.02 | -- | [openai](https://openai.com/api/pricing) |
+| gemini-3.1-flash-lite | Google | $0.25 | 0.89x | $1.50 | $0.025 | -- | [google](https://aistudio.google.com/docs/pricing) |
+| gpt-5.4-nano | OpenAI | $0.20 | 0.71x | $1.25 | $0.02 | -- | [openai](https://developers.openai.com/api/docs/pricing) |
+| gpt-5.6-luna | OpenAI | $0.20 | 0.71x | $1.20 | $0.02 | $0.25 | [openai](https://developers.openai.com/api/docs/pricing) |
+| deepseek-flash | DeepSeek | $0.30 | 1.07x | $1.20 | $0.006 | -- | [deepseek](https://api-docs.deepseek.com/quick_start/pricing/) |
+| deepseek-v4-flash | DeepSeek | $0.30 | 1.07x | $1.20 | $0.006 | -- | [deepseek](https://api-docs.deepseek.com/quick_start/pricing/) |
+| deepseek-v4.1-flash-maas | Vertex MaaS | $0.30 | 1.07x | $1.20 | $0.03 | -- | [vertex](https://cloud.google.com/model-garden/partner-models/pricing) |
 | qwen3-235b | Vertex MaaS | $0.287 | 1.03x | $0.92 | -- | -- | [alibaba](https://www.alibabacloud.com/help/en/model-studio/model-pricing) |
-| deepseek-v4-flash | DeepSeek | $0.14 | 0.50x | $0.28 | $0.0028 | -- | [deepseek](https://api-docs.deepseek.com/quick_start/pricing/) |
+| gpt-6-luna | OpenAI | $0.10 | 0.36x | $0.50 | $0.01 | $0.125 | [openai](https://developers.openai.com/api/docs/pricing) |
+| claude-haiku-5-5 | Anthropic | $0.10 | 0.36x | $0.50 | $0.01 | $0.125 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
 | deepseek-v3.2 | Vertex MaaS | $0.14 | 0.50x | $0.28 | $0.0028 | -- | [deepseek](https://api-docs.deepseek.com/quick_start/pricing/) |
 
 ## Provider Notes
 
 ### OpenAI
 
-**GPT-5.4 family reviewed 2026-04-14** against OpenRouter’s `openai/*` mirror.
+**Verified 2026-11-18** against OpenAI’s
+[pricing page](https://developers.openai.com/api/docs/pricing) (Standard tier) and the
+GPT-5.6 Sol model page.
+`openai.com/api/pricing` refused automated access during this review, so the developer
+docs page is the cited source.
 
-The retained Mini and Nano rows record that review’s rates.
+- Stored rates are the **short-context** tier, ≤272K input tokens.
+  Above 272K, OpenAI bills about 2x input and 1.5x output for the whole request; each
+  row’s note gives the long-context rates.
+- `cache_write_per_1m` stores the **30-minute** cache-write rate, matching the 5-minute
+  convention used for Anthropic.
+  OpenAI also publishes a 12-hour write rate, noted per row.
+  GPT-5.5 and earlier have no published cache-write rate.
+- `gpt-5.6-sol` rates are promotional until **2026-11-30**. OpenAI has not published the
+  rate that applies afterwards, so no `list_price` is stored; recheck after that date.
+- `gpt-5.6` is a documented alias that routes to GPT-5.6 Sol.
+  codex-cli records the requested slug, and price lookup matches IDs exactly, so the
+  alias has its own row with the Sol rate card.
+- Batch, Flex, Ultrafast, regional-processing uplifts (10%), and the background-window
+  discounts on GPT-6.2 Astra, GPT-6.2 Sol, GPT-6.1 Terra, and GPT-6 Luna are not
+  modelled.
+- `gpt-5.4`, `gpt-5.4-mini`, and `gpt-5.4-nano` are historical rows: OpenAI still prices
+  them, but the codex-cli catalog no longer accepts them.
 
-OpenAI’s documented cache pricing formula is input ÷ 10 (90% cached-input discount) for
-the GPT-5 family. Treat the formula as a sanity check and verify every stored rate
-against a current primary source.
+Cached-input discounts now vary within the family (0.05x input for GPT-6.1 and GPT-6.2,
+0.1x for GPT-6, GPT-5.6, and earlier), so verify every stored rate against the pricing
+page rather than a formula.
 
 **ChatGPT-OAuth dispatch (Vehicle B, via codex-cli).** When a run dispatches through
 codex-cli using a ChatGPT subscription OAuth session (`~/.codex/auth.json` with
@@ -369,13 +753,28 @@ have a separate `list_price` block.
 
 ### Anthropic
 
-**Verified 2026-04-02** against Anthropic’s public
+**Verified 2026-11-18** against Anthropic’s public
 [pricing page](https://platform.claude.com/docs/en/about-claude/pricing).
 
-Anthropic’s prompt-caching multipliers are public: cache reads are `0.1x` base input,
-5-minute cache writes are `1.25x`, and 1-hour cache writes are `2x`. This file stores
-the 5-minute cache-write rate in `cache_write_per_1m`, because the usage logs currently
-do not distinguish 5-minute from 1-hour writes.
+- Rows cover the Fable 5.x, Opus 5.x, Sonnet 5.x, and Haiku 5.5 generations, plus Opus
+  4.8 and the retained 4.x rows.
+  The Opus 4.7 rate, previously carried over from 4.6, is now confirmed.
+- Cache reads are `0.1x` base input except on Fable 5.1 and Fable 5.2 (`0.025x`) and on
+  Opus 5.5 and Sonnet 5.5 (`0.05x`). 5-minute cache writes are `1.25x` and 1-hour cache
+  writes are `2x` base input.
+  This file stores the 5-minute cache-write rate in `cache_write_per_1m`, because the
+  usage logs currently do not distinguish 5-minute from 1-hour writes.
+- **Haiku 5.5 is priced by prompt length.** A request whose prompt (input plus cache
+  reads and writes) exceeds 100,000 tokens pays 5x the base rates.
+  The schema holds one rate card per model, so the `claude-haiku-5-5` row stores the
+  ≤100K tier and computed costs for long-prompt work are a lower bound.
+- Sonnet 5’s $2 / $10 launch price is now its standard price; the increase Anthropic had
+  scheduled for 2026-09-01 did not occur.
+- Fast mode, batch (50% off), and the 1.1x US-only `inference_geo` multiplier are not
+  modelled.
+- Claude Code reports the dated ID `claude-haiku-4-5-20251001` for Haiku 4.5, so that ID
+  has its own row with the `claude-haiku-4-5` rate card.
+- `claude-sonnet-4-5` is a historical row; Anthropic lists it as deprecated.
 
 Cost source: `self-reported` for Claude CLI actual cost.
 `list_cost` falls back to the same public API rate card because Anthropic models in this
@@ -383,104 +782,125 @@ file do not have a separate `list_price` block.
 
 ### Google AI (Gemini)
 
-**Verified 2026-07-24** against Google’s public
-[Gemini pricing page](https://ai.google.dev/gemini-api/docs/pricing),
-[Gemini changelog](https://ai.google.dev/gemini-api/docs/changelog), and
-[Gemini 3 developer guide](https://ai.google.dev/gemini-api/docs/gemini-3).
+**Verified 2026-11-18** against Google’s public
+[Gemini API pricing page](https://aistudio.google.com/docs/pricing) (the
+`ai.google.dev/gemini-api/docs/*` pages now redirect there) and the
+[Vertex AI pricing page](https://cloud.google.com/model-garden/pricing).
+Rows record the Standard paid tier.
 
-**September 2026 additions** (verified 2026-09-14 against the Gemini pricing page and
-the [Vertex AI pricing page](https://cloud.google.com/vertex-ai/generative-ai/pricing)):
+**November 2026 changes:**
 
-- `gemini-3.8-flash`, GA 2026-09-02. Google charges an introductory standard paid tier
-  of $0.75/M input, $3.75/M output, and $0.075/M cached input through 2026-12-31, and
-  publishes a standard rate of $1.50/M input, $7.50/M output, and $0.15/M cached input
-  from 2027-01-01. Neither rate has a context-length tier.
-  `actual_price` holds the introductory rate and `list_price` the standard rate, so
-  `list_cost` prices this model at the same standard rate card as the `gemini-3.6-flash`
-  row.
-- Both pages list the same introductory pricing for `gemini-3.6-flash` and
-  `gemini-3.7-flash`. The `gemini-3.6-flash` row records its 2026-07-24 review, and
-  `gemini-3.7-flash` has no row yet.
-
-**July 2026 additions:**
-
-- `gemini-3.6-flash` — GA 2026-07-21. The standard paid tier is $1.50/M input and
-  $7.50/M output, with medium default thinking, 1M input context, and 64K maximum
-  output.
-
-**May 2026 additions:**
-- `gemini-3.5-flash` — GA 2026-05-19 at Google I/O. Positioned by Google as the
-  agentic-Flash tier (shift from “speed” to “autonomy”) and better at tool calling than
-  `gemini-3-flash-preview`. $1.50/$9.00 — 3x the 2.5-Flash rate but Google says
-  intelligence/agentic gains justify it.
-- `gemini-3.1-flash-lite` — GA 2026-05-07 (preview → stable).
-  Same rate card as `gemini-3.1-flash-lite-preview`.
+- `gemini-4-argon` (GA 2026-10-13) and `gemini-4-carbon` (GA 2026-11-10) bill a
+  promotional $2.00 / $10.00 / $0.10 through **2026-11-30** and a standard $4.00 /
+  $20.00 / $0.20 from 2026-12-01. `actual_price` holds the promotional rate and
+  `list_price` the standard rate.
+  After 2026-11-30 the promotional rate no longer applies: the next review should move
+  the standard rate into `actual_price`.
+- `gemini-4-hydrogen` (GA 2026-11-12) bills $1.50 / $7.50 / $0.075 with no promotion.
+  Gemini 4 models support implicit caching only, at 0.05x input, and have no
+  context-length tier.
+  Vertex publishes a Hydrogen cache-write rate effective 2027-01-12, which is not stored
+  yet.
+- `gemini-3.6-flash` corrected: Google charges the same introductory rate as
+  `gemini-3.8-flash` ($0.75 / $3.75 / $0.075 through 2026-12-31, then $1.50 / $7.50 /
+  $0.15). The row previously stored the standard rate as `actual_price`; it now holds
+  the introductory rate in `actual_price` and the standard rate in `list_price`.
+- `gemini-3.5-flash-lite` added at $0.30 / $2.50 / $0.03.
+- `gemini-3.7-flash` added as a historical row from the Vertex AI page, because the
+  Gemini API deprecated it and routes it to `gemini-3.8-flash`.
+- `gemini-3.5-flash` is now priced from the Vertex AI page: the Gemini API deprecated it
+  and routes it to `gemini-3.6-flash`, so the Gemini API page no longer lists it.
+- `gemini-3-pro-preview` and `gemini-3.1-flash-lite-preview` are shut down and no longer
+  on the pricing page; their rows keep the 2026-04-02 rate card unverified.
 
 Current model availability, lifecycle, and route evidence are maintained in
 `model_catalog.py`; this file records pricing evidence only.
 
-This file stores the standard paid tier for the listed model IDs.
-For `gemini-3.1-pro-preview`, `gemini-3.1-pro-preview-customtools`, and
-`gemini-3-pro-preview`, that means the published rate for prompts `<=200K` tokens.
+For `gemini-3.1-pro-preview` and `gemini-3.1-pro-preview-customtools`, the stored rate
+is the published rate for prompts `<=200K` tokens.
+For `gemini-3-flash-preview` and `gemini-3.1-flash-lite`, it is the text, image, and
+video input rate; audio input costs more.
 
-For the cached-input prices Google publishes on the pricing page, the cache-read rate is
-`0.1x` the standard input rate for the models in this file.
+Cached-input prices are `0.1x` the standard input rate for the Gemini 3.x models in this
+file and `0.05x` for Gemini 4. Vertex AI’s global endpoint charges the Gemini API rates;
+its non-global regions charge 10% more.
+Context-cache storage charges are not modelled.
 
 The `gemini-3.1-pro-preview-customtools` model is intentionally omitted from the
 comparison table because it has the same standard rate card as `gemini-3.1-pro-preview`.
 
 The Gemini Developer API free tier is model-specific, not universal.
-As of 2026-04-02, Google’s public docs show free API tiers for `gemini-3-flash-preview`
-and `gemini-3.1-flash-lite-preview`, while `gemini-3.1-pro-preview` does not have a
-Gemini API free tier.
+As of 2026-11-18, Google’s pricing page shows no free tier for `gemini-4-argon` or
+`gemini-4-carbon`, and a free tier for `gemini-4-hydrogen`, `gemini-3.8-flash`,
+`gemini-3.6-flash`, and `gemini-3.5-flash-lite`.
 
 ### DeepSeek (Direct API)
 
-**Verified 2026-05-23** against DeepSeek’s public
+**Verified 2026-11-18** against DeepSeek’s public
 [pricing page](https://api-docs.deepseek.com/quick_start/pricing/).
 
-**May 2026 changes:**
-- The V4-Pro 75%-off promo was **extended** from 2026-05-05 to 2026-05-31 15:59 UTC.
-  Until then, V4-Pro bills at $0.435 input / $0.87 output; after that, list rates resume
-  ($1.74 / $3.48).
-- Effective **2026-04-26 12:15 UTC**, DeepSeek slashed input-cache pricing to ~1/100 of
-  cache-miss (was ~1/10) for V4-Pro and V4-Flash.
-  Updated `cache_read_per_1m` for both models in this file.
-- The `deepseek-chat` (V3.2 non-thinking) and `deepseek-reasoner` (V3.2 thinking)
-  direct-API aliases retire **2026-07-24**. `deepseek-reasoner` also lacks function
-  calling per
-  [DeepSeek’s reasoning-model docs](https://api-docs.deepseek.com/guides/reasoning_model).
-  Both have been removed from this file; new process specs should use
-  `deepseek-v4-flash` or `deepseek-v4-pro` directly.
-  Historical run usage.md files that mention `deepseek-chat` will roll up at $0 cost
-  until the retirement date.
+- **Time-of-day pricing.** DeepSeek charges a peak rate from 01:00 to 04:00 and from
+  06:00 to 10:00 UTC, Monday to Friday, excluding Chinese public holidays.
+  All other hours bill the off-peak rate, half of peak.
+  Usage logs carry no billing window, so this file stores the **peak** rate and computed
+  costs are an upper bound.
+- `deepseek-flash` is the current Flash ID, served by DeepSeek-V4.1-Flash-1017.
+- `deepseek-v4-flash` is a legacy ID that DeepSeek still accepts; its requests are
+  served by DeepSeek-V4.1-Flash-1017 and billed at the `deepseek-flash` price, so the
+  row now carries that rate card.
+  Runs made before that change were billed $0.14 / $0.28 / $0.0028; re-pricing them now
+  overstates them.
+- `deepseek-v4-pro` is served by DeepSeek-V4-Pro-0813. The May 2026 promotional
+  `actual_price` and the $1.74 / $3.48 `list_price` are superseded and were removed.
 
 Cost source: `computed` (no adapter in metaproc self-reports DeepSeek direct cost).
-The V4-Flash rate card ($0.14 / $0.28 / $0.0028) is mirrored on the `deepseek-v3.2-maas`
-Vertex MaaS entry’s `list_price` block — Vertex still hosts the V3.2 MaaS surface, but
-the public direct-API comparison point is now the V4-Flash rollup.
+The `deepseek-v3.2-maas` Vertex MaaS row keeps the V4-Flash direct rate from the
+2026-05-23 review ($0.14 / $0.28 / $0.0028) as its frozen `list_price`, the comparison
+point while that model served.
+
+### Moonshot (Kimi)
+
+**Verified 2026-11-18** against Kimi’s
+[model inference pricing page](https://platform.kimi.ai/docs/pricing/chat).
+`platform.moonshot.ai` now redirects to `platform.kimi.ai`.
+
+- `kimi-k3.1-pro` ($2.00 / $10.00 / $0.20) and `kimi-k3` ($3.00 / $15.00 / $0.30) are
+  the current K3-series models, with flat pricing across the 1,048,576-token context.
+  `cache_write_per_1m` stores the 5-minute TTL write rate; Kimi also publishes a 1-hour
+  rate, noted per row.
+  Neither model is in the model catalog yet.
+- `kimi-k2.6` is unchanged at $0.95 / $4.00 / $0.16. Kimi closed K2-series models to
+  newly registered users on 2026-10-31 and plans to retire them by the end of December
+  2026\.
 
 ### Vertex MaaS (Third-Party Models)
 
-**Verified 2026-04-02** against Google’s public
-[Vertex AI pricing page](https://cloud.google.com/vertex-ai/generative-ai/pricing).
+**Verified 2026-11-18** against Google’s public
+[partner and open model pricing page](https://cloud.google.com/model-garden/partner-models/pricing).
 
-These models are not blanket-free anymore.
-Google now publishes pay-as-you-go token pricing for partner / MaaS models on the Vertex
-AI pricing page.
-
-`glm-5-maas` was the only model in this file with an explicit public no-charge note.
-Google’s pricing page says GLM-5 was available at no charge until **February 19, 2026**,
-so that promotion is expired as of **April 2, 2026**.
+- Vertex retired all six previously listed MaaS models on **2026-10-21**: `glm-5-maas`,
+  `glm-4.7-maas`, `deepseek-v3.2-maas`, `kimi-k2-thinking-maas`,
+  `qwen3-235b-a22b-instruct-2507-maas`, and `qwen3-coder-480b-a35b-instruct-maas`. Their
+  rows are kept as historical rows; the pricing page still lists their rates, which
+  match.
+- Replacements on the global endpoint, both in Preview: `glm-5.2-maas` ($1.40 / $4.40 /
+  $0.14) and `deepseek-v4.1-flash-maas` ($0.30 / $1.20 / $0.03; free until 2026-10-16).
+  Vertex has no Kimi or Qwen chat successor.
+  `deepseek-v4.1-flash-1017-maas` has no published price yet and has no row.
+- Pi reports these models with an org prefix (for example `zai-org/glm-5.2-maas`);
+  `_lookup_model()` strips it, so rows are keyed by the bare ID.
 
 Where we have a separate, independently verifiable direct-vendor public rate, that rate
 is stored in `list_price`. Where we do not, `list_cost` falls back to `actual_price`.
-That is why `glm-5-maas` currently has no separate `list_price` block.
+The two replacement rows have no `list_price`: no current Zhipu rate was verified for
+GLM-5.2, and DeepSeek’s direct API serves a different snapshot under time-of-day
+pricing.
+The historical rows keep the `list_price` blocks from their last reviews, frozen
+and not re-verified.
 
 For Alibaba Qwen models, `list_price` is deployment-mode-specific.
-This file currently uses Alibaba Cloud Model Studio’s **Global deployment mode**
-pricing, and for `qwen3-coder-480b-a35b-instruct-maas` it uses the published **0-32K
-input tier**.
+This file uses Alibaba Cloud Model Studio’s **Global deployment mode** pricing, and for
+`qwen3-coder-480b-a35b-instruct-maas` it uses the published **0-32K input tier**.
 
 ## Google Credits and Promotions
 
@@ -528,7 +948,8 @@ The `metaproc write-usage` command produces `usage.md` files with two cost colum
 | OpenAI | Computed from `actual_price` (no adapter self-reports OpenAI cost today) | Same as actual because OpenAI models in this file do not have a separate `list_price` block |
 | Anthropic (Claude CLI, Pi CLI) | Uses self-reported `cost_usd` from the API response when present; otherwise computes from `actual_price` | Falls back to `actual_price` because Anthropic models in this file do not have a separate `list_price` block |
 | Google (Gemini CLI) | Computed from `actual_price` because Gemini CLI does not report cost | Computed from `list_price` when present (the standard rate after an introductory period), otherwise falls back to `actual_price` |
-| DeepSeek (direct API) | Computed from `actual_price` | Same as actual |
+| DeepSeek (direct API) | Computed from `actual_price` (peak rate) | Same as actual |
+| Moonshot (Kimi API) | Computed from `actual_price` | Same as actual |
 | Vertex MaaS (Pi CLI) | Computed from Vertex AI’s published `actual_price` when the adapter reports no cost | Computed from `list_price` when present, otherwise falls back to `actual_price` |
 
 ### Key logic in usage.py
@@ -538,7 +959,12 @@ The `metaproc write-usage` command produces `usage.md` files with two cost colum
 - `cost_source: computed` means cost is always calculated from the pricing table rates.
 - For `list_cost`, the code always computes from the table: it uses `list_price` if
   present, otherwise it falls back to `actual_price`.
-- Org-prefixed model names (for example `zai-org/glm-5-maas` from Pi CLI) are resolved
+- Prices are looked up by the model ID the usage record carries, which is the served ID
+  where the adapter reports one (Claude `modelUsage`, Gemini `stats.models`, Pi
+  messages) and the requested ID otherwise (codex-cli).
+  The match is exact apart from the org-prefix rule below, so aliases and dated IDs that
+  adapters report need their own rows.
+- Org-prefixed model names (for example `zai-org/glm-5.2-maas` from Pi CLI) are resolved
   by `_lookup_model()` which strips the prefix automatically.
 
 ## Known Issues and Uncertainties
@@ -562,6 +988,8 @@ token counts.
 2. The CLI may report costs using a rate basis or token accounting detail not visible in
    the log summary we ingest.
 3. The token counts extracted from logs may not exactly match what the API billed for.
+4. For `claude-haiku-5-5`, requests over 100,000 prompt tokens bill 5x the stored ≤100K
+   rate card.
 
 **How to verify**:
 
@@ -569,6 +997,14 @@ token counts.
 - Compute expected cost from every token category present in that API response.
 - Check whether Claude CLI’s reported total includes extended-thinking or other hidden
   token buckets.
+
+### NOTE: One rate card per model
+
+The schema stores a single `actual_price` (and optional `list_price`) per model ID. It
+cannot express prompt-length tiers (Haiku 5.5, OpenAI long context, Gemini 3.1 Pro over
+200K), time-of-day pricing (DeepSeek), or a rate that changes on a date.
+Each affected row states which tier it stores and in which direction computed costs can
+be wrong.
 
 ### NOTE: Vendor list prices may still be deployment-mode-specific
 
@@ -584,12 +1020,13 @@ Current choices in this file:
 
 If you want a different vendor deployment mode, update both `list_price` and the note.
 
-### NOTE: GLM-5 direct-vendor list pricing is intentionally omitted
+### NOTE: GLM direct-vendor list pricing is intentionally omitted
 
 The older GLM `list_price` block was removed because it could not be independently
-verified from a current machine-readable public Zhipu pricing source during this review.
-Until that source is available, `list_cost` for `glm-5-maas` falls back to Vertex AI’s
-published public rate, which is exact and source-backed.
+verified from a current machine-readable public Zhipu pricing source.
+Until that source is available, `list_cost` for `glm-5-maas`, `glm-4.7-maas`, and
+`glm-5.2-maas` falls back to Vertex AI’s published public rate, which is exact and
+source-backed.
 
 ## Data Structure
 
@@ -631,7 +1068,8 @@ its rates. Model availability and lifecycle are reviewed separately under
 4. **Recheck Google credit and promotion docs** if this file makes any claims about free
    tiers, startup credits, or partner-model credits.
 5. **Update the YAML frontmatter:** prices, notes, `last_reviewed` per model, and
-   top-level `last_updated`.
+   top-level `last_updated`. Keep rows for models the catalog no longer accepts and
+   label them historical.
 6. **Update the markdown table and prose below** so it matches the frontmatter exactly.
    The table is sorted by output cost descending.
 7. **Run the focused test:**
@@ -643,21 +1081,26 @@ its rates. Model availability and lifecycle are reviewed separately under
 
 - When adding a new model to a process spec.
 - When provider pricing changes.
+- When a promotional or introductory rate stored in this file ends.
 - When Google changes startup-credit or free-tier scope in a way that affects the prose
   above.
 - After a run shows “unknown model” warnings in `usage.md`.
 
 ### Official pricing sources (primary — use these)
 
-- **OpenAI:** <https://openai.com/api/pricing>
+- **OpenAI:** <https://developers.openai.com/api/docs/pricing> (also
+  <https://openai.com/api/pricing>, which may refuse automated access)
 - **Anthropic:** <https://platform.claude.com/docs/en/about-claude/pricing> and
   <https://claude.com/pricing>
-- **Google Gemini:** <https://ai.google.dev/gemini-api/docs/pricing>
-- **Google Gemini 3 developer guide:** <https://ai.google.dev/gemini-api/docs/gemini-3>
-- **Vertex AI:** <https://cloud.google.com/vertex-ai/generative-ai/pricing>
+- **Google Gemini:** <https://aistudio.google.com/docs/pricing>
+- **Google Gemini models and deprecations:** <https://aistudio.google.com/docs/models>
+  and <https://aistudio.google.com/docs/deprecations>
+- **Vertex AI (Gemini):** <https://cloud.google.com/model-garden/pricing>
+- **Vertex AI (partner and open models):**
+  <https://cloud.google.com/model-garden/partner-models/pricing>
 - **DeepSeek:** <https://api-docs.deepseek.com/quick_start/pricing/>
 - **DeepInfra:** <https://deepinfra.com/pricing>
-- **Moonshot / Kimi:** <https://platform.moonshot.ai/>
+- **Moonshot / Kimi:** <https://platform.kimi.ai/docs/pricing/chat>
 - **Alibaba Model Studio:**
   <https://www.alibabacloud.com/help/en/model-studio/model-pricing>
 - **xAI:** <https://docs.x.ai/docs/models>
@@ -676,18 +1119,19 @@ its rates. Model availability and lifecycle are reviewed separately under
 - Google Cloud Free Trial / Free Program:
   <https://docs.cloud.google.com/free/docs/free-cloud-features>
 
-### Cache-pricing formulas by provider
+### Cache-pricing ratios by provider
 
-These formulas are useful sanity checks when filling in `cache_read_per_1m` for a new
-model:
+These ratios are sanity checks when filling in `cache_read_per_1m` for a new model.
+They now vary within provider families, so verify each rate against the provider page.
 
-| Provider | Cache-read formula |
+| Provider | Cache-read ratio to input (rates in this file) |
 | --- | --- |
-| OpenAI | input ÷ 10 (90% discount) for the GPT-5 family; ~50% for the o-series |
-| Anthropic | cache read = input ÷ 10 (90%); 5-minute cache write = input × 1.25; 1-hour cache write = input × 2 |
-| Google | input ÷ 10 (90% discount) for Gemini 2.5 and 3.x; input ÷ 4 (75%) for Gemini 2.0 |
+| OpenAI | 0.05x for GPT-6.1 and GPT-6.2; 0.1x for GPT-6, GPT-5.6, and earlier GPT-5 models |
+| Anthropic | 0.025x for Fable 5.1 and 5.2; 0.05x for Opus 5.5 and Sonnet 5.5; 0.1x otherwise. 5-minute cache write = input × 1.25; 1-hour cache write = input × 2 |
+| Google | 0.05x for Gemini 4 (implicit caching only); 0.1x for Gemini 3.x |
+| DeepSeek | 0.02x for `deepseek-flash`; about 0.033x for `deepseek-v4-pro` |
+| Moonshot | 0.1x for K3 series; about 0.17x for `kimi-k2.6` |
 | xAI | input ÷ 4 (75% discount) for most models |
-| DeepSeek | input ÷ 10 (90% discount) |
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

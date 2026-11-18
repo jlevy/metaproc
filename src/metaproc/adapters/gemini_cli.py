@@ -22,7 +22,7 @@ from metaproc.adapters.cli_version import (
     check_cli_version,
 )
 from metaproc.config.env_vars import MetaprocEnv
-from metaproc.config.model_catalog import resolve_model
+from metaproc.config.model_catalog import removed_model_note, resolve_model
 from metaproc.io import temp_output_dir, write_secret_text
 from metaproc.io.mkdir_lock import mkdir_lock
 from metaproc.settings import (
@@ -30,15 +30,47 @@ from metaproc.settings import (
     GEMINI_DEFAULT_NATIVE_SETTINGS,
     GEMINI_DYNAMIC_MODEL_SETTINGS,
     GEMINI_SESSION_RETENTION_SETTINGS,
+    GEMINI_UNRECORDED_DEFAULT_NATIVE_SETTINGS,
     GEMINI_VALID_MODELS,
 )
 
 log = logging.getLogger(__name__)
 
-PINNED_GEMINI_CLI_VERSION = "0.59.0"
+
+def _unknown_model_reason(adapter: str, value: object) -> str:
+    """Name an unknown model, with its retirement and replacement when recorded."""
+    note = removed_model_note(adapter, str(value))
+    return f"unknown {adapter} model {value!r}" + (f"; {note}" if note else "")
+
+
+PINNED_GEMINI_CLI_VERSION = "0.66.0"
 # The auth hint and the version refusal quote one command, so a pin bump moves both.
 GEMINI_CLI_INSTALL_COMMAND = f"npm install -g @google/gemini-cli@{PINNED_GEMINI_CLI_VERSION}"
 GEMINI_CLI_INSTALL_HINT = f"Install: {GEMINI_CLI_INSTALL_COMMAND}"
+
+
+# Where gemini-cli 0.66.0 sends each moving alias under the auth types Metaproc
+# documents (Gemini API key, Vertex AI, gateway). `flash` and `flash-lite` resolve to
+# one model there (`hasLatestFlashGAAccess` is true for all three). `pro` resolves to
+# gemini-3.1-pro-preview through the default router; the routing strategies `auto`
+# uses pass the custom-tools flag, which with an API key selects
+# gemini-3.1-pro-preview-customtools, so both Pro ids count for either alias. `auto`
+# is routed per turn between that Pro model and the `flash` model. Live on the Gemini
+# API (2026-11-18): flash -> gemini-3.8-flash, flash-lite -> gemini-3.5-flash-lite,
+# pro -> gemini-3.1-pro-preview, auto -> gemini-3.8-flash for a one-command prompt.
+# `result.stats.models` is keyed by the model that answered, never by the alias, so
+# the terminal-result check accepts these in place of the requested name. Login with
+# Google can resolve the aliases to older models; those results are still refused.
+# Review this table whenever PINNED_GEMINI_CLI_VERSION moves.
+_GEMINI_PRO_ALIAS_MODELS = frozenset(
+    {"gemini-3.1-pro-preview", "gemini-3.1-pro-preview-customtools"}
+)
+GEMINI_ALIAS_SERVED_MODELS: dict[str, frozenset[str]] = {
+    "flash": frozenset({"gemini-3.8-flash"}),
+    "flash-lite": frozenset({"gemini-3.5-flash-lite"}),
+    "pro": _GEMINI_PRO_ALIAS_MODELS,
+    "auto": _GEMINI_PRO_ALIAS_MODELS | {"gemini-3.8-flash"},
+}
 
 
 class GeminiCliVersionMismatch(CliVersionMismatch):
@@ -199,13 +231,174 @@ def _materialize_temp_file(*, prefix: str, suffix: str, content: str) -> Path:
     return path
 
 
-def _materialize_workspace_settings(directory: Path, content: str) -> None:
+# The record beside a workspace's `.gemini/settings.json` of the defaults Metaproc wrote
+# into it. A relaunch after a default change compares against these values, so a key
+# Metaproc set is recognized as Metaproc's even after today's default moves on.
+_WORKSPACE_RECORD_NAME = ".metaproc-settings.json"
+_WORKSPACE_RECORD_KEY = "metaproc_default_native_settings"
+
+_ABSENT = object()
+
+
+def _same_json(left: object, right: object) -> bool:
+    """Whether two settings values are the same JSON, with ``_ABSENT`` for a missing key."""
+    if left is _ABSENT or right is _ABSENT:
+        return left is right
+    return json.dumps(left, sort_keys=True) == json.dumps(right, sort_keys=True)
+
+
+def _leaf_paths(settings: dict[str, object], path: tuple[str, ...] = ()) -> set[tuple[str, ...]]:
+    """Return the path of every non-object value, and every empty object, in ``settings``."""
+    paths: set[tuple[str, ...]] = set()
+    for key, value in settings.items():
+        if isinstance(value, dict) and value:
+            paths |= _leaf_paths(cast("dict[str, object]", value), (*path, key))
+        else:
+            paths.add((*path, key))
+    return paths
+
+
+def _value_at(settings: dict[str, object], path: tuple[str, ...]) -> object:
+    value: object = settings
+    for key in path:
+        if not isinstance(value, dict) or key not in value:
+            return _ABSENT
+        value = value[key]
+    return value
+
+
+def _without_paths(
+    settings: dict[str, object], paths: set[tuple[str, ...]], path: tuple[str, ...] = ()
+) -> dict[str, object]:
+    """Return ``settings`` without ``paths``, dropping objects that are left empty."""
+    kept: dict[str, object] = {}
+    for key, value in settings.items():
+        child = (*path, key)
+        if child in paths:
+            continue
+        if isinstance(value, dict):
+            value = _without_paths(cast("dict[str, object]", value), paths, child)
+            if not value:
+                continue
+        kept[key] = value
+    return kept
+
+
+def _differing_paths(
+    old: dict[str, object], new: dict[str, object], path: tuple[str, ...] = ()
+) -> list[str]:
+    """Return the dotted paths where ``old`` and ``new`` hold different values."""
+    differing: list[str] = []
+    for key in sorted(old.keys() | new.keys()):
+        child = (*path, key)
+        before, after = old.get(key, _ABSENT), new.get(key, _ABSENT)
+        # An object one side lacks is reported by the keys inside it.
+        if isinstance(before, dict) and after is _ABSENT:
+            after = {}
+        elif before is _ABSENT and isinstance(after, dict):
+            before = {}
+        if isinstance(before, dict) and isinstance(after, dict):
+            differing.extend(
+                _differing_paths(
+                    cast("dict[str, object]", before), cast("dict[str, object]", after), child
+                )
+            )
+        elif not _same_json(before, after):
+            differing.append(".".join(child))
+    return differing
+
+
+def _classify_workspace_changes(
+    existing: dict[str, object],
+    resolved: dict[str, object],
+    defaults: dict[str, object],
+    written_defaults: tuple[dict[str, object], ...],
+) -> tuple[list[str], list[str]]:
+    """Split how ``existing`` differs from ``resolved`` into Metaproc's keys and others.
+
+    A key is Metaproc's to replace when ``existing`` holds a default Metaproc wrote
+    there (``written_defaults``) and ``resolved`` holds today's default, so only
+    Metaproc's own defaults moved. Any other difference, at a key Metaproc sets or not,
+    came from an operator, another step's ``native_settings`` or a step config change.
+    """
+    owned_paths = _leaf_paths(defaults).union(*(_leaf_paths(row) for row in written_defaults))
+    owned: list[str] = []
+    other: list[str] = []
+    for path in sorted(owned_paths):
+        before, after = _value_at(existing, path), _value_at(resolved, path)
+        if _same_json(before, after):
+            continue
+        dotted = ".".join(path)
+        if _same_json(after, _value_at(defaults, path)) and any(
+            _same_json(before, _value_at(row, path)) for row in written_defaults
+        ):
+            owned.append(dotted)
+        else:
+            other.append(dotted)
+    other.extend(
+        _differing_paths(
+            _without_paths(existing, owned_paths), _without_paths(resolved, owned_paths)
+        )
+    )
+    return owned, sorted(other)
+
+
+def _written_defaults(record_path: Path) -> tuple[dict[str, object], ...]:
+    """Return the defaults Metaproc recorded writing beside workspace settings.
+
+    A file from a release that kept no record is checked against the defaults those
+    releases wrote. An unreadable record proves nothing, so it is treated the same way.
+    """
+    if record_path.is_symlink():
+        log.warning("Ignoring the Metaproc settings record %s, a symlink", record_path)
+        return GEMINI_UNRECORDED_DEFAULT_NATIVE_SETTINGS
+    try:
+        text = record_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return GEMINI_UNRECORDED_DEFAULT_NATIVE_SETTINGS
+    except OSError as exc:
+        log.warning("Ignoring the unreadable Metaproc settings record %s: %s", record_path, exc)
+        return GEMINI_UNRECORDED_DEFAULT_NATIVE_SETTINGS
+    try:
+        record: object = json.loads(text)
+    except json.JSONDecodeError:
+        record = None
+    defaults = (
+        cast("dict[str, object]", record).get(_WORKSPACE_RECORD_KEY)
+        if isinstance(record, dict)
+        else None
+    )
+    if isinstance(defaults, dict):
+        return (cast("dict[str, object]", defaults),)
+    log.warning("Ignoring the malformed Metaproc settings record %s", record_path)
+    return GEMINI_UNRECORDED_DEFAULT_NATIVE_SETTINGS
+
+
+def _workspace_settings_refusal(settings_path: Path, detail: str) -> ValueError:
+    return ValueError(
+        f"Refusing to replace existing Gemini workspace settings: {settings_path} {detail}. "
+        "Metaproc replaces only the defaults it wrote there itself. Move settings the step "
+        "needs into its native_settings, delete the file so the next launch writes it "
+        "afresh, or give the step a working_directory of its own"
+    )
+
+
+def _materialize_workspace_settings(
+    directory: Path, content: str, defaults: dict[str, object]
+) -> None:
     """Publish native settings without overwriting operator-authored configuration.
 
-    A trusted workspace's settings carry no ownership rule, unlike system settings.
+    A trusted workspace's settings carry no ownership rule, unlike system settings. An
+    existing file with the same settings is left as it is, so retries use the same bytes.
+    One that differs only where it still holds a default Metaproc wrote, because a
+    release changed those defaults, is replaced with a warning naming the keys; any
+    other difference is refused. ``defaults`` are recorded beside the file so a later
+    default change is recognized the same way.
     """
     settings_dir = directory / ".gemini"
     settings_path = settings_dir / "settings.json"
+    record_path = settings_dir / _WORKSPACE_RECORD_NAME
+    record = json.dumps({_WORKSPACE_RECORD_KEY: defaults}, sort_keys=True, separators=(",", ":"))
     if settings_dir.is_symlink():
         raise ValueError("Gemini workspace settings directory must not be a symlink")
     settings_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -213,10 +406,47 @@ def _materialize_workspace_settings(directory: Path, content: str) -> None:
         if settings_path.is_symlink():
             raise ValueError("Gemini workspace settings file must not be a symlink")
         if settings_path.exists():
-            if json.loads(settings_path.read_text(encoding="utf-8")) != json.loads(content):
-                raise ValueError(
-                    f"Refusing to replace existing Gemini workspace settings: {settings_path}"
+            text = settings_path.read_text(encoding="utf-8")
+            try:
+                existing: object = json.loads(text)
+            except json.JSONDecodeError as exc:
+                raise _workspace_settings_refusal(
+                    settings_path, "is not plain JSON, so Metaproc did not write it"
+                ) from exc
+            if not isinstance(existing, dict):
+                raise _workspace_settings_refusal(
+                    settings_path, "is not a JSON object, so Metaproc did not write it"
                 )
+            resolved = cast("dict[str, object]", json.loads(content))
+            existing_settings = cast("dict[str, object]", existing)
+            if not _same_json(existing_settings, resolved):
+                owned, other = _classify_workspace_changes(
+                    existing_settings, resolved, defaults, _written_defaults(record_path)
+                )
+                if other:
+                    raise _workspace_settings_refusal(
+                        settings_path,
+                        f"differs from this step's native settings at {', '.join(other)}",
+                    )
+                if owned:
+                    # Narrow the window in which a writer that ignores the lock edits
+                    # the file between the comparison and the replacement.
+                    if (
+                        settings_path.is_symlink()
+                        or settings_path.read_text(encoding="utf-8") != text
+                    ):
+                        raise _workspace_settings_refusal(
+                            settings_path, "changed while Metaproc was comparing it"
+                        )
+                    log.warning(
+                        "Replacing Metaproc defaults in Gemini workspace settings %s: %s "
+                        "still held the value Metaproc wrote before its defaults changed; "
+                        "the file's other keys are kept",
+                        settings_path,
+                        ", ".join(owned),
+                    )
+                    write_secret_text(settings_path, content)
+            _record_workspace_defaults(record_path, record)
             return
         with temp_output_dir(
             dir=settings_dir, prefix=".metaproc-settings-", always_clean=True
@@ -228,9 +458,34 @@ def _materialize_workspace_settings(directory: Path, content: str) -> None:
                 # complete owner-only bytes without replacing a file it just created.
                 settings_path.hardlink_to(staged_settings)
             except FileExistsError as exc:
-                raise ValueError(
-                    f"Refusing to replace existing Gemini workspace settings: {settings_path}"
+                raise _workspace_settings_refusal(
+                    settings_path, "appeared while Metaproc was writing it"
                 ) from exc
+        _record_workspace_defaults(record_path, record)
+
+
+def _record_workspace_defaults(record_path: Path, record: str) -> None:
+    """Record the defaults in workspace settings Metaproc wrote or confirmed, if changed.
+
+    The settings are already in place, so a record that cannot be written costs only
+    the recognition of these defaults after a later change, and the launch goes on.
+    """
+    try:
+        if not record_path.is_symlink() and record_path.read_text(encoding="utf-8") == record:
+            return
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        log.warning("Cannot read the Metaproc settings record %s: %s", record_path, exc)
+    try:
+        write_secret_text(record_path, record)
+    except OSError as exc:
+        log.warning(
+            "Cannot record the Metaproc defaults written to Gemini workspace settings in "
+            "%s, so a later default change there will be refused rather than replaced: %s",
+            record_path,
+            exc,
+        )
 
 
 def _copy_user_template(source_fd: int, destination: Path) -> None:
@@ -651,7 +906,7 @@ class GeminiCliAdapter:
                 rejections.append(
                     ConfigRejection(
                         key=key,
-                        reason=f"unknown gemini-cli model {value!r}",
+                        reason=_unknown_model_reason("gemini-cli", value),
                     )
                 )
         scope = native_settings_scope(merged_config)
@@ -714,13 +969,14 @@ class GeminiCliAdapter:
         # the defaults so it survives even a caller that passes an empty or
         # partial `general` block.
         override = merged_config.get("native_settings")
-        native_settings: dict[str, object] = _deep_merge_settings(
+        defaults = _deep_merge_settings(
             _deep_merge_settings(
                 GEMINI_SESSION_RETENTION_SETTINGS,
                 GEMINI_DYNAMIC_MODEL_SETTINGS,
             ),
             GEMINI_DEFAULT_NATIVE_SETTINGS,
         )
+        native_settings: dict[str, object] = defaults
         if isinstance(override, dict):
             native_settings = _deep_merge_settings(
                 native_settings,
@@ -732,7 +988,9 @@ class GeminiCliAdapter:
             if directory is None:
                 raise ValueError("native_settings_scope 'workspace' requires working_directory")
             _materialize_workspace_settings(
-                directory, json.dumps(native_settings, sort_keys=True, separators=(",", ":"))
+                directory,
+                json.dumps(native_settings, sort_keys=True, separators=(",", ":")),
+                defaults,
             )
         elif scope == "user":
             # Popen with no cwd inherits this process's working directory.
@@ -786,7 +1044,13 @@ class GeminiCliAdapter:
         event: dict[str, object],
         merged_config: dict[str, object],
     ) -> str | None:
-        """Reject a successful result the requested model did not bill tokens for."""
+        """Reject a successful result the requested model did not bill tokens for.
+
+        A concrete id must bill under exactly that id. A moving alias bills under the
+        model the pinned CLI resolved it to, so it passes when one of that alias's
+        `GEMINI_ALIAS_SERVED_MODELS` billed; anything else, such as a quota fallback
+        from `pro` to a Flash model, is refused like a substitution.
+        """
         if event.get("status") != "success":
             return None
 
@@ -794,11 +1058,20 @@ class GeminiCliAdapter:
         served = served_models(event)
         if expected in served:
             return None
+        alias_targets = GEMINI_ALIAS_SERVED_MODELS.get(expected)
+        if alias_targets is not None and not alias_targets.isdisjoint(served):
+            return None
 
         reported = format_served_models(served) if served else "no model that billed tokens"
+        requested = f"requested model {expected!r},"
+        if alias_targets is not None:
+            requested = (
+                f"requested alias {expected!r}, which gemini-cli {PINNED_GEMINI_CLI_VERSION} "
+                f"serves as {' or '.join(sorted(alias_targets))},"
+            )
         return (
             "Gemini terminal result contract violation: "
-            f"requested model {expected!r}, but result.stats.models reported {reported}. "
+            f"{requested} but result.stats.models reported {reported}. "
             "Refusing the result because model substitution makes its provenance invalid."
         )
 

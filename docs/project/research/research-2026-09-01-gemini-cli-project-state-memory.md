@@ -9,7 +9,9 @@ status: Complete
 **Date:** 2026-09-01
 
 **Status:** Cause reproduced on versions 0.40.1 and 0.55.1 and confirmed in 0.58.0
-source; later versions require revalidation
+source; the 2026-11-18 source review found the same unbounded scan in 0.66.0, the
+current pin, with the `general.sessionRetention.enabled` early exit still ahead of it.
+Memory measurements were not repeated on 0.66.0.
 
 ## Overview
 
@@ -176,6 +178,11 @@ The relevant startup, cleanup, enumeration, and recording files were unchanged b
 Later releases had improved corrupt-session handling, resumability filtering, JSONL
 migration, subagent cleanup, and session-linked tool-output cleanup.
 They had not introduced bounded enumeration or a metadata index at the reviewed commit.
+At `v0.66.0` (`97041320`) `getAllSessionFiles` in `sessionUtils.ts` still loads every
+session file through an unbounded `Promise.all` (metadata-only loads), and
+`cleanupExpiredSessions` in `sessionCleanup.ts` still returns before enumerating when
+retention is disabled, so the Metaproc setting remains both necessary and sufficient to
+prevent the scan ([refresh record](research-2026-11-18-model-and-harness-refresh.md)).
 
 ## Working Directory and the Three Meanings of Memory
 

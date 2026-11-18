@@ -7,9 +7,11 @@ resource hints without encoding workflow-specific concepts.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from datetime import date
 from importlib.resources import files
 from pathlib import Path
-from typing import ClassVar, Literal
+from typing import ClassVar, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -108,7 +110,7 @@ class ExecutionProfile(BaseModel):
 class ExecutionProfileSource(BaseModel):
     """Where a profile definition came from."""
 
-    kind: Literal["built-in", "repo", "repo-local", "explicit"]
+    kind: Literal["built-in", "repo", "repo-local", "explicit", "recorded"]
     path: str | None = None
 
 
@@ -118,6 +120,156 @@ class ResolvedExecutionProfile(BaseModel):
     name: str
     source: ExecutionProfileSource
     profile: ExecutionProfile
+
+
+class RemovedExecutionProfile(BaseModel):
+    """A built-in profile Metaproc no longer ships, kept so its runs can continue.
+
+    ``definition`` is the profile as the last release that shipped it defined it, so a
+    run that recorded the profile rebuilds the same plan and step fingerprints on resume
+    (``recorded_execution_profiles``). ``successor`` is the built-in to move to.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
+
+    removed_on: date
+    reason: str
+    successor: str
+    definition: ExecutionProfile
+
+
+def _removed_profile(
+    *, reason: str, successor: str, definition: dict[str, object]
+) -> RemovedExecutionProfile:
+    return RemovedExecutionProfile(
+        removed_on=date(2026, 11, 18),
+        reason=reason,
+        successor=successor,
+        definition=ExecutionProfile.model_validate(definition),
+    )
+
+
+_GEMINI_CLI_CONFIG = {"permission_mode": "bypassPermissions", "output_format": "stream-json"}
+_GEMINI_CLI_RESOURCES = {"estimated_process_rss_mb": 250, "initial_memory_budget_fraction": 0.5}
+_PI_RESOURCES = {"estimated_process_rss_mb": 500, "initial_memory_budget_fraction": 0.25}
+
+REMOVED_EXECUTION_PROFILES: Mapping[str, RemovedExecutionProfile] = {
+    "gemini-flash-36": _removed_profile(
+        reason="Vertex AI retires gemini-3.6-flash on 2026-11-19",
+        successor="gemini-hydrogen",
+        definition={
+            "status": "tested",
+            "adapter": "gemini-cli",
+            "provider": "google-vertex",
+            "model": "gemini-3.6-flash",
+            "resources": _GEMINI_CLI_RESOURCES,
+            "config": {"model": "gemini-3.6-flash", **_GEMINI_CLI_CONFIG},
+        },
+    ),
+    "gemini-flash": _removed_profile(
+        reason="its model gemini-3.5-flash was dropped from the model catalog",
+        successor="gemini-hydrogen",
+        definition={
+            "status": "experimental",
+            "adapter": "gemini-cli",
+            "provider": "google-vertex",
+            "model": "gemini-3.5-flash",
+            "resources": _GEMINI_CLI_RESOURCES,
+            "config": {"model": "gemini-3.5-flash", **_GEMINI_CLI_CONFIG},
+        },
+    ),
+    "pi-gemini-flash": _removed_profile(
+        reason="its model gemini-3.5-flash was dropped from the model catalog",
+        successor="pi-gemini-hydrogen",
+        definition={
+            "status": "experimental",
+            "adapter": "pi-cli",
+            "provider": "google-vertex",
+            "model": "gemini-3.5-flash",
+            "resources": _PI_RESOURCES,
+            "config": {
+                "provider": "google-vertex",
+                "model": "gemini-3.5-flash",
+                "no_session_persistence": True,
+            },
+        },
+    ),
+    "pi-glm5": _removed_profile(
+        reason="Vertex AI retired its model glm-5-maas on 2026-10-21",
+        successor="pi-glm52",
+        definition={
+            "status": "tested",
+            "adapter": "pi-cli",
+            "provider": "vertex-maas",
+            "model": "glm-5-maas",
+            "thinking": "high",
+            "resources": _PI_RESOURCES,
+            "config": {
+                "provider": "vertex-maas",
+                "model": "glm-5-maas",
+                "no_session_persistence": True,
+            },
+        },
+    ),
+}
+"""Built-in execution profiles removed from ``execution-profiles.default.yaml``.
+
+A fresh launch that names one is refused with its successor (``removed_profile_note``).
+A resume of a run whose ``run-config.yaml`` records one rebuilds it from ``definition``
+and continues with a warning. The ``resolved_profiles`` snapshot a run records holds
+the adapter and the first step's merged config but not the profile's resources, which
+are part of every step fingerprint, so it alone cannot rebuild the same plan.
+"""
+
+
+def removed_profile_note(name: str) -> str | None:
+    """Return why the built-in profile *name* was removed and its successor, if it was."""
+    removed = REMOVED_EXECUTION_PROFILES.get(name)
+    if removed is None:
+        return None
+    return (
+        f"execution profile {name!r} was removed from Metaproc's built-in profiles on "
+        f"{removed.removed_on.isoformat()} ({removed.reason}); its successor is "
+        f"{removed.successor!r}"
+    )
+
+
+def recorded_profile_names(run_config: Mapping[object, object]) -> set[str]:
+    """Return every execution-profile name a ``run-config.yaml`` mapping records.
+
+    The run profile (``execution_profile``), the ``--step-variant`` values, and the
+    names in the ``resolved_profiles`` snapshot.
+    """
+    names: set[str] = set()
+    profile = run_config.get("execution_profile")
+    if isinstance(profile, str) and profile:
+        names.add(profile)
+    step_variants = run_config.get("step_variants")
+    if isinstance(step_variants, Mapping):
+        values = cast("Mapping[object, object]", step_variants).values()
+        names.update(value for value in values if isinstance(value, str) and value)
+    snapshot = run_config.get("resolved_profiles")
+    if isinstance(snapshot, list):
+        for entry in cast("list[object]", snapshot):
+            if isinstance(entry, Mapping):
+                name = cast("Mapping[object, object]", entry).get("name")
+                if isinstance(name, str) and name:
+                    names.add(name)
+    return names
+
+
+def recorded_execution_profiles(run_config: Mapping[object, object]) -> dict[str, ExecutionProfile]:
+    """Return the removed built-in profiles a run records, as it was created with them.
+
+    A resume and ``metaproc status`` pass these to ``ExecutionProfileRegistry.load`` as
+    its lowest-precedence layer: a name the registry still defines resolves as it does
+    for any launch, and a removed one rebuilds from its former definition.
+    """
+    return {
+        name: REMOVED_EXECUTION_PROFILES[name].definition
+        for name in sorted(recorded_profile_names(run_config))
+        if name in REMOVED_EXECUTION_PROFILES
+    }
 
 
 class _RegistryEntry(BaseModel):
@@ -138,9 +290,20 @@ class ExecutionProfileRegistry(BaseModel):
         repo_root: Path | None = None,
         explicit_files: list[Path] | tuple[Path, ...] = (),
         include_builtins: bool = True,
+        recorded_profiles: Mapping[str, ExecutionProfile] | None = None,
     ) -> ExecutionProfileRegistry:
-        """Load profile sources in increasing precedence order."""
-        entries: dict[str, _RegistryEntry] = {}
+        """Load profile sources in increasing precedence order.
+
+        *recorded_profiles* are profiles a resumed run recorded that no source defines any
+        longer (``recorded_execution_profiles``). They are the lowest layer, with source
+        kind ``recorded``, so every file source overrides them.
+        """
+        entries: dict[str, _RegistryEntry] = {
+            name: _RegistryEntry(
+                name=name, source=ExecutionProfileSource(kind="recorded"), profile=profile
+            )
+            for name, profile in (recorded_profiles or {}).items()
+        }
         if include_builtins:
             cls._load_builtin(entries)
         if repo_root is not None:
@@ -240,6 +403,8 @@ class ExecutionProfileRegistry(BaseModel):
         if entry is None:
             available = ", ".join(self.names) or "<none>"
             msg = f"unknown execution profile: {name!r} (available: {available})"
+            if note := removed_profile_note(name):
+                msg += f"; {note}"
             raise ValueError(msg)
         resolved = self._resolve_entry(entry, stack=[])
         if config_overrides:

@@ -193,7 +193,7 @@ class TestAuthCheckCLI:
                 side_effect=lambda adapter_type: [(True, f"{adapter_type} ok")],
             ) as mock_check_adapter,
         ):
-            result = runner.invoke(app, ["auth-check", "--variant", "pi-glm5"])
+            result = runner.invoke(app, ["auth-check", "--variant", "pi-glm52"])
 
         assert result.exit_code == 0
         assert mock_check_adapter.call_count == 1
@@ -531,8 +531,9 @@ class TestRunLiveCheckAssertModel:
             )
 
         assert all(ok for ok, _ in results), results
+        # Codex names no served model, so the assertion reports the requested one.
         assert any(
-            "observed model" in msg and "gpt-5.4" in msg and "gpt-5" in msg for _, msg in results
+            "requested model 'gpt-5.4'" in msg and "config preamble" in msg for _, msg in results
         )
 
     def test_assert_model_substring_match(self):
@@ -608,30 +609,36 @@ class TestLiveCheckUsesTheProfileConfig:
     """`--variant <profile>` must probe with the profile's own adapter config.
 
     A run seeds each step's config from the profile, and Gemini's
-    `native_settings` decide whether it rewrites a `*flash` id. A probe that
+    `native_settings` decide whether it rewrites an explicit id. A probe that
     ignored them could pass a profile whose every run is then refused.
     """
 
-    _PROFILE = "gemini-flash-probe"
+    _PROFILE = "gemini-pro-probe"
 
     @staticmethod
     def _write_profile(tmp_path: Path, config_lines: str) -> Path:
         profile_file = tmp_path / "profiles.yaml"
         profile_file.write_text(
             "profiles:\n"
-            "  gemini-flash-probe:\n"
+            "  gemini-pro-probe:\n"
             "    adapter: gemini-cli\n"
-            "    model: gemini-3.6-flash\n"
+            "    model: gemini-3.1-pro-preview\n"
             "    config:\n"
-            "      model: gemini-3.6-flash\n" + config_lines,
+            "      model: gemini-3.1-pro-preview\n" + config_lines,
             encoding="utf-8",
         )
         return profile_file
 
     @staticmethod
     def _stub_gemini(calls: list[dict[str, object]]):
-        """Stand in for gemini-cli 0.59.0's routing: with dynamic model configuration
-        off, an id ending in `flash` is answered by `gemini-3.5-flash`.
+        """Stand in for gemini-cli 0.66.0's routing under API-key auth.
+
+        Both resolution paths send gemini-3.5-flash and gemini-3-flash as
+        gemini-3.8-flash and gemini-3.1-flash-lite as gemini-3.5-flash-lite. With
+        dynamic model configuration on, an explicit gemini-3.1-pro-preview is also
+        answered by gemini-3.1-pro-preview-customtools (observed live 2026-11-18). A
+        `modelConfigs.overrides` entry that matches the requested id and names another
+        model sends the request there.
         """
 
         def run(cmd: list[str], **kwargs: object) -> MagicMock:
@@ -648,7 +655,18 @@ class TestLiveCheckUsesTheProfileConfig:
             dynamic = settings.get("experimental", {}).get("dynamicModelConfiguration") is True
             model = cmd[cmd.index("-m") + 1]
             output_format = cmd[cmd.index("--output-format") + 1]
-            served = model if dynamic or not model.endswith("flash") else "gemini-3.5-flash"
+            rewrites = {
+                "gemini-3.5-flash": "gemini-3.8-flash",
+                "gemini-3-flash": "gemini-3.8-flash",
+                "gemini-3.1-flash-lite": "gemini-3.5-flash-lite",
+            }
+            if dynamic:
+                rewrites["gemini-3.1-pro-preview"] = "gemini-3.1-pro-preview-customtools"
+            for override in settings.get("modelConfigs", {}).get("overrides", []):
+                target = override.get("modelConfig", {}).get("model")
+                if override.get("match") == {"model": model} and target:
+                    rewrites[model] = target
+            served = rewrites.get(model, model)
             calls.append({"dynamic": dynamic, "output_format": output_format})
             proc = MagicMock()
             proc.returncode = 0
@@ -710,17 +728,19 @@ class TestLiveCheckUsesTheProfileConfig:
                     "--profile-file",
                     str(profile_file),
                     "--assert-model",
-                    "gemini-3.6-flash",
+                    "gemini-3.1-pro-preview",
                 ],
             )
 
     def test_profile_native_settings_reach_the_probe(self, tmp_path: Path) -> None:
-        """A profile that turns dynamic model configuration off fails the probe."""
+        """A profile whose native settings reroute the model fails the probe."""
         profile_file = self._write_profile(
             tmp_path,
             "      native_settings:\n"
-            "        experimental:\n"
-            "          dynamicModelConfiguration: false\n",
+            "        modelConfigs:\n"
+            "          overrides:\n"
+            "            - match: {model: gemini-3.1-pro-preview}\n"
+            "              modelConfig: {model: gemini-3.8-flash}\n",
         )
         calls: list[dict[str, object]] = []
 
@@ -729,9 +749,9 @@ class TestLiveCheckUsesTheProfileConfig:
         assert calls == [{"dynamic": False, "output_format": "stream-json"}]
         assert result.exit_code == 1, result.output
         assert (
-            "no served model matches expected 'gemini-3.6-flash' (requested "
-            "'gemini-3.6-flash') — the CLI answered with a different model; billed: "
-            "gemini-3.5-flash (10 tokens)"
+            "no served model matches expected 'gemini-3.1-pro-preview' (requested "
+            "'gemini-3.1-pro-preview') — the CLI answered with a different model; billed: "
+            "gemini-3.8-flash (10 tokens)"
         ) in result.output
 
     def test_workspace_native_settings_reach_the_probe(self, tmp_path: Path) -> None:
@@ -741,8 +761,10 @@ class TestLiveCheckUsesTheProfileConfig:
             "      native_settings_scope: workspace\n"
             f"      working_directory: {json.dumps(str(workspace))}\n"
             "      native_settings:\n"
-            "        experimental:\n"
-            "          dynamicModelConfiguration: false\n",
+            "        modelConfigs:\n"
+            "          overrides:\n"
+            "            - match: {model: gemini-3.1-pro-preview}\n"
+            "              modelConfig: {model: gemini-3.8-flash}\n",
         )
         calls: list[dict[str, object]] = []
 
@@ -756,17 +778,17 @@ class TestLiveCheckUsesTheProfileConfig:
         assert "no served model matches expected" in result.output
 
     def test_a_profile_without_the_override_keeps_metaproc_settings(self, tmp_path: Path) -> None:
-        """The control: the same stub serves the request when the flag stays on."""
+        """The control: the same stub serves the request under Metaproc's settings."""
         profile_file = self._write_profile(tmp_path, "")
         calls: list[dict[str, object]] = []
 
         result = self._invoke(profile_file, calls)
 
-        assert calls == [{"dynamic": True, "output_format": "stream-json"}]
+        assert calls == [{"dynamic": False, "output_format": "stream-json"}]
         assert result.exit_code == 0, result.output
-        assert "served model 'gemini-3.6-flash' matches expected 'gemini-3.6-flash'" in (
-            result.output
-        )
+        assert (
+            "served model 'gemini-3.1-pro-preview' matches expected 'gemini-3.1-pro-preview'"
+        ) in result.output
 
     def test_assert_model_overrides_a_profile_text_format(self, tmp_path: Path) -> None:
         """Text output carries no terminal event, so the probe forces stream-json."""
@@ -775,7 +797,7 @@ class TestLiveCheckUsesTheProfileConfig:
 
         result = self._invoke(profile_file, calls)
 
-        assert calls == [{"dynamic": True, "output_format": "stream-json"}]
+        assert calls == [{"dynamic": False, "output_format": "stream-json"}]
         assert result.exit_code == 0, result.output
 
     def test_a_refused_profile_is_reported_as_a_failed_check(self, tmp_path: Path) -> None:
@@ -790,7 +812,7 @@ class TestLiveCheckUsesTheProfileConfig:
         )
         assert calls == []
         assert result.exit_code == 1, result.output
-        assert "[-] gemini-cli (gemini-3.6-flash): invalid adapter configuration:" in (
+        assert "[-] gemini-cli (gemini-3.1-pro-preview): invalid adapter configuration:" in (
             result.output
         )
         assert "owned by root" in result.output
@@ -990,25 +1012,28 @@ class TestExtractObservedModel:
         assert _extract_observed_model("unknown-adapter", stdout) is None
 
 
-# Captured from gemini-cli 0.59.0 on Vertex AI with a trivial prompt. The `init`
-# event echoes the requested id; `result.stats.models` names the model that
-# served and billed the call.
+# Captured from gemini-cli 0.66.0 on the Gemini API (API key) on 2026-11-18, one
+# run_shell_command call each; tool events are elided. The `init` event echoes the
+# requested id; `result.stats.models` names the model that served and billed the
+# call. 0.66.0 sends an explicit gemini-3.5-flash as gemini-3.8-flash.
 _GEMINI_REWRITTEN_STDOUT = (
-    '{"type":"init","timestamp":"2026-09-22T18:49:34.286Z","session_id":"b1f2382f",'
-    '"model":"gemini-3.6-flash"}\n'
-    '{"type":"message","role":"assistant","content":"OK","delta":true}\n'
-    '{"type":"result","timestamp":"2026-09-22T18:49:38.348Z","status":"success",'
-    '"stats":{"total_tokens":12091,"tool_calls":0,'
-    '"models":{"gemini-3.5-flash":{"total_tokens":12091,"input_tokens":11679}}}}\n'
+    '{"type":"init","timestamp":"2026-11-18T02:42:31.190Z",'
+    '"session_id":"1e8de3fe-9a2d-441a-aecd-ece503000f96","model":"gemini-3.5-flash"}\n'
+    '{"type":"message","role":"assistant","content":"probe-ok","delta":true}\n'
+    '{"type":"result","timestamp":"2026-11-18T02:42:45.455Z","status":"success",'
+    '"stats":{"total_tokens":20439,"input_tokens":20050,"output_tokens":38,"tool_calls":1,'
+    '"models":{"gemini-3.8-flash":{"total_tokens":20439,"input_tokens":20050,'
+    '"output_tokens":38}}}}\n'
 )
 
 _GEMINI_HONORED_STDOUT = (
-    '{"type":"init","timestamp":"2026-09-22T18:49:55.567Z","session_id":"42df203c",'
-    '"model":"gemini-3.6-flash"}\n'
-    '{"type":"message","role":"assistant","content":"OK","delta":true}\n'
-    '{"type":"result","timestamp":"2026-09-22T18:49:58.234Z","status":"success",'
-    '"stats":{"total_tokens":11815,"tool_calls":0,'
-    '"models":{"gemini-3.6-flash":{"total_tokens":11815,"input_tokens":11678}}}}\n'
+    '{"type":"init","timestamp":"2026-11-18T02:38:44.458Z",'
+    '"session_id":"39918a2b-caf1-4303-9c4c-6f7ad83e1c12","model":"gemini-4-argon"}\n'
+    '{"type":"message","role":"assistant","content":"probe-ok","delta":true}\n'
+    '{"type":"result","timestamp":"2026-11-18T02:39:03.706Z","status":"success",'
+    '"stats":{"total_tokens":18940,"input_tokens":18716,"output_tokens":43,"tool_calls":1,'
+    '"models":{"gemini-4-argon":{"total_tokens":18940,"input_tokens":18716,'
+    '"output_tokens":43}}}}\n'
 )
 
 
@@ -1040,7 +1065,7 @@ class TestExtractServedModels:
 
     def test_gemini_result_event_yields_served_model(self):
         assert _extract_served_models("gemini-cli", _GEMINI_REWRITTEN_STDOUT) == {
-            "gemini-3.5-flash": 12091
+            "gemini-3.8-flash": 20439
         }
 
     def test_gemini_reports_every_model_that_billed(self):
@@ -1086,19 +1111,19 @@ class TestEvaluateModelAssertion:
         beside the model that billed, so the rewrite is visible in one line.
         """
         ok, msg = _evaluate_model_assertion(
-            "gemini-cli", _GEMINI_REWRITTEN_STDOUT, "gemini-3.6-flash", "gemini-cli"
+            "gemini-cli", _GEMINI_REWRITTEN_STDOUT, "gemini-3.5-flash", "gemini-cli"
         )
         assert not ok
-        assert "(requested 'gemini-3.6-flash')" in msg
-        assert "gemini-3.5-flash" in msg
+        assert "(requested 'gemini-3.5-flash')" in msg
+        assert "gemini-3.8-flash (20439 tokens)" in msg
         assert "answered with a different model" in msg
 
     def test_gemini_honored_request_passes_the_assertion(self):
         ok, msg = _evaluate_model_assertion(
-            "gemini-cli", _GEMINI_HONORED_STDOUT, "gemini-3.6-flash", "gemini-cli"
+            "gemini-cli", _GEMINI_HONORED_STDOUT, "gemini-4-argon", "gemini-cli"
         )
         assert ok
-        assert msg.startswith("gemini-cli: served model 'gemini-3.6-flash' matches")
+        assert msg.startswith("gemini-cli: served model 'gemini-4-argon' matches")
 
     def test_gemini_zero_token_requested_model_beside_a_fallback_fails(self):
         """The requested id is in `stats.models`, but only the fallback billed."""
@@ -1354,3 +1379,70 @@ class TestLiveCheckLauncher:
         assert launcher.call_args.args[0][:3] == ["fake-agent", "-p", "x"]
         assert launcher.call_args.kwargs["timeout"] == 5
         plain_run.assert_not_called()
+
+
+def _gemini_result(requested: str, served: dict[str, int]) -> str:
+    models = {name: {"total_tokens": tokens} for name, tokens in served.items()}
+    result = {"type": "result", "status": "success", "stats": {"models": models}}
+    return json.dumps({"type": "init", "model": requested}) + "\n" + json.dumps(result) + "\n"
+
+
+class TestGeminiAssertModelIsExact:
+    """`--assert-model` for gemini-cli matches served ids exactly, with alias support.
+
+    A substring match passed `gemini-3.1-pro-preview` when its `-customtools`
+    variant served, and `auto` could never match any served id.
+    """
+
+    def test_prefix_of_the_served_id_fails(self) -> None:
+        stdout = _gemini_result(
+            "gemini-3.1-pro-preview", {"gemini-3.1-pro-preview-customtools": 900}
+        )
+        ok, msg = _evaluate_model_assertion(
+            "gemini-cli", stdout, "gemini-3.1-pro-preview", "gemini-cli"
+        )
+        assert not ok
+        assert "gemini-3.1-pro-preview-customtools (900 tokens)" in msg
+
+    def test_exact_served_id_passes(self) -> None:
+        stdout = _gemini_result(
+            "gemini-3.1-pro-preview-customtools", {"gemini-3.1-pro-preview-customtools": 900}
+        )
+        ok, msg = _evaluate_model_assertion(
+            "gemini-cli", stdout, "gemini-3.1-pro-preview-customtools", "gemini-cli"
+        )
+        assert ok, msg
+
+    def test_substring_of_the_served_id_fails(self) -> None:
+        ok, _ = _evaluate_model_assertion(
+            "gemini-cli", _GEMINI_HONORED_STDOUT, "gemini-4", "gemini-cli"
+        )
+        assert not ok
+
+    @pytest.mark.parametrize(
+        ("alias", "served"),
+        [
+            ("auto", "gemini-3.8-flash"),
+            ("auto", "gemini-3.1-pro-preview-customtools"),
+            ("pro", "gemini-3.1-pro-preview"),
+            ("flash", "gemini-3.8-flash"),
+            ("flash-lite", "gemini-3.5-flash-lite"),
+        ],
+    )
+    def test_alias_passes_when_one_of_its_models_served(self, alias: str, served: str) -> None:
+        stdout = _gemini_result(alias, {served: 500})
+        ok, msg = _evaluate_model_assertion("gemini-cli", stdout, alias, "gemini-cli")
+        assert ok, msg
+        assert f"served model {served!r} matches expected {alias!r} (alias served as" in msg
+
+    def test_alias_fails_on_a_model_outside_its_targets(self) -> None:
+        # A quota fallback from `pro` to a Flash model is a substitution.
+        stdout = _gemini_result("pro", {"gemini-3.8-flash": 500})
+        ok, msg = _evaluate_model_assertion("gemini-cli", stdout, "pro", "gemini-cli")
+        assert not ok
+        assert "alias served as" in msg
+
+    def test_claude_keeps_substring_semantics(self) -> None:
+        stdout = '{"type":"system","subtype":"init","model":"claude-opus-4-7"}\n'
+        ok, msg = _evaluate_model_assertion("claude-code-cli", stdout, "opus", "claude-code-cli")
+        assert ok, msg

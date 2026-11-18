@@ -157,6 +157,77 @@ either agent stops running the bootstrap ahead of its other session hooks.
 pins, wiring, and guard; `tbd guidelines agent-session-bootstrap` states the general
 pattern, including when a provisioned image is the better answer.
 
+## Agent CLI Pins
+
+The four agent CLIs the adapters drive are third-party npm packages that Metaproc does
+not install: no `package.json` or lockfile entry names them.
+Each adapter pins one exact release in a `PINNED_*_VERSION` constant, and operators and
+deployment images install that release.
+A pin therefore changes which binary the adapter’s version check expects, not this
+repository’s dependency closure, but it is held to the same 14-day cool-off.
+
+The 2026-11-18 refresh moved Codex to `0.166.0` and Gemini CLI to `0.66.0`, each the
+newest stable release outside the window at review time; no advisory is fixed only in a
+later release of either.
+
+### Audited Third-Party Cool-Off Exceptions
+
+Two third-party releases are adopted inside the cool-off by the owner’s explicit,
+case-by-case exemption on 2026-11-18. The reason for both is model support, not an
+advisory: Claude Fable 5.2 (`claude-fable-5-2`, released 2026-11-09) first appears in
+Claude Code `2.1.321` and Pi `1.5.1`, both published that day.
+Each exemption lapses when its release clears the window; a later version needs a fresh
+review.
+
+- **Claude Code `2.1.325`** (`@anthropic-ai/claude-code`, published 2026-11-13T20:07Z),
+  replacing `2.1.234`; it clears the window on 2026-11-27. It is chosen over the
+  `2.1.321` minimum because `2.1.323` removes long tool results
+  `--no-session-persistence` left on disk and stops `--debug-file` replacing a `latest`
+  file in the slot, and `2.1.325` fixes a security issue in zstd response decoding, a
+  path every API response and `WebFetch` reach.
+  `2.1.326` and `2.1.327` are not adopted.
+  Reviewed against `2.1.234`:
+  - Same package name and `SEE LICENSE IN README.md` license, with byte-identical README
+    and LICENSE files.
+  - Same seven-file wrapper and install model: a `postinstall` `install.cjs` copies the
+    platform binary from an exact-version optional dependency over the `bin/claude.exe`
+    placeholder. The script reads files and, on macOS only, runs `sysctl`; it fetches
+    nothing.
+  - No `dependencies`, the same `node >=22.0.0` floor, and no transitive growth.
+  - The publisher changed: from `2.1.288` on, npm records GitHub Actions trusted
+    publishing (OIDC) in place of a maintainer account.
+  - Neither release carries an npm provenance attestation; both the wrapper and the
+    `linux-x64` package pass `npm audit signatures`.
+  - The `linux-x64` binary installed with `--ignore-scripts` reports `2.1.325` and its
+    SHA-256 matches an independently downloaded tarball of the same version.
+- **Pi `1.5.2`** (`@earendil-works/pi-coding-agent`, published 2026-11-10T12:24Z),
+  replacing `0.84.2`; it clears the window on 2026-11-24. It is chosen over `1.5.1`
+  because its shipped code differs only in an interactive prompt, an `/import` cleanup
+  and the Claude Code version Anthropic OAuth requests report, with identical
+  dependencies and built-in catalogs for every provider Metaproc uses.
+  The npm advisory endpoint lists nothing against Pi’s packages at any of these
+  versions. Reviewed against `0.84.2` and `1.5.0`:
+  - Same MIT license, `earendil-works/pi` repository, maintainers and publisher (GitHub
+    Actions trusted publishing).
+  - SLSA v1 provenance names `build-binaries.yml@refs/tags/v1.5.2` at commit
+    `b4afdddf44e059c67ccf5097e5317d913521b470`, which matches the tag; the attested
+    SHA-512 matches the downloaded tarball, and the seven exact-pinned first-party
+    `@earendil-works` packages carry provenance from the same tag.
+  - The Pi packages define no install scripts; the transitive `@google/genai` (a no-op
+    `preinstall`) and `protobufjs` (`postinstall`) are the same pair as `0.84.2`.
+  - Pi has shipped no `npm-shrinkwrap.json` since `1.0.2`, so its third-party
+    dependencies float and stay under the cool-off; only the `@earendil-works` scope is
+    exempt. The adapter’s install hint keeps the gate:
+    `npm install -g --ignore-scripts --min-release-age=14 '--min-release-age-exclude=@earendil-works/*' @earendil-works/pi-coding-agent@1.5.2`.
+    That resolves 122 packages, every third-party one outside the window, and
+    `npm audit` reports none; a `0.84.2` tree reported seven, two high.
+  - Behavior changed since `0.84.2` is pinned back where Pi allows it: the adapter
+    passes `--no-mcp` and sets `PI_TELEMETRY=0`, and the packaged
+    `pi-models.default.json`, which GCP dispatch installs on workers, turns `1.5.1`’s
+    default Anthropic message threads off.
+    Local runs read the operator’s own `~/.pi/agent/models.json`, where threads stay on
+    unless the operator turns them off.
+
 ## Audited Advisory Waivers
 
 An advisory is waived only when the vulnerable code path is unreachable from this

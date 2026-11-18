@@ -323,7 +323,7 @@ def test_step_variant_naming_a_composite_step_fails_whether_or_not_it_is_pinned(
             {"RUNS_DIR": str(tmp_path)},
             tmp_path,
             process_path=process_path,
-            step_profile_overrides={"nested": "gemini-flash"},
+            step_profile_overrides={"nested": "gemini-hydrogen"},
         )
 
         messages = [message for _header, group in groups for message in group]
@@ -351,7 +351,7 @@ def test_run_process_refuses_a_step_variant_for_a_composite_step(tmp_path: Path)
             "--var",
             "RUN_ID=composite-override",
             "--step-variant",
-            "nested=gemini-flash",
+            "nested=gemini-hydrogen",
         ],
     )
 

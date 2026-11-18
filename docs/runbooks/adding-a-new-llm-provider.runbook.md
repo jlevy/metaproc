@@ -5,7 +5,7 @@ description: Step-by-step checklist for plumbing a new pi-cli provider end-to-en
 # Adding a New LLM Provider
 
 Checklist for adding a new LLM provider that metaproc dispatches via pi-cli (e.g.
-DeepSeek V4, Moonshot Kimi K2.6, the next first-party API to land).
+DeepSeek, Moonshot Kimi, the next first-party API to land).
 The design intent is that the **provider registry** in
 [`metaproc/config/providers.py`](../../src/metaproc/config/providers.py) is the single
 source of truth: edit one entry there and the rest of the codebase picks it up
@@ -94,27 +94,34 @@ uv --config-file uv.toml run --frozen metaproc env --template > .env.example
 
 ### 4. Add the pi-cli catalog block
 
-Edit `src/metaproc/data/pi-models.default.json`. Mirror the `openai` block for
-OpenAI-compatible providers:
+Edit `src/metaproc/data/pi-models.default.json` only for models Pi does not ship.
+A `models[]` entry whose `id` matches a Pi built-in model replaces it wholesale (zero
+cost, default limits, no thinking map); state deliberate differences from a built-in
+model as `modelOverrides` instead.
+If Pi already has the provider built in, it reads the key from the provider’s
+environment variable and the block needs no `apiKey`. For an OpenAI-compatible provider
+Pi does not ship, mirror the `moonshot` block:
 
 ```json
-"deepseek": {
-  "_note": "DeepSeek first-party API (V4 family). OpenAI-compatible /v1/chat/completions.",
-  "baseUrl": "https://api.deepseek.com/v1",
+"example-provider": {
+  "_note": "Example first-party API. OpenAI-compatible /v1/chat/completions.",
+  "baseUrl": "https://api.example.com/v1",
   "api": "openai-completions",
-  "apiKey": "DEEPSEEK_API_KEY",
+  "apiKey": "$EXAMPLE_API_KEY",
   "models": [
-    {"id": "deepseek-v4-pro", "name": "DeepSeek V4 Pro", "reasoning": true,
-     "input": ["text"], "contextWindow": 1000000, "maxTokens": 384000}
+    {"id": "example-model", "name": "Example Model", "reasoning": true,
+     "input": ["text"], "contextWindow": 1000000, "maxTokens": 128000}
   ]
 }
 ```
 
 > **`apiKey` syntax** (per pi-mono
 > [custom-provider docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/custom-provider.md)):
-> use the **bare env var name** (e.g. `"DEEPSEEK_API_KEY"`). The `!` prefix is for shell
-> commands (e.g. `"!gcloud auth print-access-token"`); a value like
-> `"!env:DEEPSEEK_API_KEY"` is interpreted as a shell command and fails with
+> reference an environment variable as `"$EXAMPLE_API_KEY"` or `"${EXAMPLE_API_KEY}"`.
+> Pi treats a bare string such as `"EXAMPLE_API_KEY"` as the literal key and the
+> provider answers 401. The `!` prefix is for shell commands (e.g.
+> `"!gcloud auth print-access-token"`); a value like `"!env:EXAMPLE_API_KEY"` is
+> interpreted as a shell command and fails with
 > `Failed to resolve API key … from shell command: env:…`.
 
 `known_model_ids("pi-cli")` reads this packaged catalog and combines its IDs with native

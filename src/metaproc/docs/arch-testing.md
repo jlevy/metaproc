@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Testing
 
-**Date:** 2026-04-24 (last updated 2026-09-23) **Status:** Approved
+**Date:** 2026-04-24 (last updated 2026-11-18) **Status:** Approved
 
 Testing is organized into tiers by cost and scope.
 Each tier is a named process spec you run via `metaproc run-process`; the table below
@@ -65,17 +65,17 @@ Credential requirements per adapter:
 | Adapter | Credential | Setup |
 | --- | --- | --- |
 | `claude-code-cli` | macOS Keychain OAuth *or* `ANTHROPIC_API_KEY` | `claude auth` or Claude Desktop login |
-| `codex-cli` | `OPENAI_API_KEY` *or* `~/.codex/auth.json` via `codex login` with `cli_auth_credentials_store = "file"` | See [codex setup](credential-setup.runbook.md) |
+| `codex-cli` | `OPENAI_API_KEY` (passed as `CODEX_API_KEY` when no stored login exists) *or* `~/.codex/auth.json` via `codex login` with `cli_auth_credentials_store = "file"` | See [codex setup](credential-setup.runbook.md) |
 | `gemini-cli` | one of: (a) `GEMINI_API_KEY`, (b) `GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_API_KEY`, (c) `GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_CLOUD_PROJECT` + ADC | See [credential-setup.md § Gemini](credential-setup.runbook.md#gemini-cli-gemini-cli). The smoke uses mode (c) against `$METAPROC_GCP_PROJECT` so it runs with no Gemini-specific key. |
-| `pi-cli` | `~/.pi/auth.json` (plus GCP ADC for `vertex-maas`) | `pi login`; `gcloud auth application-default login` for MaaS |
+| `pi-cli` | `~/.pi/agent/auth.json` (plus GCP ADC for `vertex-maas`) | `/login` in `pi`; `gcloud auth application-default login` for MaaS |
 
-The `pi-cli` smoke selects `vertex-maas` with `glm-5-maas`. Substitute
-`--variant pi-cli-<other>` and `--provider <other>` to probe another configured route.
+The `pi-cli` smoke selects `vertex-maas` with `glm-5.2-maas`. Substitute
+`--model <other>` and `--provider <other>` to probe another configured route.
 Model selection does not establish pricing or account credit eligibility.
 
 ### Model assertion (`--assert-model`)
 
-Each per-adapter smoke passes `--assert-model <substring>` on its live-probe step so the
+Each per-adapter smoke passes `--assert-model <model>` on its live-probe step so the
 harness verifies the observed model — not just the subprocess exit code.
 Metaproc rejects unknown explicit names before command execution, but an upstream CLI
 can still resolve aliases or change model routing.
@@ -83,13 +83,15 @@ A successful exit alone does not establish which model responded.
 
 The helper parses the CLI’s JSONL stdout for the event that names the model:
 
-| Adapter | Event | Model path | Smoke expected substring |
+| Adapter | Event | Model path | Smoke expected model |
 | --- | --- | --- | --- |
 | `claude-code-cli` | `system.init` | `model` | `opus` |
 | `gemini-cli` | terminal `result` | `stats.models` keys that billed tokens | `gemini-3.1-pro-preview-customtools` |
-| `pi-cli` | `message_start` (first assistant) | `message.model` | `glm-5-maas` |
-| `codex-cli` | untyped config preamble (the first line carrying `model`) | `model` | `gpt` |
+| `pi-cli` | `message_start` (first assistant) | `message.model` | `glm-5.2-maas` |
+| `codex-cli` | session rollout `turn_context` (legacy config preamble when printed) | `model` (requested, not served) | `gpt` |
 
+Claude Code and Pi match a substring; Gemini requires an exact billed model, or for an
+alias one of the models Gemini CLI 0.66.0 resolves it to.
 Only the Gemini check reads which model billed the call.
 Its `init` event is emitted from the configured model before any request leaves the
 process, so asserting on it would pass a call the CLI rewrote to another model.
@@ -106,10 +108,11 @@ missing:
   Its terminal `result.modelUsage` carries the models that billed, but the assertion
   does not read it yet.
 - Pi’s is `message.model` on the first assistant `message_start` event.
-- Codex’s is the `model` field of the untyped config preamble codex-cli prints before
-  its typed event stream, which carries no model ID. The preamble names the configured
-  model, not the one that answered, so the codex model guarantee rests on the separate
-  negative-control smoke (invalid `-m <model>` must exit non-zero) — see
+- Codex’s is the requested model, read from the thread’s session rollout because
+  codex-cli 0.166.0 prints no config preamble and reports no served model.
+  It names the configured model, not the one that answered, so the codex model guarantee
+  rests on the adapter’s refusal of unknown models and the separate negative-control
+  smoke (invalid `-m <model>` must exit non-zero) — see
   [`smoke-adapters-negative-control.process.md`](https://github.com/jlevy/metaproc/blob/main/process/self-test/smoke-adapters-negative-control.process.md).
 
 ### Cloud-dispatch claude credential (Phase 2b)
@@ -205,9 +208,9 @@ Add `-k <pattern>` to run a subset.
 - `auth-check --variant <non-claude>` correctly scopes Phase 2b out; setting
   `METAPROC_GCP_SECRET_CLAUDE_CREDS` alongside a non-claude variant no longer pollutes
   the per-adapter signal.
-- `--assert-model` for `codex-cli` reads the untyped config preamble, the only line of
-  codex-cli’s stdout that carries a model ID, and fails hard when that line is absent.
-  The preamble names the configured model, so the model guarantee for codex comes from
+- `--assert-model` for `codex-cli` reads the requested model from the session rollout
+  (or a legacy config preamble), because codex-cli 0.166.0 reports no served model.
+  The model guarantee for codex comes from the adapter’s refusal of unknown models and
   the separate negative-control smoke, not from stream parsing.
   See
   [`smoke-adapters-negative-control.process.md`](https://github.com/jlevy/metaproc/blob/main/process/self-test/smoke-adapters-negative-control.process.md).

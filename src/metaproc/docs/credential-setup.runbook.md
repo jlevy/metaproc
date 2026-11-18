@@ -269,7 +269,7 @@ codex login                           # opens browser, writes ~/.codex/auth.json
 | Variable | Required | Notes |
 | --- | --- | --- |
 | `METAPROC_GCP_SECRET_CODEX_CREDS` | Yes | Secret Manager resource name carrying the `~/.codex/auth.json` blob. Workers materialize the file at 0600 under a 0700 parent. |
-| `OPENAI_API_KEY` | **MUST NOT be set** | When both are present codex prefers the API key, which silently bypasses the subscription (pay-per-token instead of free-per-request). Leave it unset on workers. |
+| `OPENAI_API_KEY` | Leave unset | `codex exec` never reads it. The adapter passes it to Codex as `CODEX_API_KEY` only when no stored Codex login can exist (no `auth.json`, a `file` credential store, no `CODEX_ACCESS_TOKEN`), so a materialized `auth.json` keeps the subscription. Leaving it unset means a worker whose `auth.json` is missing fails instead of billing per token. Never set `CODEX_API_KEY` here: Codex prefers it over the stored login. |
 
 ```bash
 metaproc codex-auth push              # push ~/.codex/auth.json to Secret Manager
@@ -284,7 +284,8 @@ export METAPROC_GCP_SECRET_CODEX_CREDS=projects/exampletool/secrets/codex-creds-
 ```
 
 The adapter’s `bootstrap(home)` hook reads `CODEX_CREDS_JSON`, validates that
-`tokens.auth_mode == "chatgpt"` (rejecting `apikey` blobs — those should arrive as
+`auth_mode == "chatgpt"` (read at the top level, where Codex writes it, or from the
+legacy nested `tokens.auth_mode`; rejecting `apikey` blobs — those should arrive as
 `OPENAI_API_KEY` directly), writes `{home}/.codex/auth.json` (mode 0600, parent 0700),
 and pops the env var so it does not leak to child processes.
 See [arch-authentication.md](arch-authentication.md) for the design context.

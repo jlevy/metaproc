@@ -61,16 +61,15 @@ process:
       command: >-
         bash -lc "cd ../../.. && ! uv run metaproc auth-check --live --variant codex-cli-bogus-xyz-nomatch --assert-model bogus-xyz-nomatch"
       description: >-
-        Same shape as claude/gemini: the metaproc codex adapter
-        silently rewrites unknown `--model` back to CODEX_DEFAULT_MODEL
-        (see `_build_codex_flag_groups`), codex dispatches with the
-        default, and its untyped config-dump preamble carries
-        `{"model": <default>}`. `--assert-model bogus-xyz-nomatch`
-        sees "gpt-5.4" (or current default) — no substring match — and
-        fails the check. `!` inverts: step green iff auth-check exits
-        non-zero. Confirms `--assert-model`'s new codex support works
-        even though codex-cli itself does NOT validate unknown model
-        names (both the adapter and the CLI silently fall back).
+        The metaproc codex adapter refuses an unknown `--model` before
+        dispatch: `_build_codex_flag_groups` resolves it against the
+        model catalog and raises, so auth-check reports an invalid
+        adapter configuration and exits non-zero. Should that guard
+        regress to a silent fallback, `--assert-model bogus-xyz-nomatch`
+        still fails, because the model Codex requested (read from its
+        session rollout, or the probe's `-m`) does not match. `!`
+        inverts: step green iff auth-check exits non-zero. codex-cli
+        itself does NOT validate unknown model names.
 ---
 # smoke-adapters-negative-control — bogus model must red every adapter
 
@@ -87,7 +86,7 @@ logic is disabled or regresses.
 | `claude-code-cli` | Adapter silently falls back on unknown model → `--assert-model` catches the mismatch. |
 | `gemini-cli` | Same as claude. |
 | `pi-cli` | `_pi_validate_registration` pre-flight refuses to dispatch on unregistered model. |
-| `codex-cli` | Same as claude/gemini. codex-cli itself does NOT reject unknown `-m <model>` (silently falls back too), so `--assert-model` is the only line of defence; this step confirms it still catches the mismatch for codex via the config-dump preamble. |
+| `codex-cli` | The adapter refuses an unknown model before dispatch (catalog validation); if that regressed, `--assert-model` compares the model Codex requested (session rollout, else `-m`) and still fails. codex-cli itself does NOT reject unknown `-m <model>`. |
 
 ## Why `bash -lc '! <cmd>'`?
 

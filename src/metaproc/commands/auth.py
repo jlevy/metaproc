@@ -1316,7 +1316,7 @@ def probe_cmd(
         help=(
             "Print the parsed Anthropic response details (status, request_id, "
             "OAuth refresh boundary). Headers proper require a follow-up direct-httpx "
-            "path; for now this surfaces what `claude -d api` exposes."
+            "path; for now this surfaces what Claude Code's `--debug-file` log exposes."
         ),
     ),
     as_json: bool = typer.Option(
@@ -1334,7 +1334,7 @@ def probe_cmd(
     reflects what dispatch will see). To re-test against fresh tokens
     after re-auth, run ``auth push`` first.
 
-    Materializes the slot the way dispatch does, then runs ``claude -d api
+    Materializes the slot the way dispatch does, then runs ``claude
     --debug-file=<tmp>/probe.log --print "OK"`` against it. Parses the debug
     log for OAuth refresh status, per-attempt API status, ``request_id``, and
     the actual error excerpt. Maps the result to an authoritative pool-state
@@ -1457,7 +1457,7 @@ def probe_cmd(
     }
     if show_headers:
         result["headers_note"] = (
-            "claude -d api debug log does not expose response headers; "
+            "Claude Code's --debug-file log does not expose response headers; "
             "anthropic-ratelimit-* fields require a direct-httpx probe "
             "(future follow-up: direct-httpx probe)."
         )

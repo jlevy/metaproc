@@ -11,6 +11,7 @@ from typing import cast
 from metaproc.adapters.base import StepEnvValidator
 from metaproc.adapters.registry import ADAPTER_REGISTRY, derive_variant, get_adapter
 from metaproc.config.env_vars import MetaprocEnv
+from metaproc.config.model_catalog import known_model_ids, removed_model_note
 from metaproc.engine.discovery import discover_items_from_source
 from metaproc.engine.graph import validate_step_graph
 from metaproc.engine.lane_expand import materialize_execution_lanes
@@ -38,8 +39,11 @@ from metaproc.models.authored import (
     ProcessStep,
 )
 from metaproc.models.execution_profile import (
+    REMOVED_EXECUTION_PROFILES,
+    ExecutionProfile,
     ExecutionProfileRegistry,
     ResolvedExecutionProfile,
+    removed_profile_note,
 )
 from metaproc.models.plan import FanOut, Plan, ResolvedAdapter, ResolvedDep, ResolvedStep
 from metaproc.paths import normalize_path_key
@@ -76,14 +80,103 @@ def _find_repo_root(start: Path) -> Path | None:
     return None
 
 
-def _load_profile_registry(
+def load_profile_registry(
     process_path: Path,
-    profile_files: Sequence[Path],
+    profile_files: Sequence[Path] = (),
+    *,
+    recorded_profiles: Mapping[str, ExecutionProfile] | None = None,
 ) -> ExecutionProfileRegistry:
+    """Load the profile registry a plan of *process_path* resolves against.
+
+    *recorded_profiles* are the removed profiles a resumed run recorded
+    (``recorded_execution_profiles``); they resolve only where no source defines the
+    name any longer.
+    """
     return ExecutionProfileRegistry.load(
         repo_root=_find_repo_root(process_path),
         explicit_files=tuple(profile_files),
+        recorded_profiles=recorded_profiles,
     )
+
+
+def _unknown_adapter_override(adapter_override: str) -> str:
+    """The refusal of a ``--variant`` value no profile, adapter config, or type matches."""
+    supported = ", ".join(sorted(ADAPTER_REGISTRY))
+    msg = f"unknown adapter override: {adapter_override!r} (supported: {supported})"
+    if note := removed_profile_note(adapter_override):
+        msg += f"; {note}. Use --variant <successor> for a new run"
+    return msg
+
+
+def derive_run_artifact_namespace(
+    adapter_override: str | None,
+    config_overrides: Mapping[str, str] | None,
+    *,
+    default_models: Mapping[str, str] | None = None,
+) -> str | None:
+    """Return the artifact namespace a raw adapter ``--variant`` derives, else ``None``.
+
+    Only a raw adapter type derives one (``derive_variant``): a profile's namespace is
+    its name. *default_models* are the adapter defaults the derivation compares the
+    model against; a resume passes the ones its run was created with.
+    """
+    if adapter_override not in ADAPTER_REGISTRY:
+        return None
+    raw_adapter_config = {
+        key: _coerce_config_value(key, value) for key, value in (config_overrides or {}).items()
+    }
+    return derive_variant(adapter_override, raw_adapter_config, default_models=default_models)
+
+
+def _recorded_profile_model_error(
+    profile: ResolvedExecutionProfile,
+    *,
+    adapter_type: str,
+    model: str,
+    registry: ExecutionProfileRegistry,
+    selected_by: str,
+) -> str:
+    """The refusal of a recorded, since-removed profile whose model is no longer served.
+
+    It names the profile's removal, the model's, and the override that continues the
+    run: the successor profile, and for the run profile also the same namespace on the
+    successor's model.
+    """
+    name = profile.name
+    removed = REMOVED_EXECUTION_PROFILES.get(name)
+    model_note = removed_model_note(adapter_type, model) or "it is not in the model catalog"
+    msg = f"{selected_by}: this run records execution profile {name!r}"
+    if removed is not None:
+        msg += (
+            f", which Metaproc's built-in profiles dropped on {removed.removed_on.isoformat()} "
+            f"({removed.reason})"
+        )
+    msg += f", and {adapter_type} no longer accepts its model {model!r}: {model_note}."
+    if removed is None:
+        return msg + " Select a profile whose model is accepted."
+    successor = removed.successor
+    successor_model: object = None
+    if successor in registry.entries:
+        try:
+            successor_model = registry.resolve(successor).profile.config.get("model")
+        except ValueError:
+            successor_model = None
+    on_model = f" (model {successor_model})" if successor_model else ""
+    msg += f" Its successor is {successor!r}{on_model}: "
+    if selected_by == "--variant":
+        msg += f"resume with --variant {successor}"
+        if successor_model:
+            msg += (
+                f", or keep the artifact namespace {name!r} with --variant {name} "
+                f"--adapter-config model={successor_model}"
+            )
+    elif selected_by.startswith("--step-variant "):
+        msg += (
+            f"resume with --step-variant {selected_by.removeprefix('--step-variant ')}={successor}"
+        )
+    else:
+        msg += f"name it in the process file's {selected_by}, or select it with --step-variant"
+    return msg + f". The steps that ran on {model} re-run."
 
 
 def _resolve_profile(
@@ -147,6 +240,7 @@ def validate_execution_profiles(
     profile_files: Sequence[Path] = (),
     adapter_override: str | None = None,
     step_profile_overrides: Mapping[str, str] | None = None,
+    recorded_profiles: Mapping[str, ExecutionProfile] | None = None,
 ) -> list[str]:
     """Return every execution-profile request in *spec* that will not resolve.
 
@@ -155,7 +249,9 @@ def validate_execution_profiles(
     the same requests in the same order through the same resolver and collects
     the messages instead.
     """
-    registry = _load_profile_registry(process_path, profile_files)
+    registry = load_profile_registry(
+        process_path, profile_files, recorded_profiles=recorded_profiles
+    )
     overrides = step_profile_overrides or {}
 
     errors: list[str] = step_override_target_errors(spec, overrides)
@@ -186,8 +282,7 @@ def validate_execution_profiles(
         and adapter_override not in spec.defaults.adapters
         and adapter_override not in ADAPTER_REGISTRY
     ):
-        supported = ", ".join(sorted(ADAPTER_REGISTRY))
-        errors.append(f"unknown adapter override: {adapter_override!r} (supported: {supported})")
+        errors.append(_unknown_adapter_override(adapter_override))
 
     return errors
 
@@ -801,10 +896,19 @@ def build_plan(
     config_overrides: dict[str, str] | None = None,
     validate_required_inputs: bool = True,
     validate_spec: bool = True,
+    recorded_profiles: Mapping[str, ExecutionProfile] | None = None,
+    namespace_default_models: Mapping[str, str] | None = None,
 ) -> Plan:
     """Build a resolved plan from a process spec and parameter values.
 
     *params* must be pre-expanded via ``expand_process_vars``.
+
+    A resume passes what its ``run-config.yaml`` records: *recorded_profiles*, the
+    removed built-in profiles the run used, rebuilt from their former definitions; and
+    *namespace_default_models*, the adapter defaults a raw adapter ``--variant`` derives
+    its artifact namespace against (``derive_run_artifact_namespace``). A recorded
+    profile whose model the catalog no longer accepts is refused, naming its successor,
+    unless *config_overrides* select another model.
 
     When *validate_spec* is False, the four spec-level validators (fan-out
     contracts, framework template names, scope collisions, agent write
@@ -813,7 +917,9 @@ def build_plan(
     specs that would otherwise fail validation.
     """
 
-    profile_registry = _load_profile_registry(process_path, profile_files)
+    profile_registry = load_profile_registry(
+        process_path, profile_files, recorded_profiles=recorded_profiles
+    )
     found_root = _find_repo_root(process_path)
     checkout_root = str(found_root) if found_root is not None else None
     if adapter_override is not None:
@@ -831,15 +937,10 @@ def build_plan(
         artifact_namespace or params.get("ARTIFACT_NAMESPACE") or params.get("VARIANT")
     )
     raw_adapter_namespace: str | None = None
-    if (
-        explicit_artifact_namespace is None
-        and run_profile is None
-        and adapter_override in ADAPTER_REGISTRY
-    ):
-        raw_adapter_config = {
-            key: _coerce_config_value(key, value) for key, value in (config_overrides or {}).items()
-        }
-        raw_adapter_namespace = derive_variant(adapter_override, raw_adapter_config)
+    if explicit_artifact_namespace is None and run_profile is None:
+        raw_adapter_namespace = derive_run_artifact_namespace(
+            adapter_override, config_overrides, default_models=namespace_default_models
+        )
     run_artifact_namespace = explicit_artifact_namespace or (
         run_execution_profile if run_profile is not None else raw_adapter_namespace
     )
@@ -883,12 +984,10 @@ def build_plan(
 
     if adapter_override is not None and run_profile is None:
         # Accept both raw adapter types ("pi-cli") and named adapter configs
-        # from the spec's adapters map ("pi-deepseek-v3.2").
+        # from the spec's adapters map ("pi-glm52").
         if adapter_override not in spec.defaults.adapters:
             if adapter_override not in ADAPTER_REGISTRY:
-                supported = ", ".join(sorted(ADAPTER_REGISTRY))
-                msg = f"unknown adapter override: {adapter_override!r} (supported: {supported})"
-                raise ValueError(msg)
+                raise ValueError(_unknown_adapter_override(adapter_override))
 
     now = datetime.now(tz=UTC).strftime("%Y-%m-%dT%H:%M:%S")
     step_outputs = {step.id: _resolve_step_outputs(step, params) for step in spec.steps}
@@ -922,18 +1021,25 @@ def build_plan(
 
         step_profile_override = step_profile_overrides.get(step.id)
         if step_profile_override:
+            profile_selected_by = f"--step-variant {step.id}"
             step_profile = _resolve_required_profile(
                 profile_registry,
                 step_profile_override,
-                context=f"--step-variant {step.id}",
+                context=profile_selected_by,
             )
         elif step.execution_profile:
+            profile_selected_by = f"step {step.id!r} execution_profile"
             step_profile = _resolve_required_profile(
                 profile_registry,
                 step.execution_profile,
-                context=f"step {step.id!r} execution_profile",
+                context=profile_selected_by,
             )
         else:
+            profile_selected_by = (
+                "--variant"
+                if adapter_override is not None
+                else "defaults.default_execution_profile"
+            )
             step_profile = run_profile
         step_execution_profile = step_profile.name if step_profile is not None else None
         step_artifact_namespace = (
@@ -1014,7 +1120,7 @@ def build_plan(
 
             if adapter_override is not None:
                 # If the override names a config in the adapters map, use its
-                # resolved type (e.g. "pi-deepseek-v3.2" → "pi-cli").
+                # resolved type (e.g. "pi-glm52" → "pi-cli").
                 # Otherwise use the override as-is (it's a raw adapter type).
                 if per_adapter is not None:
                     adapter_type = per_adapter.type or adapter_override
@@ -1032,11 +1138,34 @@ def build_plan(
             for key, value in config_overrides.items():
                 merged_config[key] = _coerce_config_value(key, value)
 
-        merged_config = _apply_adapter_validation(
-            adapter_type=adapter_type,
-            authored_adapter_type=authored_adapter_type,
-            merged_config=merged_config,
+        recorded_model = merged_config.get("model")
+        unserved_recorded_model = (
+            step_profile is not None
+            and step_profile.source.kind == "recorded"
+            and recorded_model is not None
+            and adapter_type in ADAPTER_REGISTRY
+            and str(recorded_model) not in known_model_ids(adapter_type)
         )
+        if unserved_recorded_model and validate_spec:
+            # Planning would otherwise drop the model as a same-family reject and run
+            # the adapter default, which is not the run the profile describes.
+            raise ValueError(
+                _recorded_profile_model_error(
+                    cast("ResolvedExecutionProfile", step_profile),
+                    adapter_type=adapter_type,
+                    model=str(recorded_model),
+                    registry=profile_registry,
+                    selected_by=profile_selected_by,
+                )
+            )
+        if not unserved_recorded_model:
+            # A plan built only to be read (``validate_spec=False``, as ``metaproc
+            # status`` builds it) keeps such a step as the run recorded it.
+            merged_config = _apply_adapter_validation(
+                adapter_type=adapter_type,
+                authored_adapter_type=authored_adapter_type,
+                merged_config=merged_config,
+            )
 
         for transform in get_plugin_registry().adapter_config_transforms:
             merged_config = transform(step, merged_config, params)

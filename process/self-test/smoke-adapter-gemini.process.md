@@ -42,9 +42,10 @@ process:
         by exporting `GEMINI_SMOKE_MODEL=<id>` (and optionally
         `GEMINI_SMOKE_ASSERT_MODEL` if the observed model ID differs
         from the requested one — e.g. Vertex sometimes prefixes
-        `models/`). `--assert-model` is substring-matched, so passing
-        the full model ID is enough to catch silent fallback to the
-        default. Isolates HOME so the operator's persisted
+        `models/`). `--assert-model` matches a served ID exactly (a
+        moving alias such as `auto` matches the models gemini-cli serves
+        it as), so a fallback or a `-customtools` variant fails it.
+        Isolates HOME so the operator's persisted
         `~/.gemini/settings.json` (which may pin `selectedType` to
         `gemini-api-key` from a prior interactive login) does not
         override the Vertex AI env-var mode.
@@ -81,7 +82,7 @@ for Batch dispatch and Vertex MaaS.
    Exercises the adapter’s own credential-detection logic.
 3. **live-probe** — Isolated-HOME + `gemini -p` against Vertex AI (see below), with
    `--assert-model <model>` to verify that a model the terminal `result` event’s
-   `stats.models` shows billing tokens contains the expected ID. Defaults to
+   `stats.models` shows billing tokens is the expected ID. Defaults to
    GEMINI_DEFAULT_MODEL; override with `GEMINI_SMOKE_MODEL` to exercise a specific cell
    of the matrix.
 4. **tool-probe** — `metaproc probe-tool-use --harness gemini-cli` issues a single
@@ -95,16 +96,15 @@ To exercise a specific model (Phase 1 matrix), export `GEMINI_SMOKE_MODEL` befor
 running:
 
 ```bash
-GEMINI_SMOKE_MODEL=gemini-3.5-flash \
+GEMINI_SMOKE_MODEL=gemini-4-hydrogen \
   uv run metaproc run-process process/self-test/smoke-adapter-gemini.process.md
 ```
 
 `live-probe` will request that model and assert the same ID; `tool-probe` will use the
 same model for the file-read round-trip.
-If Vertex returns a different observed ID shape (e.g. `models/gemini-3.5-flash-001`),
-`--assert-model` does substring matching, so the bare ID is enough — override
-`GEMINI_SMOKE_ASSERT_MODEL` only if the substring match needs to differ from the
-requested model.
+If Vertex returns a different observed ID shape (e.g. `models/gemini-4-hydrogen-001`),
+`--assert-model` matches served IDs exactly, so set `GEMINI_SMOKE_ASSERT_MODEL` to the
+served ID when it differs from the requested model.
 
 ## Auth modes supported by the Gemini adapter
 

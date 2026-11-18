@@ -8,6 +8,9 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
+import tomllib
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
@@ -24,7 +27,7 @@ from metaproc.adapters.base import (
     resolve_templates,
 )
 from metaproc.config.env_vars import MetaprocEnv
-from metaproc.config.model_catalog import resolve_model
+from metaproc.config.model_catalog import removed_model_note, resolve_model
 from metaproc.dispatch.known_bugs import detect_known_bug
 from metaproc.io import write_secret_text
 from metaproc.settings import (
@@ -49,7 +52,14 @@ _CODEX_SLOT_CONFIG_TOML = 'cli_auth_credentials_store = "file"\nforced_login_met
 
 log = logging.getLogger(__name__)
 
-PINNED_CODEX_CLI_VERSION = "0.147.0"
+
+def _unknown_model_reason(adapter: str, value: object) -> str:
+    """Name an unknown model, with its retirement and replacement when recorded."""
+    note = removed_model_note(adapter, str(value))
+    return f"unknown {adapter} model {value!r}" + (f"; {note}" if note else "")
+
+
+PINNED_CODEX_CLI_VERSION = "0.166.0"
 CODEX_CLI_INSTALL_HINT = f"Install: npm install -g @openai/codex@{PINNED_CODEX_CLI_VERSION}"
 # Keep a broken launcher from blocking agent dispatch indefinitely.
 _CODEX_VERSION_CHECK_TIMEOUT_SECONDS = 10
@@ -124,10 +134,44 @@ def _codex_version_drift() -> str | None:
     return None
 
 
+def codex_auth_json_mode(payload: dict[str, Any]) -> str | None:
+    """Return the login mode Codex resolves for a parsed ``auth.json`` object.
+
+    Codex writes ``auth_mode`` at the top level of ``auth.json``
+    (``codex-rs/login/src/auth/storage.rs`` ``AuthDotJson``, 0.147.0 and
+    0.166.0); its ``tokens`` block has no such field. Earlier Metaproc releases
+    read and documented ``tokens.auth_mode`` instead, so that nested spelling is
+    still honored when the top-level field is absent. A file with neither follows
+    Codex's own ``AuthDotJson::resolved_mode`` fallback: a stored API key means
+    ``apikey``, ``tokens`` alone means ``chatgpt``. Returns ``None`` when the
+    payload carries no credential Metaproc can classify.
+    """
+    top_level = payload.get("auth_mode")
+    if isinstance(top_level, str) and top_level:
+        return top_level
+    tokens = payload.get("tokens")
+    if isinstance(tokens, dict):
+        nested = cast("dict[str, Any]", tokens).get("auth_mode")
+        if isinstance(nested, str) and nested:
+            return nested
+    if payload.get("personal_access_token"):
+        return "personalAccessToken"
+    if payload.get("bedrock_api_key"):
+        return "bedrockApiKey"
+    if payload.get("bedrock_access_keys"):
+        return "bedrockAccessKeys"
+    if payload.get("OPENAI_API_KEY"):
+        return "apikey"
+    if isinstance(tokens, dict):
+        return "chatgpt"
+    return None
+
+
 def _validate_codex_creds_blob(blob: str) -> None:
     """Raise if *blob* is not a ChatGPT-OAuth ``auth.json`` payload.
 
-    API-key blobs (``tokens.auth_mode == "apikey"``) are explicitly
+    The login mode is read as Codex reads it (:func:`codex_auth_json_mode`).
+    API-key blobs (``auth_mode == "apikey"``) are explicitly
     rejected: API keys are stateless, don't need pooling, and should
     arrive as ``OPENAI_API_KEY`` through container-side secret hydration rather than a
     pool label. This matches ``CodexCliAdapter.bootstrap``'s existing
@@ -149,10 +193,10 @@ def _validate_codex_creds_blob(blob: str) -> None:
             "refusing to write a malformed auth.json"
         )
         raise RuntimeError(msg)
-    auth_mode = cast("dict[str, Any]", tokens).get("auth_mode")
+    auth_mode = codex_auth_json_mode(payload)
     if auth_mode != "chatgpt":
         msg = (
-            f"Codex credentials blob has tokens.auth_mode={auth_mode!r}; the pool "
+            f"Codex credentials blob has auth_mode={auth_mode!r}; the pool "
             "only accepts ChatGPT-OAuth payloads. API-key auth is stateless and "
             "should arrive as OPENAI_API_KEY through cloud secret hydration, "
             "not a pool label."
@@ -160,7 +204,7 @@ def _validate_codex_creds_blob(blob: str) -> None:
         raise RuntimeError(msg)
 
 
-def resolve_codex_home(env: dict[str, str] | None = None) -> Path:
+def resolve_codex_home(env: Mapping[str, str] | None = None) -> Path:
     """Return the effective codex-cli home directory.
 
     Single source of truth for ``$CODEX_HOME`` resolution: read through the
@@ -181,6 +225,254 @@ def resolve_codex_home(env: dict[str, str] | None = None) -> Path:
     if override:
         return Path(override)
     return Path.home() / ".codex"
+
+
+# The `.env.example` placeholder for CODEX_API_KEY. A copied template that still
+# carries it must not outrank a real login: Codex gives the env key precedence.
+_CODEX_API_KEY_PLACEHOLDER = f"REPLACE_WITH_{MetaprocEnv.CODEX_API_KEY.name}"
+
+# A personal access token or agent-identity JWT. Codex 0.166.0 uses it ahead of
+# any stored login, and only CODEX_API_KEY outranks it (`load_auth` in
+# codex-rs/login/src/auth/manager.rs).
+_CODEX_ACCESS_TOKEN_ENV = "CODEX_ACCESS_TOKEN"
+
+_CREDENTIAL_STORE_KEY = "cli_auth_credentials_store"
+
+# Where Codex reads its system config, requirements and legacy managed config on Unix.
+_CODEX_UNIX_SYSTEM_DIR = Path("/etc/codex")
+
+# macOS configuration profiles deliver forced preferences for this domain, and
+# Codex reads config and requirements TOML from them (codex-rs/config/src/loader/macos.rs).
+_MACOS_MANAGED_PREFERENCES_DIR = Path("/Library/Managed Preferences")
+_MACOS_CODEX_PREFERENCES_PLIST = "com.openai.codex.plist"
+
+# The variables whose values decide the bridge (see `_CodexChildEnv`).
+_BRIDGE_INPUT_VARS = frozenset(
+    {
+        "CODEX_HOME",
+        _CODEX_ACCESS_TOKEN_ENV,
+        MetaprocEnv.CODEX_API_KEY.name,
+        MetaprocEnv.OPENAI_API_KEY.name,
+    }
+)
+
+
+def _codex_env_value(env: Mapping[str, str], name: str) -> str:
+    """Return *name* from *env* the way Codex reads it: trimmed, so blank means unset."""
+    return env.get(name, "").strip()
+
+
+def _codex_system_dir() -> Path:
+    if sys.platform == "win32":
+        program_data = os.environ.get("ProgramData") or r"C:\ProgramData"
+        return Path(program_data) / "OpenAI" / "Codex"
+    return _CODEX_UNIX_SYSTEM_DIR
+
+
+def _credential_store_files(codex_home: Path, cwd: Path) -> list[Path]:
+    """Return the TOML files that can set Codex's `cli_auth_credentials_store`.
+
+    Codex 0.166.0 layers, besides `$CODEX_HOME/config.toml`, the system
+    `requirements.toml` and `config.toml`, the legacy `managed_config.toml`
+    (Unix), and `.codex/config.toml` in the working directory and its parents up
+    to the project root (`load_config_layers_state` in
+    codex-rs/config/src/loader/mod.rs). Project files apply only to a trusted
+    project, and the scan stops at the project root. Both are Codex's decisions,
+    so every parent is listed here. A `--profile` file is not, because Metaproc
+    passes no `--profile`; nor is the enterprise cloud layer, which Codex fetches
+    only with a ChatGPT login (`codex exec` bootstrap), and the bridge has already
+    ruled one out.
+    """
+    system_dir = _codex_system_dir()
+    files = [
+        system_dir / "requirements.toml",
+        system_dir / "config.toml",
+        codex_home / "config.toml",
+    ]
+    if sys.platform != "win32":
+        files.append(system_dir / "managed_config.toml")
+    resolved_home = codex_home.resolve()
+    for directory in (cwd, *cwd.parents):
+        dot_codex = directory / ".codex"
+        # Codex skips a project `.codex` that is CODEX_HOME itself.
+        if dot_codex.resolve() != resolved_home:
+            files.append(dot_codex / "config.toml")
+    return files
+
+
+def _file_store_blocker(path: Path) -> str | None:
+    """Return why *path* may select a store other than `file`, or None when it does not."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError, NotADirectoryError:
+        return None
+    except OSError, UnicodeDecodeError:
+        return f"{path} could not be read"
+    try:
+        doc = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return f"{path} could not be parsed"
+    value = doc.get(_CREDENTIAL_STORE_KEY, "file")
+    return None if value == "file" else f"{path} sets {_CREDENTIAL_STORE_KEY}={value!r}"
+
+
+def _credential_store_blocker(
+    codex_home: Path, merged_config: Mapping[str, object], cwd: Path | None = None
+) -> str | None:
+    """Return why a Codex login may live outside auth.json, or None when none can.
+
+    A login lives outside `$CODEX_HOME/auth.json` when `cli_auth_credentials_store`
+    is `keyring` or `auto`. This fails safe. It returns a reason when any layer
+    Codex may read names a store other than `file`, whatever that layer's
+    precedence, and when a layer cannot be read. *cwd* is the directory Codex runs
+    in: the step's `working_directory`, else this process's.
+    """
+    overrides = merged_config.get("config_overrides")
+    if isinstance(overrides, dict):
+        value = cast("dict[str, Any]", overrides).get(_CREDENTIAL_STORE_KEY)
+        if value is not None and value != "file":
+            return f"config_overrides set {_CREDENTIAL_STORE_KEY}={value!r}"
+    if cwd is None:
+        working_directory = merged_config.get("working_directory")
+        cwd = Path(str(working_directory)) if working_directory else Path.cwd()
+    for path in _credential_store_files(codex_home, cwd.absolute()):
+        reason = _file_store_blocker(path)
+        if reason is not None:
+            return reason
+    if sys.platform == "darwin" and _MACOS_MANAGED_PREFERENCES_DIR.is_dir():
+        plists = [
+            _MACOS_MANAGED_PREFERENCES_DIR / _MACOS_CODEX_PREFERENCES_PLIST,
+            *_MACOS_MANAGED_PREFERENCES_DIR.glob(f"*/{_MACOS_CODEX_PREFERENCES_PLIST}"),
+        ]
+        for plist in plists:
+            if plist.exists():
+                return f"macOS managed preferences {plist} may set {_CREDENTIAL_STORE_KEY}"
+    return None
+
+
+@functools.cache
+def _log_bridge(codex_home: str) -> None:
+    """Log once per Codex home: the bridged key moves the run to API-key billing."""
+    log.info(
+        "codex-cli: passing OPENAI_API_KEY to Codex as %s; no stored Codex login in %s, "
+        "so the run is billed to the API key",
+        MetaprocEnv.CODEX_API_KEY.name,
+        codex_home,
+    )
+
+
+def _bridged_codex_api_key(
+    env: Mapping[str, str], merged_config: Mapping[str, object]
+) -> str | None:
+    """Return the ``OPENAI_API_KEY`` value to hand ``codex exec`` as ``CODEX_API_KEY``, or None.
+
+    ``codex exec`` (0.147.0 and 0.166.0) reads only ``CODEX_API_KEY`` from the
+    environment; it ignores ``OPENAI_API_KEY``, which Metaproc documents as the
+    Codex API-key vehicle. Codex gives that env key precedence over every other
+    credential, so it is passed only when nothing else can log in: no
+    ``CODEX_ACCESS_TOKEN``, no ``auth.json`` in the effective ``CODEX_HOME``, and a
+    file credential store in every config layer Codex reads. When the adapter
+    cannot tell, it does not bridge and logs why at INFO. Only a run that would
+    otherwise fail with 401 gains the key. Values are trimmed as Codex trims them,
+    so a blank ``CODEX_API_KEY`` counts as unset, as does the ``.env.example``
+    placeholder.
+    """
+    codex_key = _codex_env_value(env, MetaprocEnv.CODEX_API_KEY.name)
+    if codex_key and codex_key != _CODEX_API_KEY_PLACEHOLDER:
+        return None
+    api_key = _codex_env_value(env, MetaprocEnv.OPENAI_API_KEY.name)
+    if not api_key:
+        return None
+    if _codex_env_value(env, _CODEX_ACCESS_TOKEN_ENV):
+        log.info(
+            "codex-cli: not passing OPENAI_API_KEY to Codex; %s is set, and Codex would "
+            "let the env key replace it",
+            _CODEX_ACCESS_TOKEN_ENV,
+        )
+        return None
+    codex_home = resolve_codex_home(env)
+    if (codex_home / "auth.json").is_file():
+        return None
+    blocker = _credential_store_blocker(codex_home, merged_config)
+    if blocker is not None:
+        log.info(
+            "codex-cli: not passing OPENAI_API_KEY to Codex; a login may be stored outside %s: %s",
+            codex_home / "auth.json",
+            blocker,
+        )
+        return None
+    _log_bridge(str(codex_home))
+    return api_key
+
+
+class _CodexChildEnv(dict[str, str]):
+    """The child environment ``prepare_env`` returns, with the ``CODEX_API_KEY`` bridge applied.
+
+    Every launcher applies a step's authored ``env``, and any plugin env
+    transform, with ``update()`` after ``prepare_env`` returns. So the bridge would
+    otherwise decide against ``$HOME/.codex`` while Codex runs against a
+    ``CODEX_HOME`` the step names, and a ChatGPT login there would lose to the
+    env key. An ``update()`` or item assignment that touches a bridge input
+    therefore withdraws the key the bridge set and decides again against the
+    merged environment. A ``CODEX_API_KEY`` the step names, blank included, is
+    the step's choice and is left as written. The object pickles and copies as a
+    plain dict.
+    """
+
+    def __init__(self, env: Mapping[str, str], merged_config: Mapping[str, object]) -> None:
+        super().__init__(env)
+        self._merged_config = merged_config
+        self._bridged: str | None = None
+        self._step_named_codex_key = False
+        self._decide()
+
+    def __reduce__(self) -> tuple[type[dict[str, str]], tuple[dict[str, str]]]:
+        return (dict, (dict(self),))
+
+    def __setitem__(self, key: str, value: str) -> None:
+        super().__setitem__(key, value)
+        self._changed({key})
+
+    def update(self, *args: Any, **kwargs: str) -> None:
+        incoming: dict[str, str] = dict(*args, **kwargs)
+        super().update(incoming)
+        self._changed(set(incoming))
+
+    def _changed(self, keys: set[str]) -> None:
+        touched = keys & _BRIDGE_INPUT_VARS
+        if not touched:
+            return
+        if MetaprocEnv.CODEX_API_KEY.name in touched:
+            self._step_named_codex_key = True
+        before = self._bridged
+        self._decide()
+        if before != self._bridged:
+            log.info(
+                "codex-cli: the step env sets %s; %s the OPENAI_API_KEY bridge to Codex",
+                ", ".join(sorted(touched)),
+                "applied" if self._bridged is not None else "withdrew",
+            )
+
+    def _decide(self) -> None:
+        name = MetaprocEnv.CODEX_API_KEY.name
+        current = super().get(name)
+        if (
+            not self._step_named_codex_key
+            and self._bridged is not None
+            and current == self._bridged
+        ):
+            super().__delitem__(name)
+            current = None
+        if current == _CODEX_API_KEY_PLACEHOLDER:
+            log.warning("codex-cli: ignoring the %s placeholder copied from .env.example", name)
+            super().__delitem__(name)
+        self._bridged = None
+        if self._step_named_codex_key:
+            return
+        bridged = _bridged_codex_api_key(self, self._merged_config)
+        if bridged is not None:
+            super().__setitem__(name, bridged)
+            self._bridged = bridged
 
 
 _CODEX_ALLOWED_KEYS = frozenset(
@@ -205,11 +497,46 @@ _CODEX_ALLOWED_KEYS = frozenset(
 
 # permission_mode -> (sandbox, approval_policy). bypassPermissions is special —
 # it emits --dangerously-bypass-approvals-and-sandbox instead of --sandbox/--ask-for-approval.
+# The sandbox carries each mode's policy: `codex exec` forces approval to `never` in
+# headless mode whatever `-a` says, so `-a` is only parse-validated. Codex removed
+# `on-failure` from the flag in 0.143.0 and `untrusted` in 0.149.0, leaving
+# `on-request` and `never`.
 _PERMISSION_MODE_MAP: dict[str, tuple[str, str]] = {
     "default": ("workspace-write", "on-request"),
-    "acceptEdits": ("workspace-write", "on-failure"),
-    "plan": ("read-only", "untrusted"),
+    "acceptEdits": ("workspace-write", "on-request"),
+    "plan": ("read-only", "on-request"),
 }
+
+# Explicit `approval_policy` values the pinned CLI no longer parses. They are
+# translated, with a warning, so existing process files keep running; the
+# translation has no runtime effect because `codex exec` forces `never`.
+CODEX_LEGACY_APPROVAL_POLICIES: dict[str, str] = {
+    "on-failure": "on-request",
+    "untrusted": "on-request",
+}
+
+
+@functools.cache
+def _warn_legacy_approval_policy(requested: str, replacement: str) -> None:
+    """Warn once per process per legacy value; fan-out builds many commands."""
+    log.warning(
+        "codex-cli approval_policy %r is no longer accepted by Codex %s; sending %r. "
+        "`codex exec` forces approval to `never`, so the run's behavior is unchanged.",
+        requested,
+        PINNED_CODEX_CLI_VERSION,
+        replacement,
+    )
+
+
+def _codex_approval_policy(value: object) -> str:
+    """Return the `-a` value the pinned CLI accepts for a configured policy."""
+    requested = str(value)
+    replacement = CODEX_LEGACY_APPROVAL_POLICIES.get(requested)
+    if replacement is None:
+        return requested
+    _warn_legacy_approval_policy(requested, replacement)
+    return replacement
+
 
 # Full set of accepted permission_mode values for validate_config — the
 # 3 mapped modes plus the bypassPermissions special case handled inline.
@@ -262,7 +589,7 @@ def _build_codex_flag_groups(
         if explicit_sandbox:
             top_level.extend(["--sandbox", str(explicit_sandbox)])
         if explicit_approval:
-            top_level.extend(["-a", str(explicit_approval)])
+            top_level.extend(["-a", _codex_approval_policy(explicit_approval)])
     elif permission_mode in _PERMISSION_MODE_MAP:
         sandbox_mode, approval = _PERMISSION_MODE_MAP[str(permission_mode)]
         top_level.extend(["--sandbox", sandbox_mode])
@@ -393,7 +720,7 @@ class CodexCliAdapter:
                 rejections.append(
                     ConfigRejection(
                         key=key,
-                        reason=f"unknown codex-cli model {value!r}",
+                        reason=_unknown_model_reason("codex-cli", value),
                     )
                 )
             elif key == "effort" and str(value) not in CODEX_VALID_EFFORTS:
@@ -441,9 +768,14 @@ class CodexCliAdapter:
     def prepare_env(
         self,
         env: dict[str, str],
-        _merged_config: dict[str, object],
+        merged_config: dict[str, object],
     ) -> dict[str, str]:
         out = dict(env)
+        self._pin_codex_home(out)
+        return _CodexChildEnv(out, merged_config)
+
+    @staticmethod
+    def _pin_codex_home(out: dict[str, str]) -> None:
         home = out.get("HOME")
         if home:
             # Pin CODEX_HOME so codex-cli uses the bootstrapped credentials
@@ -466,23 +798,25 @@ class CodexCliAdapter:
                 log.warning(
                     "codex-cli: failed to pre-create CODEX_HOME=%s", codex_home, exc_info=True
                 )
-        return out
 
     def working_directory(self, merged_config: dict[str, object]) -> Path | None:
         value = merged_config.get("working_directory")
         return Path(str(value)) if value else None
 
     def parse_result_event(self, line: str) -> dict[str, object] | None:
-        # codex-cli 0.124.0 uses flat top-level `type` keys (no msg.type
-        # nesting). Both terminal events signal end-of-stream: turn.completed
-        # (success, carries `usage` inline) and turn.failed (failure, carries
-        # error.message). Intermediate `error` events are codex-internal
+        # `codex exec --json` (0.124.0 through the pinned 0.166.0) uses flat
+        # top-level `type` keys (no msg.type nesting). Both terminal events
+        # signal end-of-stream: turn.completed (success, carries `usage`
+        # inline) and turn.failed (failure, carries error.message). Intermediate `error` events are codex-internal
         # reconnects and are NOT terminal.
         return parse_jsonl_event(line, "turn.completed") or parse_jsonl_event(line, "turn.failed")
 
     def check_auth(self) -> AuthStatus:
         cli_path = shutil.which("codex")
-        api_key = MetaprocEnv.OPENAI_API_KEY.read_str(default=None)
+        # Trimmed as Codex trims them: a blank value counts as unset.
+        api_key = (MetaprocEnv.OPENAI_API_KEY.read_str(default=None) or "").strip()
+        codex_api_key = (MetaprocEnv.CODEX_API_KEY.read_str(default=None) or "").strip()
+        access_token = _codex_env_value(os.environ, _CODEX_ACCESS_TOKEN_ENV)
         # Honor $CODEX_HOME via the shared helper so this stays in sync with
         # codex_auth.py and codex-cli itself. Without this, an operator
         # using a non-default CODEX_HOME would see "no creds found" here
@@ -513,19 +847,39 @@ class CodexCliAdapter:
                 setup_hint=CODEX_CLI_INSTALL_HINT,
             )
 
-        if api_key:
+        # Report the credential Codex will actually use, in Codex's order: an
+        # explicit CODEX_API_KEY, then CODEX_ACCESS_TOKEN, then the stored
+        # auth.json, then OPENAI_API_KEY, which reaches Codex only through
+        # prepare_env's CODEX_API_KEY bridge.
+        if codex_api_key and codex_api_key != _CODEX_API_KEY_PLACEHOLDER:
             return AuthStatus(
                 adapter_type=self.adapter_type,
                 cli_found=True,
                 cli_path=cli_path,
                 credentials_found=True,
                 auth_mode="api-key",
-                details="OPENAI_API_KEY is set (Vehicle A)",
+                details="CODEX_API_KEY is set; Codex prefers it over any stored login",
+                setup_hint="",
+            )
+
+        if access_token:
+            details = f"{_CODEX_ACCESS_TOKEN_ENV} is set; Codex uses it ahead of any stored login"
+            if api_key:
+                details += ", and runs do not pass OPENAI_API_KEY to Codex"
+            return AuthStatus(
+                adapter_type=self.adapter_type,
+                cli_found=True,
+                cli_path=cli_path,
+                credentials_found=True,
+                auth_mode="access-token",
+                details=details,
                 setup_hint="",
             )
 
         if auth_json.is_file():
             auth_mode_str, details = _inspect_auth_json(auth_json)
+            if api_key:
+                details += "; OPENAI_API_KEY is set but Codex uses this stored login"
             return AuthStatus(
                 adapter_type=self.adapter_type,
                 cli_found=True,
@@ -533,6 +887,33 @@ class CodexCliAdapter:
                 credentials_found=True,
                 auth_mode=auth_mode_str,
                 details=details,
+                setup_hint="",
+            )
+
+        if api_key:
+            blocker = _credential_store_blocker(auth_json.parent, {})
+            if blocker is not None:
+                return AuthStatus(
+                    adapter_type=self.adapter_type,
+                    cli_found=True,
+                    cli_path=cli_path,
+                    credentials_found=True,
+                    auth_mode="unknown",
+                    details=(
+                        f"OPENAI_API_KEY is set, but a Codex login may be stored outside "
+                        f"auth.json ({blocker}), so runs do not pass the key to Codex"
+                    ),
+                    setup_hint="",
+                )
+            return AuthStatus(
+                adapter_type=self.adapter_type,
+                cli_found=True,
+                cli_path=cli_path,
+                credentials_found=True,
+                auth_mode="api-key",
+                details=(
+                    "OPENAI_API_KEY is set (Vehicle A); runs pass it to Codex as CODEX_API_KEY"
+                ),
                 setup_hint="",
             )
 
@@ -592,7 +973,7 @@ class CodexCliAdapter:
     # ── AuthCapableCliAdapter methods ───────────────────────────────
 
     def debug_capture_args(self, _slot_dir: Path) -> list[str]:
-        """codex-cli has no equivalent of ``claude -d api`` today.
+        """codex-cli has no equivalent of Claude Code's ``--debug-file`` today.
 
         Returning ``[]`` opts out of the per-slot debug capture. If
         codex-cli grows a request-side debug flag, populate this with
@@ -660,8 +1041,12 @@ class CodexCliAdapter:
         single-vehicle adapter today.
         """
         del vehicle  # Protocol parity; unused for codex.
+        # CODEX_API_KEY is what prepare_env bridges OPENAI_API_KEY into; the
+        # slot's `forced_login_method = "chatgpt"` already makes Codex skip it,
+        # and dropping it keeps an API key out of an OAuth slot's child env.
         return {
             CODEX_CREDS_ENV_VAR: "",
+            MetaprocEnv.CODEX_API_KEY.name: "",
         }
 
     def materialize_credential(
@@ -710,7 +1095,7 @@ class CodexCliAdapter:
         if not auth_file.exists():
             msg = (
                 f"Codex credential capture requires an auth.json at {auth_file}. "
-                "Run `codex login --with-chatgpt-oauth` on this machine first."
+                "Run `codex login` (or `codex login --device-auth`) on this machine first."
             )
             raise RuntimeError(msg)
         try:
@@ -846,10 +1231,77 @@ def _inspect_auth_json(path: Path) -> tuple[str, str]:
         return ("unknown", f"{path} exists but could not be parsed")
     if not isinstance(doc, dict):
         return ("unknown", f"{path} exists but is not a JSON object")
-    tokens = cast("dict[str, Any]", doc).get("tokens")
-    mode = tokens.get("auth_mode") if isinstance(tokens, dict) else None
+    mode = codex_auth_json_mode(cast("dict[str, Any]", doc))
     if mode == "chatgpt":
         return ("interactive-login", f"Using ChatGPT OAuth session ({path})")
     if mode == "apikey":
         return ("api-key", f"Using API-key session ({path})")
-    return ("unknown", f"{path} exists but has no tokens.auth_mode")
+    if mode is None:
+        return ("unknown", f"{path} exists but holds no recognized Codex credential")
+    return ("unknown", f"{path} uses Codex auth_mode={mode!r}, which Metaproc does not classify")
+
+
+def codex_thread_id(stdout: str) -> str | None:
+    """Return the thread ID from a ``codex exec --json`` stream's ``thread.started`` event."""
+    for line in stdout.splitlines():
+        event = parse_jsonl_event(line, "thread.started")
+        if event is not None:
+            thread_id = event.get("thread_id")
+            return thread_id if isinstance(thread_id, str) and thread_id else None
+    return None
+
+
+def _read_rollout_text(rollout: Path) -> str | None:
+    """Return a rollout's text, decompressing a ``.jsonl.zst`` one; None when unreadable."""
+    if rollout.suffix != ".zst":
+        return rollout.read_text(encoding="utf-8")
+    try:
+        from compression import zstd  # noqa: PLC0415 -- CPython may be built without libzstd
+    except ImportError:
+        log.debug("codex-cli: cannot read %s; this Python has no compression.zstd", rollout)
+        return None
+    try:
+        with zstd.open(rollout, "rt", encoding="utf-8") as stream:
+            return stream.read()
+    except zstd.ZstdError, EOFError:
+        return None
+
+
+def codex_rollout_model(codex_home: Path, thread_id: str) -> str | None:
+    """Return the model Codex recorded for a thread in its session rollout.
+
+    ``codex exec`` writes ``$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<ts>-<thread>.jsonl``,
+    which Codex may later store compressed as ``.jsonl.zst``; both are read. Its
+    ``turn_context`` record carries the model Codex sent the request for after
+    its own config and profile resolution. That is the *requested* model:
+    ``codex exec`` (0.166.0) reports no model the provider served, in the event
+    stream or the rollout. Returns None when no readable rollout for the thread
+    exists or it names no model.
+    """
+    sessions = codex_home / "sessions"
+    # The thread ID becomes a glob pattern; accept only the UUID alphabet Codex uses.
+    if not thread_id or not all(ch.isalnum() or ch == "-" for ch in thread_id):
+        return None
+    if not sessions.is_dir():
+        return None
+    rollouts = sorted(
+        path
+        for pattern in (f"rollout-*-{thread_id}.jsonl", f"rollout-*-{thread_id}.jsonl.zst")
+        for path in sessions.rglob(pattern)
+    )
+    for rollout in rollouts:
+        try:
+            text = _read_rollout_text(rollout)
+        except OSError, UnicodeDecodeError:
+            continue
+        for line in (text or "").splitlines():
+            record = parse_jsonl_event(line, "turn_context")
+            if record is None:
+                continue
+            payload = record.get("payload")
+            model = (
+                cast("dict[str, Any]", payload).get("model") if isinstance(payload, dict) else None
+            )
+            if isinstance(model, str) and model:
+                return model
+    return None

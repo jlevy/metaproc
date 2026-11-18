@@ -8,8 +8,9 @@ process:
     verifies the binary is on PATH, credentials are detectable, a
     trivial prompt round-trips through the real backend, and
     `--assert-model` confirms the CLI dispatched against the expected
-    model (for codex, the configured model its config preamble names —
-    see `smoke-adapter-codex.process.md`). A green run here means every
+    model (for codex, which prints no config preamble at 0.166.0, the
+    requested model recorded in the session rollout — see
+    `smoke-adapter-codex.process.md`). A green run here means every
     adapter can dispatch laptop-local today and that no silent
     `--model` fallback is lurking in any of them.
 
@@ -60,7 +61,7 @@ process:
     - id: pi
       mode: composite
       uses: deps.smoke_adapter_pi
-      description: Live binary + credential + model-asserted prompt for pi-cli (glm-5-maas).
+      description: Live binary + credential + model-asserted prompt for pi-cli.
 ---
 # smoke-adapters-all — live aggregator across every adapter
 
