@@ -36,7 +36,13 @@ _COMPARISON_TABLE_HEADER = (
     "| Model | Provider | Input | Norm | Output | Cache Read | Cache Write | Source |"
 )
 _NORM_BASE_INPUT_PER_1M = 0.28  # deepseek-chat direct-API input price
-_TABLE_OMITTED_MODELS = {"gemini-3.1-pro-preview-customtools"}
+# Rows that duplicate another row's rate card: a same-priced endpoint, an alias,
+# and a dated ID that adapters report verbatim.
+_TABLE_OMITTED_MODELS = {
+    "gemini-3.1-pro-preview-customtools",
+    "gpt-5.6",
+    "claude-haiku-4-5-20251001",
+}
 # Derived from the central provider registry so adding a new provider in
 # metaproc/config/providers.py is a one-place change. The pricing table
 # does not include providers that have no rows in pricing.md (e.g. the
@@ -298,6 +304,72 @@ class TestPricing:
         assert compute_cost(stats, pricing) == pytest.approx(1.2)
         # 1M * 1.50 + 100K * 7.50 + 1M * 0.15 per 1M
         assert estimate_list_cost(stats, pricing) == pytest.approx(2.4)
+
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-opus-5-5",
+            "claude-sonnet-5-5",
+            "claude-haiku-5-5",
+            "claude-fable-5-2",
+            "gpt-6.1-sol",
+            "gpt-6.2-sol",
+            "gemini-4-argon",
+            "gemini-4-hydrogen",
+            "gemini-3.1-pro-preview-customtools",
+            "deepseek-flash",
+            "zai-org/glm-5.2-maas",
+            "deepseek-ai/deepseek-v4.1-flash-maas",
+        ],
+    )
+    def test_current_models_have_nonzero_prices(self, model: str) -> None:
+        """Defaults and current models price as the IDs adapters report them."""
+        pricing = load_pricing()
+        stats = UsageStats(input_tokens=1_000_000, output_tokens=1_000_000, model=model)
+        assert compute_cost(stats, pricing) > 0
+
+    def test_alias_and_dated_rows_track_their_targets(self) -> None:
+        """Rows keyed by an alias or dated ID carry their target's rate card."""
+        pricing = load_pricing()
+        for alias, target in (
+            ("gpt-5.6", "gpt-5.6-sol"),
+            ("claude-haiku-4-5-20251001", "claude-haiku-4-5"),
+            ("deepseek-v4-flash", "deepseek-flash"),
+        ):
+            assert pricing[alias]["actual_price"] == pricing[target]["actual_price"]
+            assert pricing[alias].get("list_price") == pricing[target].get("list_price")
+
+    def test_promotional_gemini_4_rate_is_actual_and_standard_rate_is_list(self) -> None:
+        """gemini-4-carbon bills the promotion and lists the 2026-12-01 standard rate."""
+        pricing = load_pricing()
+        stats = UsageStats(
+            input_tokens=1_000_000,
+            output_tokens=1_000_000,
+            cache_read_tokens=1_000_000,
+            model="gemini-4-carbon",
+            has_token_usage=True,
+        )
+        # 2.00 + 10.00 + 0.10 promotional; 4.00 + 20.00 + 0.20 standard.
+        assert compute_cost(stats, pricing) == pytest.approx(12.10)
+        assert estimate_list_cost(stats, pricing) == pytest.approx(24.20)
+
+    def test_haiku_5_5_stores_the_base_prompt_tier(self) -> None:
+        """The single rate card is the <=100K-prompt tier, the published base rate."""
+        rates = load_pricing()["claude-haiku-5-5"]["actual_price"]
+        assert rates == {
+            "input_per_1m": 0.10,
+            "output_per_1m": 0.50,
+            "cache_read_per_1m": 0.01,
+            "cache_write_per_1m": 0.125,
+        }
+
+    def test_deepseek_direct_rows_store_the_peak_rate(self) -> None:
+        """DeepSeek off-peak is half of peak; the table stores the peak upper bound."""
+        pricing = load_pricing()
+        pro = pricing["deepseek-v4-pro"]
+        assert pro["actual_price"]["input_per_1m"] == 1.32
+        assert pro["actual_price"]["output_per_1m"] == 3.96
+        assert "list_price" not in pro
 
     def test_markdown_comparison_table_matches_frontmatter_exactly(self) -> None:
         content, meta = fmf_read(_PRICING_DOC_PATH)
