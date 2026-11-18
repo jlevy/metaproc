@@ -868,10 +868,15 @@ models that billed it:
   Its terminal `result.modelUsage` carries the models that billed, but the assertion
   does not read it yet.
 - Pi: `message.model` on the first assistant `message_start` event.
-- Codex: the `model` field of the config preamble codex-cli prints before its event
-  stream. The check fails when the preamble is absent.
+- Codex: the model Codex requested, read from a legacy config preamble when one is
+  printed, else from the `turn_context` of the thread’s session rollout, else the
+  probe’s `-m`. Codex 0.166.0 reports no served model anywhere, so the check confirms
+  the request, and the adapter’s refusal of unknown models is the first safeguard.
 
 For Codex, `OPENAI_API_KEY` is an API-platform credential and uses API billing.
+`codex exec` reads an API key only from `CODEX_API_KEY`, so when no stored Codex login
+exists (no `auth.json` under a file-backed credential store) the adapter passes
+`OPENAI_API_KEY` under that name; a stored ChatGPT login keeps precedence.
 It does not consume the ChatGPT Pro Codex allowance.
 To use the ChatGPT-plan Codex allowance, authenticate the CLI with `codex login`; for
 remote workers, materialize that OAuth credential through the `codex-auth` Secret

@@ -2069,8 +2069,9 @@ Registered adapters (in `ADAPTER_REGISTRY`):
   are top-level-only and must precede `exec` or codex rejects them with
   `unexpected argument`. Two auth modes, resolved in this order:
   1. `OPENAI_API_KEY` (Vehicle A; pay-per-token; primary path for laptops, CI, and GCP
-     Batch workers).
-  2. ChatGPT-plan OAuth blob at `~/.codex/auth.json` with `tokens.auth_mode=chatgpt`
+     Batch workers). `codex exec` reads it as `CODEX_API_KEY`, which the adapter sets
+     when no stored Codex login exists.
+  2. ChatGPT-plan OAuth blob at `~/.codex/auth.json` with top-level `auth_mode: "chatgpt"`
      (Vehicle B; subscription-billed, free-per-request).
      Headless push requires `cli_auth_credentials_store = "file"` on the seeding laptop
      (see `research-2026-04-23-codex-cli-auth.md` §F10).

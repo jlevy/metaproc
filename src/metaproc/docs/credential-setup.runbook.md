@@ -284,7 +284,8 @@ export METAPROC_GCP_SECRET_CODEX_CREDS=projects/exampletool/secrets/codex-creds-
 ```
 
 The adapter’s `bootstrap(home)` hook reads `CODEX_CREDS_JSON`, validates that
-`tokens.auth_mode == "chatgpt"` (rejecting `apikey` blobs — those should arrive as
+`auth_mode == "chatgpt"` (read at the top level, where Codex writes it, or from the
+legacy nested `tokens.auth_mode`; rejecting `apikey` blobs — those should arrive as
 `OPENAI_API_KEY` directly), writes `{home}/.codex/auth.json` (mode 0600, parent 0700),
 and pops the env var so it does not leak to child processes.
 See [arch-authentication.md](arch-authentication.md) for the design context.
