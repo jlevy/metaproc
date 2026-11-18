@@ -122,9 +122,8 @@ when step 1 is green.
 
 The gemini-cli row covers every concrete model the catalog accepts for that harness
 except `gemini-3.6-flash`, which Vertex retires on 2026-11-19 and which remains
-reachable only through the Gemini API.
-The pi-cli row covers one model per Gemini lane; the other `google-vertex` models use
-the same API path.
+reachable only through the Gemini API. The pi-cli row covers one model per Gemini lane;
+the other `google-vertex` models use the same API path.
 The pi-cli `--assert-model` check is a substring match, so its `gemini-3.1-pro-preview`
 cell would also pass on `gemini-3.1-pro-preview-customtools`.
 

@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-11-12) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-11-18) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -2071,8 +2071,8 @@ Registered adapters (in `ADAPTER_REGISTRY`):
   1. `OPENAI_API_KEY` (Vehicle A; pay-per-token; primary path for laptops, CI, and GCP
      Batch workers). `codex exec` reads it as `CODEX_API_KEY`, which the adapter sets
      when no stored Codex login exists.
-  2. ChatGPT-plan OAuth blob at `~/.codex/auth.json` with top-level `auth_mode: "chatgpt"`
-     (Vehicle B; subscription-billed, free-per-request).
+  2. ChatGPT-plan OAuth blob at `~/.codex/auth.json` with top-level
+     `auth_mode: "chatgpt"` (Vehicle B; subscription-billed, free-per-request).
      Headless push requires `cli_auth_credentials_store = "file"` on the seeding laptop
      (see `research-2026-04-23-codex-cli-auth.md` §F10).
   3. GCP Batch Vehicle B via Secret Manager: `metaproc codex-auth push` pushes
@@ -2125,9 +2125,9 @@ The adapter maps the framework’s `provider` and `model` config fields to Pi’
 `--provider` and `--model` CLI flags.
 
 Valid models span Pi’s built-in provider families and the custom providers in the
-packaged `pi-models.default.json`.
-The authoritative list is `known_model_ids("pi-cli")`, which combines the reviewed Pi
-built-in IDs in `src/metaproc/config/model_catalog.py` with the packaged catalog:
+packaged `pi-models.default.json`. The authoritative list is
+`known_model_ids("pi-cli")`, which combines the reviewed Pi built-in IDs in
+`src/metaproc/config/model_catalog.py` with the packaged catalog:
 
 - **Anthropic**: fable, opus, sonnet, haiku, and full IDs such as claude-fable-5-2 and
   claude-opus-5-5
@@ -2152,13 +2152,13 @@ endpoint once it has a registry entry.
 [arch-cloud-execution.md §3.12](arch-cloud-execution.md) and
 [arch-authentication.md](arch-authentication.md), UC-5 / UC-6):** third-party models in
 Vertex AI Model Garden (GLM-5.2, DeepSeek V4.1 Flash) expose an OpenAI-compatible
-endpoint that Pi connects to via a custom `vertex-maas` provider in `models.json`.
-The packaged `apiKey` is a shell command that prints the token Metaproc supplies;
-Metaproc injects a fresh `google.auth` access token per batch (**not per item**) and Pi
-sends it as `Authorization: Bearer <token>`. This is why
-the framework treats `vertex`-prefixed providers specially in the adapter: it resolves
-the token once via `resolve_gcp_token()` and writes it into each item’s
-`runtime_config`, instead of leaving the operator to refresh tokens manually.
+endpoint that Pi connects to via a custom `vertex-maas` provider in `models.json`. The
+packaged `apiKey` is a shell command that prints the token Metaproc supplies; Metaproc
+injects a fresh `google.auth` access token per batch (**not per item**) and Pi sends it
+as `Authorization: Bearer <token>`. This is why the framework treats `vertex`-prefixed
+providers specially in the adapter: it resolves the token once via `resolve_gcp_token()`
+and writes it into each item’s `runtime_config`, instead of leaving the operator to
+refresh tokens manually.
 Failure raises an exception; there is no degraded fallback path.
 
 This indirection is what makes the multi-model backtest work without per-model operator

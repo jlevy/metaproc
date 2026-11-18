@@ -53,7 +53,6 @@ def test_rewrite_retargets_project_in_vertex_base_url() -> None:
     )
 
 
-
 def test_rewrite_turns_bare_api_key_env_name_into_reference(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -105,6 +104,7 @@ def test_build_rewrites_bare_api_key_from_operator_overlay(tmp_path: Path) -> No
         out = json.loads(build_pi_models_json("exampletool"))
 
     assert out["providers"]["openai"]["apiKey"] == "$OPENAI_API_KEY"
+
 
 def test_build_merges_operator_file_into_packaged(tmp_path: Path) -> None:
     """Operator-added models augment the packaged vertex-maas block; rewrite still runs."""

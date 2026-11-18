@@ -6,7 +6,7 @@ status: Draft — partial currency notice below
 ---
 # Architecture: Authentication and Credentials
 
-**Date:** 2026-04-21 (last updated 2026-10-11) **Status:** Draft — partial currency
+**Date:** 2026-04-21 (last updated 2026-11-18) **Status:** Draft — partial currency
 notice below
 
 ## Currency notice (2026-04-28)
@@ -449,9 +449,9 @@ Auth flow:
    `provider.startswith("vertex")` and `backend == "local"`.
 
 4. The token is injected into the adapter’s `api_key` merged config, and `prepare_env`
-   passes it to the pi-cli subprocess as `METAPROC_PI_API_KEY`, which keeps it out of the
-   process list.
-   Live checks in `src/metaproc/commands/auth_check.py` pass it as `--api-key <token>`.
+   passes it to the pi-cli subprocess as `METAPROC_PI_API_KEY`, which keeps it out of
+   the process list. Live checks in `src/metaproc/commands/auth_check.py` pass it as
+   `--api-key <token>`.
 
 5. Tokens auto-refresh via `google.auth` before expiry — no subprocess shell-outs, no
    TTL guessing. Failure raises; there is no degraded fallback.
@@ -470,8 +470,7 @@ Additional per-container rewrites (`src/metaproc/cloud/gcp/batch_backend.py`
 - `apiKey` values beginning with `!gcloud` (a shell-command token that Pi expands) are
   rewritten to a command that prints `METAPROC_PI_API_KEY` when it is set and otherwise
   runs `gcp-access-token.sh`, a small helper installed in the container that prints an
-  ADC token.
-  Containers don’t have the `gcloud` CLI.
+  ADC token. Containers don’t have the `gcloud` CLI.
 - A bare `apiKey` that names an `*_API_KEY` variable, such as `"OPENAI_API_KEY"`, is
   rewritten to the `"$OPENAI_API_KEY"` reference, with a warning.
   Pi sends a bare string as the literal key, so an operator file written for an older Pi
@@ -1085,10 +1084,10 @@ Anthropic-supported paths over reverse-engineered ones —
 
 Slot directories are credential-bearing and must be wiped after every run.
 But the adapter writes diagnostic files into the slot during execution
-(`claude --debug-file <slot>/claude-code-debug.log`), and those files are the
-only evidence of OAuth-refresh attempts, per-attempt API errors, and `AxiosError`
-payloads. Without them, post-mortem on a wave of identical failures is impossible — the
-operator only sees `auth_outcome: classification=unknown, reason=exit-code-1`.
+(`claude --debug-file <slot>/claude-code-debug.log`), and those files are the only
+evidence of OAuth-refresh attempts, per-attempt API errors, and `AxiosError` payloads.
+Without them, post-mortem on a wave of identical failures is impossible — the operator
+only sees `auth_outcome: classification=unknown, reason=exit-code-1`.
 
 **Pattern.** The adapter declares which filenames in the slot are diagnostic (vs.
 credential-bearing) via an explicit Protocol method:
@@ -1102,9 +1101,8 @@ class AuthCapableCliAdapter(Adapter, Protocol):
 
 `ClaudeCodeCliAdapter` returns `("claude-code-debug.log",)`. `CodexCliAdapter` and
 others currently return `()` until they grow an equivalent of Claude Code’s
-`--debug-file` log. Filenames
-are adapter-namespaced so multiple adapters’ diagnostics coexist in the run’s `.logs/`
-tree without collision.
+`--debug-file` log. Filenames are adapter-namespaced so multiple adapters’ diagnostics
+coexist in the run’s `.logs/` tree without collision.
 
 The orchestrator (`run_parallel._teardown_pool_slot`) calls
 `SlotCoordinator.preserve_diagnostics(lease, session_log_path)` on **every** teardown
@@ -1245,14 +1243,15 @@ on its `EntryState`. Slot bootstrap branches on `vehicle`:
   omits `CLAUDE_CODE_OAUTH_TOKEN` (it IS the credential) but scrubs every other
   higher-precedence var (`ANTHROPIC_AUTH_TOKEN`, `apiKeyHelper`, cloud-provider mode
   flags, the provisioning-only `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` /
-  `CLAUDE_CODE_OAUTH_SCOPES`, and the Anthropic profile and Workload Identity
-  Federation variables `ANTHROPIC_PROFILE`, `ANTHROPIC_FEDERATION_RULE_ID`,
+  `CLAUDE_CODE_OAUTH_SCOPES`, and the Anthropic profile and Workload Identity Federation
+  variables `ANTHROPIC_PROFILE`, `ANTHROPIC_FEDERATION_RULE_ID`,
   `ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_IDENTITY_TOKEN[_FILE]`,
   `ANTHROPIC_SERVICE_ACCOUNT_ID` and `ANTHROPIC_WORKSPACE_ID`, which Claude Code ranks
   above stored `/login` credentials; an active `oidc_federation` profile file in the
-  Anthropic configuration directory is not covered). Defense-in-depth: materialize_credential asserts no stray
-  `.credentials.json` or `settings.json` exists in the slot — a leaked `apiKeyHelper`
-  would otherwise silently outvote the static token in the precedence chain.
+  Anthropic configuration directory is not covered).
+  Defense-in-depth: materialize_credential asserts no stray `.credentials.json` or
+  `settings.json` exists in the slot — a leaked `apiKeyHelper` would otherwise silently
+  outvote the static token in the precedence chain.
 - **Vehicle B (`LOGIN_CREDENTIALS`, legacy / fallback)** — the existing
   `.credentials.json` snapshot path described throughout §N.1-§N.13. Preserved for
   accounts where Vehicle A isn’t usable on the pinned CLI version, but new deployments

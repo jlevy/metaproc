@@ -98,9 +98,9 @@ Edit `src/metaproc/data/pi-models.default.json` only for models Pi does not ship
 A `models[]` entry whose `id` matches a Pi built-in model replaces it wholesale (zero
 cost, default limits, no thinking map); state deliberate differences from a built-in
 model as `modelOverrides` instead.
-If Pi already has the provider built in, it reads the key from the provider's
-environment variable and the block needs no `apiKey`.
-For an OpenAI-compatible provider Pi does not ship, mirror the `moonshot` block:
+If Pi already has the provider built in, it reads the key from the provider’s
+environment variable and the block needs no `apiKey`. For an OpenAI-compatible provider
+Pi does not ship, mirror the `moonshot` block:
 
 ```json
 "example-provider": {
@@ -118,8 +118,8 @@ For an OpenAI-compatible provider Pi does not ship, mirror the `moonshot` block:
 > **`apiKey` syntax** (per pi-mono
 > [custom-provider docs](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/custom-provider.md)):
 > reference an environment variable as `"$EXAMPLE_API_KEY"` or `"${EXAMPLE_API_KEY}"`.
-> Pi treats a bare string such as `"EXAMPLE_API_KEY"` as the literal key and the provider
-> answers 401. The `!` prefix is for shell commands (e.g.
+> Pi treats a bare string such as `"EXAMPLE_API_KEY"` as the literal key and the
+> provider answers 401. The `!` prefix is for shell commands (e.g.
 > `"!gcloud auth print-access-token"`); a value like `"!env:EXAMPLE_API_KEY"` is
 > interpreted as a shell command and fails with
 > `Failed to resolve API key … from shell command: env:…`.

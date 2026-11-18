@@ -924,6 +924,14 @@ class TestPiCliAdapter:
         assert "--provider" in cmd
         assert "--model" in cmd
 
+    def test_build_command_disables_builtin_mcp(self, tmp_path):
+        """Pi 1.x loads MCP by default; `--no-mcp` keeps `--tools` the whole surface."""
+        prompt = tmp_path / "prompt.md"
+        prompt.write_text("x")
+        cmd = self.adapter.build_command(prompt, {"tools": ["Read"]}, {})
+        assert "--no-mcp" in cmd
+        assert "--no-extensions" not in cmd
+
     def test_build_command_custom_config(self, tmp_path):
         prompt = tmp_path / "prompt.md"
         prompt.write_text("x")
@@ -944,6 +952,18 @@ class TestPiCliAdapter:
         result = self.adapter.prepare_env(env, {})
         assert result["PI_SKIP_VERSION_CHECK"] == "1"
         assert "PATH" in result
+
+    def test_prepare_env_turns_telemetry_off(self):
+        env = {"PATH": "/bin", "HOME": "/workspace/user", "PI_TELEMETRY": "1"}
+        result = self.adapter.prepare_env(env, {})
+        assert result["PI_TELEMETRY"] == "0"
+        assert "PI_OFFLINE" not in result
+
+    def test_install_hint_keeps_release_age_gate(self):
+        """Pi ships no shrinkwrap, so only the first-party scope skips the cool-off."""
+        assert "--min-release-age=14" in PI_CLI_INSTALL_HINT
+        assert "--min-release-age-exclude='@earendil-works/*'" in PI_CLI_INSTALL_HINT
+        assert "--ignore-scripts" in PI_CLI_INSTALL_HINT
 
     def test_parse_result_event_detects_agent_end(self):
 

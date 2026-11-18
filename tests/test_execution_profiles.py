@@ -188,9 +188,7 @@ def test_built_in_registry_contains_gemini_profiles() -> None:
         assert (resolved.profile.adapter, resolved.profile.model) == (adapter, model)
 
 
-@pytest.mark.parametrize(
-    "name", ["gemini-flash", "gemini-flash-36", "pi-gemini-flash", "pi-glm5"]
-)
+@pytest.mark.parametrize("name", ["gemini-flash", "gemini-flash-36", "pi-gemini-flash", "pi-glm5"])
 def test_built_in_registry_drops_retired_model_profiles(name: str) -> None:
     registry = ExecutionProfileRegistry.load(include_builtins=True)
     with pytest.raises(ValueError, match=rf"unknown execution profile: '{name}'"):

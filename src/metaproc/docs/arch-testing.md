@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Testing
 
-**Date:** 2026-04-24 (last updated 2026-09-23) **Status:** Approved
+**Date:** 2026-04-24 (last updated 2026-11-18) **Status:** Approved
 
 Testing is organized into tiers by cost and scope.
 Each tier is a named process spec you run via `metaproc run-process`; the table below
@@ -69,8 +69,8 @@ Credential requirements per adapter:
 | `gemini-cli` | one of: (a) `GEMINI_API_KEY`, (b) `GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_API_KEY`, (c) `GOOGLE_GENAI_USE_VERTEXAI=true` + `GOOGLE_CLOUD_PROJECT` + ADC | See [credential-setup.md § Gemini](credential-setup.runbook.md#gemini-cli-gemini-cli). The smoke uses mode (c) against `$METAPROC_GCP_PROJECT` so it runs with no Gemini-specific key. |
 | `pi-cli` | `~/.pi/agent/auth.json` (plus GCP ADC for `vertex-maas`) | `/login` in `pi`; `gcloud auth application-default login` for MaaS |
 
-The `pi-cli` smoke selects `vertex-maas` with `glm-5.2-maas`.
-Substitute `--model <other>` and `--provider <other>` to probe another configured route.
+The `pi-cli` smoke selects `vertex-maas` with `glm-5.2-maas`. Substitute
+`--model <other>` and `--provider <other>` to probe another configured route.
 Model selection does not establish pricing or account credit eligibility.
 
 ### Model assertion (`--assert-model`)
@@ -109,10 +109,10 @@ missing:
   does not read it yet.
 - Pi’s is `message.model` on the first assistant `message_start` event.
 - Codex’s is the requested model, read from the thread’s session rollout because
-  codex-cli 0.166.0 prints no config preamble and reports no served model. It names
-  the configured model, not the one that answered, so the codex model guarantee rests
-  on the adapter’s refusal of unknown models and the separate
-  negative-control smoke (invalid `-m <model>` must exit non-zero) — see
+  codex-cli 0.166.0 prints no config preamble and reports no served model.
+  It names the configured model, not the one that answered, so the codex model guarantee
+  rests on the adapter’s refusal of unknown models and the separate negative-control
+  smoke (invalid `-m <model>` must exit non-zero) — see
   [`smoke-adapters-negative-control.process.md`](https://github.com/jlevy/metaproc/blob/main/process/self-test/smoke-adapters-negative-control.process.md).
 
 ### Cloud-dispatch claude credential (Phase 2b)

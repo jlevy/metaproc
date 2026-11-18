@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Claude Code Harness
 
-**Date:** 2026-04-30 (last updated 2026-09-22) **Status:** Approved
+**Date:** 2026-04-30 (last updated 2026-11-18) **Status:** Approved
 
 ## Overview
 

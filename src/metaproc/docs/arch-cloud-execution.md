@@ -6,7 +6,7 @@ status: Approved
 ---
 # Architecture: Cloud Execution
 
-**Date:** 2026-04-12 (last updated 2026-11-12) **Status:** Approved
+**Date:** 2026-04-12 (last updated 2026-11-18) **Status:** Approved
 
 For the overall metaproc framework design, see [metaproc-design.md](metaproc-design.md);
 for the run pool process management subsystem, see [arch-runpool.md](arch-runpool.md).
@@ -641,8 +641,8 @@ All GCP infrastructure parameters are configurable via env vars:
 
 ### 3.12 Vertex AI MaaS Integration
 
-Third-party models in Vertex AI Model Garden (GLM-5.2, DeepSeek V4.1 Flash)
-expose an OpenAI-compatible chat/completions endpoint.
+Third-party models in Vertex AI Model Garden (GLM-5.2, DeepSeek V4.1 Flash) expose an
+OpenAI-compatible chat/completions endpoint.
 The Pi CLI adapter connects to these via a custom `vertex-maas` provider.
 The packaged default `src/metaproc/data/pi-models.default.json` declares it, and an
 operator `~/.pi/agent/models.json` can extend it.
