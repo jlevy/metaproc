@@ -17,12 +17,19 @@ shipped behavior belongs in [`src/metaproc/docs/`](../../../src/metaproc/docs/).
   macOS and Linux gauge semantics, process-tree attribution, and the separation between
   admission, launch pacing, and emergency containment
 
-Together, these records are the authoritative project-neutral account of the downstream
+Together, the process-safety records are the authoritative project-neutral account of the downstream
 agent-resource research available on 2026-09-01. They preserve the reusable
 measurements, causal analysis, source review, state-isolation contract, operating-system
 accounting, guard evidence, workflow controls, and open evidence gaps.
 Consumer-specific run identifiers, private issue references, local paths, deployment
 tasks, and raw operational artifacts remain with the consumer that owns them.
+
+## Models and Agent CLIs
+
+- [Model Catalog and Agent CLI Refresh](research-2026-11-18-model-and-harness-refresh.md):
+  Gemini 4, GPT-6.x and Claude 5.5 lifecycle evidence, the four agent CLI pin reviews,
+  the Gemini CLI model-resolution and thinking-override findings, and the live probe
+  routes and their gaps
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.
