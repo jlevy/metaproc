@@ -2067,14 +2067,21 @@ Registered adapters (in `ADAPTER_REGISTRY`):
   `-c key=value` passthrough with JSON-encoded values).
   Grammar-aware flag placement is load-bearing: `-a/--ask-for-approval` and `--search`
   are top-level-only and must precede `exec` or codex rejects them with
-  `unexpected argument`. Two auth modes, resolved in this order:
-  1. `OPENAI_API_KEY` (Vehicle A; pay-per-token; primary path for laptops, CI, and GCP
-     Batch workers). `codex exec` reads it as `CODEX_API_KEY`, which the adapter sets
-     when no stored Codex login exists.
-  2. ChatGPT-plan OAuth blob at `~/.codex/auth.json` with top-level
-     `auth_mode: "chatgpt"` (Vehicle B; subscription-billed, free-per-request).
-     Headless push requires `cli_auth_credentials_store = "file"` on the seeding laptop
-     (see `research-2026-04-23-codex-cli-auth.md` §F10).
+  `unexpected argument`. Two auth modes.
+  Codex 0.166.0 uses, in order, `CODEX_API_KEY`, then `CODEX_ACCESS_TOKEN`, then the
+  stored login; `codex exec` never reads `OPENAI_API_KEY`:
+  1. ChatGPT-plan OAuth blob at `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`)
+     with top-level `auth_mode: "chatgpt"` (Vehicle B; subscription-billed,
+     free-per-request). Headless push requires `cli_auth_credentials_store = "file"` on
+     the seeding laptop (see `research-2026-04-23-codex-cli-auth.md` §F10).
+  2. `OPENAI_API_KEY` (Vehicle A; pay-per-token; primary path for laptops, CI, and GCP
+     Batch workers). The adapter passes it to Codex as `CODEX_API_KEY` only when nothing
+     else can log in: `CODEX_API_KEY` and `CODEX_ACCESS_TOKEN` are unset or blank, the
+     effective `CODEX_HOME` has no `auth.json`, and every config layer Codex reads
+     (system, user, project, legacy managed, `config_overrides`) selects the `file`
+     credential store. When it cannot tell, it does not pass the key and logs why.
+     The decision is made against the child environment after the step’s `env` is
+     applied, so a step that names its own `CODEX_HOME` keeps that home’s login.
   3. GCP Batch Vehicle B via Secret Manager: `metaproc codex-auth push` pushes
      `~/.codex/auth.json` to Secret Manager; dispatch binds
      `METAPROC_GCP_SECRET_CODEX_CREDS` → `CODEX_CREDS_JSON` as a Batch container-side
@@ -2082,11 +2089,12 @@ Registered adapters (in `ADAPTER_REGISTRY`):
      `{home}/.codex/auth.json` (mode 0600, parent 0700), pops the env var to prevent
      child-process leaks, and rejects `apikey` blobs (API-key auth should arrive as
      `OPENAI_API_KEY` directly).
-     Event parsing uses codex-cli 0.124.0’s flat top-level `type` envelope: terminal
-     events are `turn.completed` (success; carries
-     `usage.{input_tokens, cached_input_tokens, output_tokens}` inline) and
-     `turn.failed` (failure; `error.message`). Intermediate `error` events are
-     codex-internal reconnect retries and not terminal.
+     Event parsing uses the flat top-level `type` envelope codex-cli has emitted from
+     0.124.0 through the pinned 0.166.0: terminal events are `turn.completed` (success;
+     carries `usage` inline: `input_tokens`, `cached_input_tokens`, `output_tokens`,
+     and, where the release reports it, `cache_write_input_tokens`) and `turn.failed`
+     (failure; `error.message`). Intermediate `error` events are codex-internal
+     reconnect retries and not terminal.
      Log compaction strips `item.started` / `item.updated` / intermediate `error`; keeps
      `item.completed` (agent_message / reasoning / command_execution / file_change /
      mcp_tool_call / web_search / todo_list) and both terminal events.

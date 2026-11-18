@@ -918,10 +918,15 @@ warning, a warning log record, and an `auth_skipped` runpool event naming the st
 configured adapters rather than silently skipping the pool.
 
 Higher-precedence OAuth vars (`ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`,
-`CLAUDE_CODE_APIKEY_HELPER`, `CODEX_CREDS_JSON`) are scrubbed from the subprocess env.
-`ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are not scrubbed because they are explicit
-API-key mode; if either would override the selected pooled OAuth slot, dispatch refuses
-the slot instead of silently running on the wrong account.
+`CLAUDE_CODE_APIKEY_HELPER`, `CODEX_CREDS_JSON`) are scrubbed from the subprocess env,
+as is `CODEX_API_KEY`, which Codex prefers over any stored login and which the adapter
+may have set from `OPENAI_API_KEY`. `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are not
+scrubbed because they are explicit API-key mode; when the pooled adapter’s key is
+present (`ANTHROPIC_API_KEY` for Claude Code, `OPENAI_API_KEY` for Codex), dispatch
+refuses the slot instead of risking the wrong account.
+For Codex the refusal is conservative: `codex exec` never reads `OPENAI_API_KEY`, the
+slot drops `CODEX_API_KEY`, and the slot’s `config.toml` sets
+`forced_login_method = "chatgpt"`, so the key could not take over the slot.
 
 **Concurrency is decoupled from credential count.** Many concurrent items can share the
 same pool label simultaneously — the per-label `lease_holder` mutex was specifically
