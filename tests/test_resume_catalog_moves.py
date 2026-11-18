@@ -309,8 +309,9 @@ _AGENT_PROCESS = """\
 process:
   name: default-models
   defaults:
-    adapter:
-      type: codex-cli
+    adapters:
+      default:
+        type: codex-cli
   steps:
     - id: draft
       mode: agent
