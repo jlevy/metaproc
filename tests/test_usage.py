@@ -507,17 +507,17 @@ class TestSumPiUsage:
         assert stats.cost_is_estimated is True
 
     @pytest.mark.parametrize(
-        ("provider", "model", "reported_cost", "expected"),
+        ("provider", "model", "reported_cost", "has_cost", "expected"),
         [
-            ("vertex-maas", "deepseek-ai/deepseek-v4.1-flash-1017-maas", 0.0, None),
-            ("vertex-maas", "deepseek-v4.1-flash-1017-maas", 0.0, None),
-            ("vertex-maas", "deepseek-ai/deepseek-v4.1-flash-1017-maas", 0.25, 0.25),
-            ("vertex-maas", "deepseek-ai/deepseek-v4.1-flash-maas", 0.0, 0.0),
-            ("operator", "deepseek-ai/deepseek-v4.1-flash-1017-maas", 0.0, 0.0),
+            ("vertex-maas", "deepseek-ai/deepseek-v4.1-flash-1017-maas", 0.0, False, 0.0546),
+            ("vertex-maas", "deepseek-v4.1-flash-1017-maas", 0.0, False, 0.0546),
+            ("vertex-maas", "deepseek-ai/deepseek-v4.1-flash-1017-maas", 0.25, True, 0.25),
+            ("vertex-maas", "deepseek-ai/deepseek-v4.1-flash-maas", 0.0, True, 0.0),
+            ("operator", "deepseek-ai/deepseek-v4.1-flash-1017-maas", 0.0, True, 0.0),
         ],
     )
     def test_reported_pi_cost_requires_a_price_basis(
-        self, provider: str, model: str, reported_cost: float, expected: float | None
+        self, provider: str, model: str, reported_cost: float, has_cost: bool, expected: float
     ) -> None:
         stats = sum_pi_usage(
             {
@@ -527,15 +527,20 @@ class TestSumPiUsage:
                         "role": "assistant",
                         "provider": provider,
                         "model": model,
-                        "usage": {"input": 100, "output": 20, "cost": {"total": reported_cost}},
+                        "usage": {
+                            "input": 100_000,
+                            "output": 20_000,
+                            "cacheRead": 100_000,
+                            "cost": {"total": reported_cost},
+                        },
                     },
                 ],
             }
         )
 
         assert stats.has_token_usage
-        assert stats.has_cost is (expected is not None)
-        assert estimate_list_cost(stats) == expected
+        assert stats.has_cost is has_cost
+        assert estimate_list_cost(stats) == pytest.approx(expected)
 
 
 # ── Claude Code usage extraction ───────────────────────────────

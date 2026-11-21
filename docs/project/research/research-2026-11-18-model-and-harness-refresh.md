@@ -82,8 +82,9 @@ model resolution. The Vertex route passed a Gemini CLI file-read round trip.
 - `gemini-3.1-pro-preview-customtools` is a documented public-preview endpoint on both
   surfaces with a 1,048,576-token context, not the 2,097,152 previously packaged for Pi.
 - Operator comparisons rated 3.8 Flash below 3.6 Flash.
-  Gemini 4 Hydrogen replaces the 3.5 Flash profiles and is the upgrade path for 3.6
-  Flash.
+  Gemini 4 Hydrogen is the Gemini CLI successor to the 3.5 Flash profile and the upgrade
+  path for 3.6 Flash. The `pi-gemini-flash` profile retains the exact 3.5 Flash ID
+  through Pi’s native Vertex route.
 
 #### Vertex Global API Follow-Up (2026-11-21)
 
@@ -96,6 +97,20 @@ The Metaproc auth check for `gemini-flash-36` reported the exact billed model.
 Pi 1.5.2 completed a file-read tool round trip for 3.6 Flash on its native
 `google-vertex` route.
 
+#### Side-by-Side Workflow Comparison (2026-11-21)
+
+Six concurrent runs of the same downstream annotation process used one synthetic
+business evidence packet and separate run IDs.
+Flash 3.6, Flash 3.8, and Gemini 4 Hydrogen, Neon, Argon, and Carbon each completed tool
+use and output validation through Gemini CLI 0.66.0. The terminal events billed the
+exact selected IDs. All six chose the same 70–80% band for the sample.
+
+Direct Vertex global calls returned their exact model versions for 3.7 Flash, 3.5 Flash,
+3.1 Flash-Lite, and 3 Flash Preview.
+Pi 1.5.2 successfully read a sentinel file with every one of those IDs and with Flash
+3.6 and all four Gemini 4 IDs using `google-vertex`. The packaged Pi overlay supplies
+Hydrogen, Carbon, and Neon.
+
 ### Vertex MaaS
 
 All six packaged open-model IDs (GLM 5, GLM 4.7, DeepSeek V3.2, Kimi K2 Thinking, and
@@ -103,6 +118,12 @@ two Qwen3 models) retired on 2026-10-21. Current replacements are preview models
 `global` region only: `zai-org/glm-5.2-maas`, `deepseek-ai/deepseek-v4.1-flash-maas` and
 `deepseek-ai/deepseek-v4.1-flash-1017-maas`. Vertex MaaS currently serves no Kimi or
 Qwen chat model.
+
+On 2026-11-21, Google’s published rate for the 1017 snapshot was $0.30 input, $1.20
+output, and $0.006 cached input per million tokens.
+Google lists text and image input and a minimum availability date of 2026-12-31.
+[Vertex pricing](https://cloud.google.com/model-garden/partner-models/pricing),
+[DeepSeek 1017 model page](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/maas/deepseek/deepseek-v41-flash-1017).
 
 ### Gemini CLI 0.59.0 to 0.66.0
 
@@ -213,14 +234,14 @@ Pi’s Anthropic and `vertex-maas` routes remain unverified.
 
 ## Open Questions
 
-- Vertex routes for Gemini 4 Argon, Gemini 4 Carbon, Gemini 3.1 Pro and the MaaS
-  replacements still need bounded harness tool-call probes.
-- The Vertex MaaS replacements carry only a 45-day preview minimum (about 2026-11-28 to
-  2026-11-30).
+- Vertex routes for Gemini 3.1 Pro and the MaaS replacements still need bounded harness
+  tool-call probes.
+- Check the Vertex MaaS replacements against their individual preview availability dates
+  before launching long-running batches.
 - Gemini 4 Argon and Carbon and GPT-5.6 Sol promotional prices end 2026-11-30 (bead
   `mp-qshs`).
-- Whether the gemini-cli default should move to `gemini-4-argon` awaits a Vertex
-  tool-call probe and a tier-1 dry run.
+- Whether the gemini-cli default should move to `gemini-4-argon` awaits a tier-1
+  comparison over representative inputs.
 
 <!-- This document follows common-doc-guidelines.md.
 See github.com/jlevy/practical-prose and review guidelines before editing.

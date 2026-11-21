@@ -154,11 +154,16 @@ def test_gemini_preserves_accepted_explicit_models(
         ("openai", "gpt-6-astra"),
         ("openai", "gpt-5.6-sol"),
         ("google-vertex", "gemini-4-argon"),
+        ("google-vertex", "gemini-4-neon"),
         ("google-vertex", "gemini-4-carbon"),
         ("google-vertex", "gemini-4-hydrogen"),
         ("google-vertex", "gemini-3.8-flash"),
+        ("google-vertex", "gemini-3.7-flash"),
         ("google-vertex", "gemini-3.6-flash"),
+        ("google-vertex", "gemini-3.5-flash"),
         ("google-vertex", "gemini-3.5-flash-lite"),
+        ("google-vertex", "gemini-3.1-flash-lite"),
+        ("google-vertex", "gemini-3-flash-preview"),
         ("google-vertex", "gemini-3.1-pro-preview-customtools"),
     ],
 )
@@ -173,12 +178,12 @@ def test_pi_preserves_accepted_explicit_models(
     prompt = tmp_path / "prompt.md"
     prompt.write_text("Select the requested model.", encoding="utf-8")
 
-    command = PiCliAdapter().build_command(
-        prompt,
-        {"provider": provider, "model": model},
-        {},
-    )
+    adapter = PiCliAdapter()
+    config: dict[str, object] = {"provider": provider, "model": model}
+    assert adapter.validate_config(config) == []
+    command = adapter.build_command(prompt, config, {})
 
+    assert _selected_model(command, "--provider") == provider
     assert _selected_model(command, "--model") == model
 
 
@@ -187,13 +192,39 @@ def test_pi_preserves_accepted_explicit_models(
     [
         ("vertex-maas", "zai-org/glm-5-maas"),
         ("vertex-maas", "glm-5-maas"),
-        ("google-vertex", "gemini-3.5-flash"),
         ("openai", "gpt-5.4-mini"),
     ],
 )
 def test_pi_rejects_retired_models(provider: str, model: str) -> None:
     rejections = PiCliAdapter().validate_config({"provider": provider, "model": model})
     assert any(rejection.key == "model" for rejection in rejections)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-3.7-flash",
+        "gemini-3.5-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-3-flash-preview",
+        "gemini-4-neon",
+    ],
+)
+def test_pi_requires_the_vertex_route_for_provider_specific_models(
+    model: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("metaproc.adapters.pi_cli._pi_version_drift", lambda: None)
+    adapter = PiCliAdapter()
+    for provider in ("google", None):
+        config: dict[str, object] = {"model": model}
+        if provider:
+            config["provider"] = provider
+        rejections = adapter.validate_config(config)
+        assert len(rejections) == 1
+        assert rejections[0].key == "model"
+        assert "google-vertex" in rejections[0].reason
+        with pytest.raises(ValueError, match="requires provider 'google-vertex'"):
+            adapter.build_command(tmp_path / "prompt.md", config, {})
 
 
 @pytest.mark.parametrize(

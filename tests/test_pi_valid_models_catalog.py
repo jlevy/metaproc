@@ -62,10 +62,9 @@ def test_pi_accepts_current_models(model: str) -> None:
         "deepseek-v3.2-maas",
         "qwen/qwen3-235b-a22b-instruct-2507-maas",
         "qwen3-coder-480b-a35b-instruct-maas",
-        # DeepSeek's retired Flash alias, and superseded OpenAI and Gemini IDs.
+        # DeepSeek's retired Flash alias and a superseded OpenAI ID.
         "deepseek-v4-flash",
         "gpt-5.4-nano",
-        "gemini-3.7-flash",
         # Pi has no gpt-5.6 model; its fuzzy lookup would pick GPT-5.6 Terra, not Sol.
         "gpt-5.6",
     ],

@@ -13,6 +13,11 @@ from importlib import resources
 
 from pydantic import BaseModel, ConfigDict
 
+_PI_VERTEX_ONLY_NATIVE_MODELS = frozenset(
+    {"gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-3-flash-preview"}
+)
+_PI_VERTEX_ONLY_MODELS = _PI_VERTEX_ONLY_NATIVE_MODELS | {"gemini-4-neon"}
+
 
 class ModelCatalog(BaseModel):
     """Dated review evidence; model availability remains provider-authoritative."""
@@ -66,6 +71,7 @@ MODEL_CATALOG = ModelCatalog(
             "https://www.npmjs.com/package/@earendil-works/pi-coding-agent/v/1.5.2",
             "https://pi.dev/schemas/models.schema.json",
             "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/maas/use-open-models",
+            "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/maas/deepseek/deepseek-v41-flash-1017",
             "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/deprecations/open-models",
             "https://api-docs.deepseek.com/quick_start/pricing/",
             "https://platform.kimi.ai/docs/models",
@@ -172,6 +178,7 @@ MODEL_CATALOG = ModelCatalog(
                 "gpt-5.6-luna",
                 "gpt-5.5",
                 # google-vertex
+                *_PI_VERTEX_ONLY_NATIVE_MODELS,
                 "gemini-4-argon",
                 "gemini-3.8-flash",
                 "gemini-3.6-flash",
@@ -216,11 +223,12 @@ MODEL_CATALOG = ModelCatalog(
         "pi-cli": "Pinned Pi 1.5.2, adopted under a reviewed cool-off exemption because claude-fable-5-2 needs Pi 1.5.1 or later. Pi resolves sonnet, opus, haiku and fable to the newest undated match: claude-sonnet-5-5, claude-opus-5-5, claude-haiku-5-5 and claude-fable-5-2 (claude-sonnet-5, claude-opus-5, claude-haiku-4-5 and claude-fable-5 on 0.84.2).",
         "zai-org/glm-5.2-maas": "Vertex AI MaaS preview (2026-08-24), global endpoint only, available until at least 2026-11-30; replaces the retired GLM-5 and GLM-4.7 MaaS IDs. Pi also accepts the short ID glm-5.2-maas.",
         "deepseek-ai/deepseek-v4.1-flash-maas": "Vertex AI MaaS preview (2026-10-14), global endpoint only, available until at least 2026-11-28; replaces the retired DeepSeek V3.2 MaaS ID.",
-        "deepseek-ai/deepseek-v4.1-flash-1017-maas": "Vertex AI MaaS preview (2026-11-16), global endpoint only; Vertex publishes no price yet, so Pi reports no cost for it.",
+        "deepseek-ai/deepseek-v4.1-flash-1017-maas": "Vertex AI MaaS preview launched 2026-11-16, global endpoint only. Google lists availability until at least 2026-12-31 and publishes Standard PayGo rates.",
         "deepseek-flash": "DeepSeek's current Flash name, served by DeepSeek-V4.1-Flash-1017. The legacy deepseek-v4-flash name is a retired alias and is no longer accepted.",
         "kimi-k3.1-pro": "Moonshot's current flagship (1,048,576-token context), on Metaproc's moonshot route; kimi-k3 is the previous generation.",
         "kimi-k2.6": "Exact Moonshot ID confirmed; closed to new users from 2026-11-01, deprecation expected late December 2026. Retained on Pi's moonshot route for existing accounts until then.",
-        "pi-removed-2026-11-18": "Dropped from the pi-cli catalog as retired, retiring, or superseded: deepseek-v4-flash, gpt-5.4-mini, gpt-5.4-nano, gemini-3.7-flash, gemini-3.5-flash, gemini-3.1-flash-lite, gemini-3-flash-preview, and the six Vertex MaaS IDs retired 2026-10-21 with their short forms.",
+        "pi-google-vertex": "Pi preserves gemini-3.7-flash, gemini-3.5-flash, gemini-3.1-flash-lite and gemini-3-flash-preview on google-vertex. Vertex returned each exact modelVersion on 2026-11-21. The direct Gemini API reroutes the 3.7 and 3.5 Flash IDs.",
+        "pi-removed-2026-11-18": "Dropped from the pi-cli catalog as retired, retiring, or superseded: deepseek-v4-flash, gpt-5.4-mini, gpt-5.4-nano, and the six Vertex MaaS IDs retired 2026-10-21 with their short forms.",
     },
 )
 
@@ -296,21 +304,19 @@ def _maas(qualified: str, reason: str, replacement: str) -> dict[str, RemovedMod
 
 REMOVED_MODELS: dict[str, RemovedModel] = {
     "gemini-3.7-flash": _removed(
-        "gemini-cli pi-cli",
+        "gemini-cli",
         "deprecated 2026-10-08; the Gemini API routes it to gemini-3.8-flash",
         "gemini-3.8-flash or gemini-4-hydrogen",
     ),
     "gemini-3.5-flash": _removed(
-        "gemini-cli pi-cli", "deprecated 2026-10-08; " + _GEMINI_REWRITTEN, "gemini-4-hydrogen"
+        "gemini-cli", "deprecated 2026-10-08; " + _GEMINI_REWRITTEN, "gemini-4-hydrogen"
     ),
     "gemini-3.1-flash-lite": _removed(
-        "gemini-cli pi-cli",
+        "gemini-cli",
         "shutdown announced for 2027-05-07; " + _GEMINI_REWRITTEN,
         "gemini-3.5-flash-lite",
     ),
-    "gemini-3-flash-preview": _removed(
-        "gemini-cli pi-cli", "superseded preview", "gemini-3.8-flash"
-    ),
+    "gemini-3-flash-preview": _removed("gemini-cli", "superseded preview", "gemini-3.8-flash"),
     "gemini-3-pro-preview": _removed(
         "gemini-cli", "preview shut down 2026-03-09", "gemini-3.1-pro-preview"
     ),
@@ -361,6 +367,13 @@ def removed_model_note(adapter: str, model: str) -> str | None:
         f"removed from Metaproc's model catalog on {removed.removed_on.isoformat()} "
         f"({removed.reason}); use {removed.replacement}"
     )
+
+
+def model_route_rejection(adapter: str, model: str | None, provider: object) -> str | None:
+    """Return a refusal when an explicit model is supported only on a different route."""
+    if adapter == "pi-cli" and model in _PI_VERTEX_ONLY_MODELS and provider != "google-vertex":
+        return f"pi-cli model {model!r} requires provider 'google-vertex' for exact model selection"
+    return None
 
 
 def resolve_model(adapter: str, configured: object) -> str:

@@ -166,22 +166,6 @@ REMOVED_EXECUTION_PROFILES: Mapping[str, RemovedExecutionProfile] = {
             "config": {"model": "gemini-3.5-flash", **_GEMINI_CLI_CONFIG},
         },
     ),
-    "pi-gemini-flash": _removed_profile(
-        reason="its model gemini-3.5-flash was dropped from the model catalog",
-        successor="pi-gemini-hydrogen",
-        definition={
-            "status": "experimental",
-            "adapter": "pi-cli",
-            "provider": "google-vertex",
-            "model": "gemini-3.5-flash",
-            "resources": _PI_RESOURCES,
-            "config": {
-                "provider": "google-vertex",
-                "model": "gemini-3.5-flash",
-                "no_session_persistence": True,
-            },
-        },
-    ),
     "pi-glm5": _removed_profile(
         reason="Vertex AI retired its model glm-5-maas on 2026-10-21",
         successor="pi-glm52",

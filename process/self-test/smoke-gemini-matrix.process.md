@@ -16,7 +16,7 @@ process:
     miss.
 
   steps:
-    # ── gemini-cli cells (7 models) ──
+    # ── gemini-cli cells ──
     - id: gemini-cli-4-carbon
       mode: code
       command: >-
@@ -86,8 +86,7 @@ process:
 ---
 # smoke-gemini-matrix — full Gemini coverage matrix across both harnesses
 
-Live matrix that proves every registered Gemini model dispatches end-to-end through both
-the `gemini-cli` and `pi-cli` harnesses with tool use intact.
+Live matrix for selected Gemini models through the `gemini-cli` and `pi-cli` harnesses.
 All cells run in parallel; the slowest cell determines wall clock (~5–30s depending on
 model).
 
@@ -121,10 +120,10 @@ when step 1 is green.
 | `pi-cli` (google-vertex) | — | ✓ | ✓ | ✓ | — | ✓ | — |
 
 The matrix covers the standard Vertex smoke lanes.
-Vertex projects active before the 2026-11-19 cutoff can probe `gemini-3.6-flash`
-individually until its 2027-01-28 shutdown.
-`gemini-4-neon` is available for explicit Gemini CLI selection and still needs a harness
-tool-call probe.
+The operator reference covers
+[simultaneous profile comparisons](../../src/metaproc/docs/metaproc-operator-reference.md#compare-execution-profiles),
+including Gemini 4 Neon and Gemini 3.6 Flash.
+Eligible Vertex projects can run Flash 3.6 until its 2027-01-28 shutdown.
 [Gemini 3.6 Flash availability](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-6-flash).
 The pi-cli `--assert-model` check is a substring match, so its `gemini-3.1-pro-preview`
 cell would also pass on `gemini-3.1-pro-preview-customtools`.
@@ -176,7 +175,6 @@ A red cell points at exactly one `(harness, model)` combination.
   The probe prints the first 2 KB of subprocess stdout on failure to inspect what the
   model produced.
 
-Last verified on Vertex: 2026-05-25, with the earlier model set — see
-[adapter-compatibility runbook §8](../../docs/runbooks/adapter-compatibility.runbook.md).
-The current cells have not been run on Vertex; the gemini-cli models passed a
-one-tool-call probe through gemini-cli 0.66.0 on the Gemini API on 2026-11-18.
+See the
+[November model refresh evidence](../../docs/project/research/research-2026-11-18-model-and-harness-refresh.md)
+for live results by model, harness, and credential route.

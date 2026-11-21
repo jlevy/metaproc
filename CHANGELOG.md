@@ -32,14 +32,16 @@ development series.
   Gemini 4 Hydrogen and Gemini 4 Neon, and all three completed Gemini CLI file-read tool
   probes on that route.
   GPT-6.1 Terra and GPT-6 Sol remain unverified.
-- **Retired and superseded models are no longer accepted.** An explicit selection of
+- **Model validation keeps exact routes.** In Gemini CLI, explicit selection of
   `gemini-3.7-flash`, `gemini-3.5-flash`, `gemini-3.1-flash-lite`,
-  `gemini-3-flash-preview`, `gemini-3-pro-preview`, `gemini-3.1-flash-lite-preview`,
-  `auto-gemini-3`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex-spark`,
-  `deepseek-v4-flash`, or any of the six Vertex MaaS models Google retired on 2026-10-21
-  now fails validation.
-  Gemini CLI 0.62.0 and later send `gemini-3.5-flash` and `gemini-3-flash` as
-  `gemini-3.8-flash`, so those IDs could no longer be served as requested.
+  `gemini-3-flash-preview`, `gemini-3-pro-preview`, `gemini-3.1-flash-lite-preview`, and
+  `auto-gemini-3` fails validation.
+  Codex rejects `gpt-5.4`, `gpt-5.4-mini`, and `gpt-5.3-codex-spark`. Pi rejects the
+  retired `deepseek-v4-flash` alias and the six Vertex MaaS models Google retired on
+  2026-10-21. Gemini CLI 0.62.0 and later send `gemini-3.5-flash` and `gemini-3-flash`
+  as `gemini-3.8-flash`, so those IDs could no longer be served as requested.
+  Pi keeps exact Vertex access to `gemini-3.7-flash`, `gemini-3.5-flash`,
+  `gemini-3.1-flash-lite`, and `gemini-3-flash-preview` through `google-vertex`.
   `gemini-3.6-flash` remains available through the Gemini API and in active Vertex
   projects. Vertex blocked new and inactive projects on 2026-11-19 and schedules the
   shutdown for 2027-01-28.
@@ -49,10 +51,11 @@ development series.
   `sonnet`, but on the new pins they resolve to Opus 5.5 and Sonnet 5.5 (from Opus 5 and
   Sonnet 5); `haiku` and `fable` move to Haiku 5.5 and Fable 5.2.
 - **Shipped execution profiles follow the catalog.** New profiles: `gemini-hydrogen`
-  (the recommended Flash-class lane), `gemini-argon`, `gemini-carbon`,
-  `pi-gemini-hydrogen`, `pi-glm52`, `codex-gpt61` and `pi-gpt61`. Removed:
-  `gemini-flash` and `pi-gemini-flash` (3.5 Flash), plus `pi-glm5`, whose model retired
-  on 2026-10-21. `gemini-flash-36` keeps its exact model pin.
+  (the recommended Flash-class lane), `gemini-argon`, `gemini-carbon`, `gemini-neon`,
+  `pi-gemini-hydrogen`, `pi-glm52`, `codex-gpt61` and `pi-gpt61`. The `gemini-flash-36`
+  and `pi-gemini-flash` profiles keep their exact Vertex model pins.
+  The Gemini CLI `gemini-flash` profile was removed because the CLI rewrites its model
+  ID. `pi-glm5` was removed after Vertex retired its model on 2026-10-21.
   `gemini-flash-38` is demoted to experimental.
   `codex-gpt55` and `pi-gpt55` remain for API-key runs.
 - **Codex permission modes pass approval values the CLI accepts.** `acceptEdits` and
@@ -112,11 +115,10 @@ development series.
   use the new default.
   Nothing is refused or re-run.
 - **Runs on removed built-in execution profiles still resume.** A run that recorded
-  `gemini-flash`, `pi-gemini-flash` or `pi-glm5` is rebuilt from the profile’s former
-  definition: `metaproc status` shows its plan, and a resume warns and reuses completed
-  steps. Where the profile’s model is retired (`gemini-3.5-flash`, `glm-5-maas`), the
-  resume is refused with the retirement, the successor and the exact override
-  (`--variant <successor>`, or
+  `gemini-flash` or `pi-glm5` is rebuilt from the profile’s former definition:
+  `metaproc status` shows its plan, and a resume warns and reuses completed steps.
+  Where the adapter can no longer serve the profile’s exact model, the resume is refused
+  with the retirement, the successor and the exact override (`--variant <successor>`, or
   `--variant <name> --adapter-config model=<successor model>` to keep the namespace).
   A fresh launch naming a removed profile is refused with its successor.
 - **Removed model IDs say why.** Rejecting a model ID dropped from the catalog on

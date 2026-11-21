@@ -299,6 +299,49 @@ profiles:
       permission_mode: bypassPermissions
       output_format: stream-json
 
+  gemini-neon:
+    schema: metaproc:ExecutionProfile/0.1
+    status: experimental
+    adapter: gemini-cli
+    provider: google-vertex
+    model: gemini-4-neon
+    notes: |
+      Gemini 4 Neon (GA 2026-11-18) via gemini-cli through Vertex AI.
+      Use for low-latency coding and multi-step agent workflows.
+    capabilities:
+      native_tools: [Read, Write, Edit, Bash, WebSearch, Glob, Grep, LS]
+      native_web_search: true
+      shell: true
+    resources:
+      estimated_process_rss_mb: 250
+      initial_memory_budget_fraction: 0.5
+    config:
+      model: gemini-4-neon
+      permission_mode: bypassPermissions
+      output_format: stream-json
+
+  pi-gemini-flash:
+    schema: metaproc:ExecutionProfile/0.1
+    status: experimental
+    adapter: pi-cli
+    provider: google-vertex
+    model: gemini-3.5-flash
+    notes: |
+      Gemini 3.5 Flash via Pi's native Vertex AI provider. The Vertex route
+      served the requested model and completed a file-read tool call on
+      2026-11-21. The direct Gemini API redirects this ID to Gemini 3.6 Flash.
+    capabilities:
+      native_tools: [Read, Write]
+      native_web_search: false
+      shell: false
+    resources:
+      estimated_process_rss_mb: 500
+      initial_memory_budget_fraction: 0.25
+    config:
+      provider: google-vertex
+      model: gemini-3.5-flash
+      no_session_persistence: true
+
   pi-gemini-hydrogen:
     schema: metaproc:ExecutionProfile/0.1
     status: experimental
@@ -307,8 +350,8 @@ profiles:
     model: gemini-4-hydrogen
     notes: |
       Gemini 4 Hydrogen via pi-cli routed through Vertex AI. Mirrors
-      gemini-hydrogen on the pi-cli harness and replaces pi-gemini-flash
-      (3.5 Flash). Smoke is smoke-adapter-pi-gemini. Promote to "tested"
+      gemini-hydrogen on the pi-cli harness. Smoke is smoke-adapter-pi-gemini.
+      Promote to "tested"
       after a clean tier-1 large workflow dry run.
     capabilities:
       native_tools: [Read, Write]

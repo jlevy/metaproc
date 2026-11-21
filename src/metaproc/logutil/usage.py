@@ -282,8 +282,8 @@ def sum_pi_usage(agent_end_event: dict[str, Any]) -> UsageStats:
             cost_dict = cast(dict[str, Any], cost_raw)
             total_cost = cost_dict.get("total")
             if isinstance(total_cost, (int, float)) and not isinstance(total_cost, bool):
-                # Pi fills in zero rates when this packaged snapshot omits its cost.
-                # Keep positive estimates from operator-supplied rate cards.
+                # Older Pi logs used zero rates for this snapshot before Vertex published
+                # pricing. Fall back to the rate table and preserve positive CLI estimates.
                 if (
                     total_cost == 0
                     and provider == "vertex-maas"

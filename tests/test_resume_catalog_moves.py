@@ -44,6 +44,7 @@ from metaproc.config.model_catalog import (
     resolve_model,
 )
 from metaproc.engine.build_plan import build_plan
+from metaproc.engine.placeholders import resolve_runtime_config
 from metaproc.errors import ValidationError
 from metaproc.io import iter_jsonl_objects, read_yaml_file, to_yaml_string
 from metaproc.io.state_io import read_run_plan
@@ -569,7 +570,6 @@ def test_an_authored_removed_default_profile_resumes_and_reuses_its_steps(
     ("name", "model", "successor", "successor_model"),
     [
         ("gemini-flash", "gemini-3.5-flash", "gemini-hydrogen", "gemini-4-hydrogen"),
-        ("pi-gemini-flash", "gemini-3.5-flash", "pi-gemini-hydrogen", "gemini-4-hydrogen"),
         ("pi-glm5", "glm-5-maas", "pi-glm52", "glm-5.2-maas"),
     ],
 )
@@ -774,6 +774,58 @@ def test_read_only_plans_keep_retired_models_and_launch_plans_keep_model_templat
             validate_spec=validate_spec,
         )
         assert plan.steps[1].adapter.config["model"] == model
+
+
+def test_pi_vertex_model_route_survives_planning_and_historical_inspection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("METAPROC_ADAPTER_STRICT", "0")
+    process_path = tmp_path / "route.process.md"
+    source = _AGENT_PROCESS.replace("codex-cli", "pi-cli").replace(
+        "model: gpt-6.2-sol", "model: gemini-3.5-flash\n          provider: google-vertex"
+    )
+    for provider in ("google-vertex", "google"):
+        process_path.write_text(source.replace("google-vertex", provider), encoding="utf-8")
+        spec = load_process_spec(process_path)
+        plan = build_plan(spec, {}, process_path=process_path, validate_spec=False)
+        assert plan.steps[1].adapter.config == {"provider": provider, "model": "gemini-3.5-flash"}
+        if provider == "google":
+            with pytest.raises(ValueError, match="requires provider 'google-vertex'"):
+                build_plan(spec, {}, process_path=process_path)
+        else:
+            launch = build_plan(spec, {}, process_path=process_path)
+            assert launch.steps[1].adapter.config == plan.steps[1].adapter.config
+
+
+@pytest.mark.parametrize("configured_model", ["gemini-4-neon", "{{MODEL}}"])
+def test_pi_vertex_model_checks_templated_route_after_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, configured_model: str
+) -> None:
+    monkeypatch.setenv("METAPROC_ADAPTER_STRICT", "1")
+    monkeypatch.setattr("metaproc.adapters.pi_cli._resolve_pi_binary", lambda: "pi")
+    process_path = tmp_path / "templated-route.process.md"
+    process_path.write_text(
+        _AGENT_PROCESS.replace("codex-cli", "pi-cli").replace(
+            "model: gpt-6.2-sol",
+            f'model: "{configured_model}"\n          provider: "{{{{ROUTE}}}}"',
+        ),
+        encoding="utf-8",
+    )
+    spec = load_process_spec(process_path)
+    planned = build_plan(spec, {}, process_path=process_path).steps[1].adapter.config
+    assert planned == {"model": configured_model, "provider": "{{ROUTE}}"}
+    adapter = ADAPTER_REGISTRY["pi-cli"]
+    prompt = tmp_path / "prompt.md"
+    for route in ("google-vertex", "google"):
+        bindings = {"MODEL": "gemini-4-neon", "ROUTE": route}
+        bound = cast("dict[str, object]", resolve_runtime_config(planned, bindings))
+        if route == "google":
+            with pytest.raises(ValueError, match="requires provider 'google-vertex'"):
+                adapter.build_command(prompt, bound, bindings)
+        else:
+            command = adapter.build_command(prompt, bound, bindings)
+            assert command[command.index("--provider") + 1] == route
+            assert command[command.index("--model") + 1] == "gemini-4-neon"
 
 
 @pytest.mark.parametrize(

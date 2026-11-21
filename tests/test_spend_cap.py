@@ -425,7 +425,7 @@ def test_ledger_counts_each_log_once_across_rescans_and_compaction(tmp_path: Pat
     assert ledger.observe(tmp_path) == pytest.approx(0.25)
 
 
-def test_ledger_counts_unpriced_pi_maas_snapshot(tmp_path: Path) -> None:
+def test_ledger_estimates_legacy_pi_maas_snapshot_zero(tmp_path: Path) -> None:
     log_dir = tmp_path / ".logs" / "tasks" / "a"
     log_dir.mkdir(parents=True)
     log = log_dir / "a_x_2026-01-01T00-00-00.jsonl"
@@ -444,8 +444,8 @@ def test_ledger_counts_unpriced_pi_maas_snapshot(tmp_path: Path) -> None:
 
     ledger = SpendLedger.open(tmp_path, cap_usd=1.0)
 
-    assert ledger.measured_usd == 0.0
-    assert ledger.unpriced_logs == 1
+    assert ledger.measured_usd == pytest.approx(0.000054)
+    assert ledger.unpriced_logs == 0
 
 
 def test_price_and_breaker_do_not_change_the_step_fingerprint() -> None:

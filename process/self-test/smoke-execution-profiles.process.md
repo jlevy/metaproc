@@ -3,7 +3,7 @@ process:
   name: smoke-execution-profiles
   description: >-
     Cross-harness "deep" smoke: runs
-    `metaproc probe-tool-use --execution-profile <name>` for every
+    `metaproc probe-tool-use --execution-profile <name>` for selected
     execution profile shipped in
     `src/metaproc/data/execution-profiles.default.yaml`. Each
     cell exercises (a) execution-profile registry resolution, (b) adapter
@@ -13,7 +13,7 @@ process:
     Pairs with `smoke-adapters-all` (light smoke: cred survey + trivial
     text prompt per adapter) and `smoke-gemini-matrix` (Gemini-specific
     model coverage). This smoke is the operator-facing readiness gate:
-    a green run proves every shipped execution profile is ready to be
+    a green run verifies each covered profile is ready to be
     used by `--execution-profiles <name>` from any dispatch entry point
     (large workflow `dispatch_control.py`, ad-hoc `metaproc run-process`, etc.) with
     tool use intact.
@@ -115,14 +115,13 @@ process:
         bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc probe-tool-use --execution-profile pi-gemini-pro --timeout 180"
       description: Profile pi-gemini-pro (pi-cli + gemini-3.1-pro-preview via google-vertex).
 ---
-# smoke-execution-profiles — deep tool-use smoke across every shipped profile
+# smoke-execution-profiles — deep tool-use smoke for execution profiles
 
 The operator-facing readiness gate for execution profiles.
-Every profile in
+The configured cells cover selected profiles from
 [`execution-profiles.default.yaml`](../../src/metaproc/data/execution-profiles.default.yaml)
-gets one cell that runs `probe-tool-use --execution-profile <name>`. A green run proves
-the profile can be referenced via `--execution-profiles <name>` from any dispatch entry
-point with tool use working end-to-end.
+using `probe-tool-use --execution-profile <name>`. Each probe checks profile resolution
+and end-to-end tool use.
 
 ## Where this sits in the smoke ladder
 
@@ -131,17 +130,14 @@ point with tool use working end-to-end.
 | `smoke-core` | lint + unit tests, no model calls | $0 |
 | `smoke-adapters-all` (light) | per-adapter cred survey + trivial text prompt | ~6 prompts |
 | `smoke-adapters-negative-control` | bogus model rejection per adapter | ~4 prompts |
-| **`smoke-execution-profiles`** (this) | **profile resolution + tool round-trip per profile** | **~N prompts (N = profile count)** |
-| `smoke-gemini-matrix` | every Gemini model × both harnesses with tool round-trip | ~9 prompts |
+| **`smoke-execution-profiles`** (this) | **profile resolution + tool round-trip per covered profile** | **One prompt per cell** |
+| `smoke-gemini-matrix` | model identity and tool round-trip for selected Gemini routes | Two prompts per cell |
 
 The light smoke (`smoke-adapters-all`) tells you “creds work”.
 This smoke tells you “the profile is dispatch-ready including tool use”.
-The matrix smoke tells you “every model variant works on its harness”.
+The matrix smoke also checks model identity for covered Gemini routes.
 
 ## Cells
-
-One cell per profile in
-[`execution-profiles.default.yaml`](../../src/metaproc/data/execution-profiles.default.yaml):
 
 | Cell | Adapter | Model |
 | --- | --- | --- |
@@ -160,10 +156,9 @@ One cell per profile in
 | `pi-gemini-hydrogen` | pi-cli | gemini-4-hydrogen (google-vertex) |
 | `pi-gemini-pro` | pi-cli | gemini-3.1-pro-preview (google-vertex) |
 
-When a new execution profile is added to the default registry, add a cell here.
-(A future enhancement: dynamically enumerate profiles from the registry so this list
-stays in sync automatically.
-For now it is hand-maintained.)
+The operator reference shows how to
+[compare and verify Gemini profiles](../../src/metaproc/docs/metaproc-operator-reference.md#compare-execution-profiles),
+including `gemini-neon` and `gemini-flash-36` in eligible Vertex projects.
 
 ## Credential requirements
 
@@ -185,7 +180,7 @@ A missing cred reds only the affected cell; the others stay green.
 ## Usage
 
 ```bash
-# Full readiness gate across every shipped profile
+# Run all configured cells
 uv run metaproc run-process process/self-test/smoke-execution-profiles.process.md
 
 # Single profile (debugging a red)

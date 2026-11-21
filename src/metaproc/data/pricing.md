@@ -359,7 +359,7 @@ providers:
         cost_source: computed
         source_url: 'https://aistudio.google.com/docs/pricing#gemini-4-neon'
         last_reviewed: '2026-11-21'
-        notes: "Gemini API Standard paid pricing for Gemini CLI estimates. Output includes thinking tokens. Caching is implicit."
+        notes: "Gemini API and Vertex global Standard paid pricing for Gemini CLI and Pi estimates. Output includes thinking tokens. Caching is implicit."
       gemini-3.8-flash:
         actual_price:
           input_per_1m: 0.75
@@ -386,8 +386,8 @@ providers:
         cost_source: computed
         source_url: 'https://cloud.google.com/model-garden/pricing'
         list_source_url: 'https://cloud.google.com/model-garden/pricing'
-        last_reviewed: '2026-11-18'
-        notes: "Historical: not in the 2026-11-18 model catalog; added so earlier run logs price. Reviewed 2026-11-18 against the Vertex AI pricing page (global endpoint). The Gemini API deprecated this model and routes it to gemini-3.8-flash, so it has no Gemini API price row. actual_price is the introductory rate through 2026-12-31; list_price is the standard rate from 2027-01-01."
+        last_reviewed: '2026-11-21'
+        notes: "Vertex global Standard rates for exact selections through Pi's google-vertex provider. The Gemini Developer API routes requests for 3.7 Flash to 3.8 Flash. The introductory rate runs through 2026-12-31. The standard rate in list_price starts 2027-01-01."
       gemini-3.6-flash:
         actual_price:
           input_per_1m: 0.75
@@ -409,8 +409,8 @@ providers:
           cache_read_per_1m: 0.15
         cost_source: computed
         source_url: 'https://cloud.google.com/model-garden/pricing'
-        last_reviewed: '2026-11-18'
-        notes: "Historical: not in the 2026-11-18 model catalog; retained so earlier run logs still price. Reviewed 2026-11-18 against the Vertex AI pricing page (global endpoint); rates unchanged since 2026-05-23. The Gemini API deprecated this model and routes it to gemini-3.6-flash, so the Gemini API page no longer lists it."
+        last_reviewed: '2026-11-21'
+        notes: "Vertex global Standard rates for exact selections through Pi's google-vertex provider. The Gemini Developer API routes requests for 3.5 Flash to 3.6 Flash."
       gemini-3.5-flash-lite:
         actual_price:
           input_per_1m: 0.30
@@ -454,8 +454,8 @@ providers:
           cache_read_per_1m: 0.05
         cost_source: computed
         source_url: 'https://aistudio.google.com/docs/pricing'
-        last_reviewed: '2026-11-18'
-        notes: "Historical: not in the 2026-11-18 model catalog; retained so earlier run logs still price. Reviewed 2026-11-18: standard paid-tier text, image, and video rate (audio input bills $1.00, cached $0.10)."
+        last_reviewed: '2026-11-21'
+        notes: "Standard paid rates for text, image, or video. Pi's built-in google-vertex model uses these rates. Audio costs $1.00 per million input tokens and $0.10 per million cached input tokens."
       gemini-3.1-flash-lite-preview:
         actual_price:
           input_per_1m: 0.25
@@ -472,8 +472,8 @@ providers:
           cache_read_per_1m: 0.025
         cost_source: computed
         source_url: 'https://aistudio.google.com/docs/pricing'
-        last_reviewed: '2026-11-18'
-        notes: "Historical: not in the 2026-11-18 model catalog; retained so earlier run logs still price. Reviewed 2026-11-18: standard paid-tier text, image, and video rate (audio input bills $0.50, cached $0.05); unchanged since 2026-05-23."
+        last_reviewed: '2026-11-21'
+        notes: "Standard paid rates for text, image, or video. Pi's built-in google-vertex model uses these rates. Audio costs $0.50 per million input tokens and $0.05 per million cached input tokens."
 
   deepseek:
     models:
@@ -556,7 +556,16 @@ providers:
         cost_source: computed
         source_url: 'https://cloud.google.com/model-garden/partner-models/pricing'
         last_reviewed: '2026-11-18'
-        notes: "Reviewed 2026-11-18 against Google's partner and open model pricing page. Pi reports the org-prefixed ID deepseek-ai/deepseek-v4.1-flash-maas. Preview on the global endpoint, replacing the retired DeepSeek V3.2 MaaS model; Google charged nothing until 2026-10-16. No DeepSeek direct list_price is stored: the direct API serves a different snapshot (V4.1-Flash-1017) with time-of-day pricing. The deepseek-v4.1-flash-1017-maas endpoint has no published price yet and has no row."
+        notes: "Reviewed 2026-11-18 against Google's partner and open model pricing page. Pi reports the org-prefixed ID deepseek-ai/deepseek-v4.1-flash-maas. Preview on the global endpoint, replacing the retired DeepSeek V3.2 MaaS model; Google charged nothing until 2026-10-16. No DeepSeek direct list_price is stored: the direct API serves a different snapshot (V4.1-Flash-1017) with time-of-day pricing."
+      deepseek-v4.1-flash-1017-maas:
+        actual_price:
+          input_per_1m: 0.30
+          output_per_1m: 1.20
+          cache_read_per_1m: 0.006
+        cost_source: computed
+        source_url: 'https://cloud.google.com/model-garden/partner-models/pricing'
+        last_reviewed: '2026-11-21'
+        notes: "Vertex Standard PayGo rates on the global endpoint. Pi reports the publisher-qualified ID deepseek-ai/deepseek-v4.1-flash-1017-maas. DeepSeek's direct API peak rate matches, and its off-peak discount applies only to that API."
       glm-5-maas:
         actual_price:
           input_per_1m: 1.00
@@ -711,6 +720,7 @@ alias (same as `gpt-5.6-sol`), and the dated `claude-haiku-4-5-20251001` ID (sam
 | deepseek-flash | DeepSeek | $0.30 | 1.07x | $1.20 | $0.006 | -- | [deepseek](https://api-docs.deepseek.com/quick_start/pricing/) |
 | deepseek-v4-flash | DeepSeek | $0.30 | 1.07x | $1.20 | $0.006 | -- | [deepseek](https://api-docs.deepseek.com/quick_start/pricing/) |
 | deepseek-v4.1-flash-maas | Vertex MaaS | $0.30 | 1.07x | $1.20 | $0.03 | -- | [vertex](https://cloud.google.com/model-garden/partner-models/pricing) |
+| deepseek-v4.1-flash-1017-maas | Vertex MaaS | $0.30 | 1.07x | $1.20 | $0.006 | -- | [vertex](https://cloud.google.com/model-garden/partner-models/pricing) |
 | qwen3-235b | Vertex MaaS | $0.287 | 1.03x | $0.92 | -- | -- | [alibaba](https://www.alibabacloud.com/help/en/model-studio/model-pricing) |
 | gpt-6-luna | OpenAI | $0.10 | 0.36x | $0.50 | $0.01 | $0.125 | [openai](https://developers.openai.com/api/docs/pricing) |
 | claude-haiku-5-5 | Anthropic | $0.10 | 0.36x | $0.50 | $0.01 | $0.125 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
@@ -808,11 +818,12 @@ Rows record the Standard paid tier.
   context-length tier.
   Vertex publishes a Hydrogen cache-write rate effective 2027-01-12, which is not stored
   yet.
-- `gemini-4-neon` was verified on 2026-11-21. Gemini CLI estimates use the Gemini API
-  Standard paid rate of $3.00 per million input tokens, $15.00 per million output
-  tokens, and $0.15 per million cached input tokens.
-  Vertex Standard rates match on the global endpoint, with a 10% surcharge in non-global
-  regions. Vertex cache-write pricing starts on 2027-01-12.
+- `gemini-4-neon` was verified on 2026-11-21. The Gemini Developer API and Vertex global
+  endpoint charge $3.00 per million input tokens, $15.00 per million output tokens, and
+  $0.15 per million cached input tokens at the Standard paid rate.
+  Gemini CLI and Pi estimates use these rates.
+  Vertex charges 10% more in non-global regions.
+  Vertex cache-write pricing starts on 2027-01-12.
   [Gemini API pricing](https://aistudio.google.com/docs/pricing#gemini-4-neon),
   [Vertex AI pricing](https://cloud.google.com/model-garden/pricing).
 - `gemini-3.6-flash` corrected: Google charges the same introductory rate as
@@ -820,10 +831,10 @@ Rows record the Standard paid tier.
   $0.15). The row previously stored the standard rate as `actual_price`; it now holds
   the introductory rate in `actual_price` and the standard rate in `list_price`.
 - `gemini-3.5-flash-lite` added at $0.30 / $2.50 / $0.03.
-- `gemini-3.7-flash` added as a historical row from the Vertex AI page, because the
-  Gemini API deprecated it and routes it to `gemini-3.8-flash`.
-- `gemini-3.5-flash` is now priced from the Vertex AI page: the Gemini API deprecated it
-  and routes it to `gemini-3.6-flash`, so the Gemini API page no longer lists it.
+- The Vertex global rows for `gemini-3.7-flash` and `gemini-3.5-flash` price exact
+  selections through Pi’s `google-vertex` provider.
+  The Gemini Developer API routes requests for these IDs to `gemini-3.8-flash` and
+  `gemini-3.6-flash`, respectively.
 - `gemini-3-pro-preview` and `gemini-3.1-flash-lite-preview` are shut down and no longer
   on the pricing page; their rows keep the 2026-04-02 rate card unverified.
 
@@ -901,17 +912,18 @@ point while that model served.
 - Replacements on the global endpoint, both in Preview: `glm-5.2-maas` ($1.40 / $4.40 /
   $0.14) and `deepseek-v4.1-flash-maas` ($0.30 / $1.20 / $0.03; free until 2026-10-16).
   Vertex has no Kimi or Qwen chat successor.
-  `deepseek-v4.1-flash-1017-maas` has no published price yet and has no row.
+- `deepseek-v4.1-flash-1017-maas` uses the Vertex Standard rate of $0.30 input, $1.20
+  output, and $0.006 cached input per million tokens, verified 2026-11-21.
+  [Vertex Partner Models pricing](https://cloud.google.com/model-garden/partner-models/pricing).
 - Pi reports these models with an org prefix (for example `zai-org/glm-5.2-maas`);
   `_lookup_model()` strips it, so rows are keyed by the bare ID.
 
 Where we have a separate, independently verifiable direct-vendor public rate, that rate
 is stored in `list_price`. Where we do not, `list_cost` falls back to `actual_price`.
-The two replacement rows have no `list_price`: no current Zhipu rate was verified for
-GLM-5.2, and DeepSeek’s direct API serves a different snapshot under time-of-day
-pricing.
-The historical rows keep the `list_price` blocks from their last reviews, frozen
-and not re-verified.
+GLM-5.2 and the two DeepSeek Flash rows use the Vertex rate as their list-cost fallback.
+The direct DeepSeek API serves the 1017 snapshot at the same peak rate with an off-peak
+discount. The historical rows keep the `list_price` blocks from their last reviews,
+frozen and not re-verified.
 
 For Alibaba Qwen models, `list_price` is deployment-mode-specific.
 This file uses Alibaba Cloud Model Studio’s **Global deployment mode** pricing, and for

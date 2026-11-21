@@ -27,7 +27,7 @@ from metaproc.adapters.cli_version import (
 )
 from metaproc.cloud.gcp.resolve_token import resolve_gcp_token
 from metaproc.config.env_vars import MetaprocEnv
-from metaproc.config.model_catalog import removed_model_note, resolve_model
+from metaproc.config.model_catalog import model_route_rejection, removed_model_note, resolve_model
 from metaproc.config.providers import provider_by_name, providers_with_api_keys
 from metaproc.settings import (
     PI_DEFAULT_MODEL,
@@ -139,6 +139,9 @@ def _build_pi_flags(
     # Provider
     provider = merged_config.get("provider") or PI_DEFAULT_PROVIDER
     provider_str = str(provider)
+    model = resolve_model("pi-cli", merged_config.get("model"))
+    if reason := model_route_rejection("pi-cli", model, provider_str):
+        raise ValueError(reason)
     if provider_str in PI_VALID_PROVIDERS:
         flags.extend(["--provider", provider_str])
     else:
@@ -150,7 +153,6 @@ def _build_pi_flags(
         flags.extend(["--provider", PI_DEFAULT_PROVIDER])
 
     # Model
-    model = resolve_model("pi-cli", merged_config.get("model"))
     flags.extend(["--model", model])
 
     # Thinking level
@@ -317,10 +319,13 @@ class PiCliAdapter:
                 rejections.append(
                     ConfigRejection(key=key, reason=f"unknown pi-cli provider {value!r}")
                 )
-            if key == "model" and str(value) not in PI_VALID_MODELS:
-                rejections.append(
-                    ConfigRejection(key=key, reason=_unknown_model_reason("pi-cli", value))
-                )
+            if key == "model":
+                model = str(value)
+                reason = model_route_rejection("pi-cli", model, merged_config.get("provider"))
+                if model not in PI_VALID_MODELS:
+                    reason = _unknown_model_reason("pi-cli", value)
+                if reason:
+                    rejections.append(ConfigRejection(key=key, reason=reason))
         return rejections
 
     def prepare_env(

@@ -276,6 +276,9 @@ def test_build_falls_back_to_packaged_default(tmp_path: Path) -> None:
         flash = models[model_id]
         assert (flash["contextWindow"], flash["maxTokens"]) == (1048576, 1048576)
         assert flash["reasoning"] is True
+    snapshot = models["deepseek-ai/deepseek-v4.1-flash-1017-maas"]
+    assert snapshot["input"] == ["text", "image"]
+    assert snapshot["cost"] == {"input": 0.3, "output": 1.2, "cacheRead": 0.006, "cacheWrite": 0}
 
 
 def test_packaged_default_includes_google_vertex_provider(tmp_path: Path) -> None:
@@ -307,10 +310,10 @@ def test_packaged_default_includes_google_vertex_provider(tmp_path: Path) -> Non
 
     # Native Vertex uses unprefixed publisher model names. Pi 1.5.2 ships the
     # other accepted Gemini models, including gemini-3.1-pro-preview-customtools
-    # with its 1,048,576-token context, so only Gemini 4 Carbon and Hydrogen
-    # are defined here.
+    # with its 1,048,576-token context. Only Carbon, Hydrogen, and Neon need
+    # packaged entries.
     models = {m["id"]: m for m in gv["models"]}
-    assert set(models) == {"gemini-4-carbon", "gemini-4-hydrogen"}
+    assert set(models) == {"gemini-4-carbon", "gemini-4-hydrogen", "gemini-4-neon"}
     for model in models.values():
         assert model["contextWindow"] == 1048576
         assert model["maxTokens"] == 65536
@@ -326,6 +329,12 @@ def test_packaged_default_includes_google_vertex_provider(tmp_path: Path) -> Non
             "high",
         }
         assert model["cost"]["input"] > 0
+    assert models["gemini-4-neon"]["cost"] == {
+        "input": 3,
+        "output": 15,
+        "cacheRead": 0.15,
+        "cacheWrite": 0,
+    }
 
 
 def test_packaged_default_includes_openai_provider(tmp_path: Path) -> None:

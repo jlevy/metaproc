@@ -794,6 +794,40 @@ uv run metaproc variants <process.process.md>
 uv run metaproc auth-check --live --variant <execution-profile>
 ```
 
+### Compare execution profiles
+
+Run each profile against the same inputs with its own run ID. If the process pins the
+agent step to a profile, pass both `--variant` and `--step-variant` so the run label and
+the actual model match.
+For example, with `PROCESS_SPEC`, `MODEL_STEP`, and `RUNS_DIR` set, pass the same
+process inputs to every invocation in this loop:
+
+```bash
+export GOOGLE_GENAI_USE_VERTEXAI=true GOOGLE_GENAI_USE_GCA=false
+export GOOGLE_CLOUD_LOCATION=global GOOGLE_API_KEY= GEMINI_API_KEY=
+
+pids=()
+for profile in gemini-flash-36 gemini-flash-38 gemini-hydrogen gemini-neon gemini-argon gemini-carbon; do
+  run_id=$(uv run python -c 'from metaproc.ids import new_timestamped_typed_id; print(new_timestamped_typed_id("run"))')
+  uv run metaproc run-process "$PROCESS_SPEC" \
+    --variant "$profile" --step-variant "$MODEL_STEP=$profile" \
+    --var RUNS_DIR="$RUNS_DIR" --var RUN_ID="$run_id" &
+  pids+=("$!")
+done
+failed=0
+for pid in "${pids[@]}"; do
+  wait "$pid" || failed=1
+done
+test "$failed" -eq 0
+```
+
+Each run writes its own outputs and records the selected profile in
+`.state/run-config.yaml`. Review the output and billed model from each run before
+comparing results. The Flash 3.6 profile pins `gemini-3.6-flash`. Google Vertex
+restricted access for new and inactive projects on 2026-11-19. Existing active projects
+retain access until 2027-01-28.
+[Gemini 3.6 Flash availability](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-6-flash).
+
 ### Agent CLI Versions
 
 Each adapter pins the CLI version it was tested against: Claude Code 2.1.325, Codex

@@ -114,8 +114,9 @@ custom model uses. The `google-vertex` provider block must use the native API pa
 naked model IDs (no `google/` prefix — the publisher path is baked into the
 `@google/genai` SDK). It lists only the Gemini models Pi does not ship; a `models[]`
 entry with a built-in ID would replace Pi’s definition wholesale.
-Pi 1.5.2 ships `gemini-4-argon`, `gemini-3.8-flash`, `gemini-3.5-flash-lite`,
-`gemini-3.1-pro-preview`, and `gemini-3.1-pro-preview-customtools` on `google-vertex`:
+Pi 1.5.2 ships `gemini-4-argon`, `gemini-3.8-flash`, `gemini-3.6-flash`,
+`gemini-3.5-flash-lite`, `gemini-3.1-pro-preview`, and
+`gemini-3.1-pro-preview-customtools` on `google-vertex`:
 
 ```jsonc
 "google-vertex": {
@@ -183,18 +184,12 @@ Probed against `gemini-3-flash-preview` on 2026-04-18:
 
 ## 8. Gemini smoke matrix (laptop coverage)
 
-An 11-cell matrix proves both harnesses can dispatch the registered Gemini models
-end-to-end with tool use intact: seven gemini-cli cells (Gemini 4 Carbon, Argon and
-Hydrogen, 3.8 Flash, 3.5 Flash-Lite, 3.1 Pro Preview and its customtools variant) and
-four pi-cli `google-vertex` cells (Gemini 4 Hydrogen and Argon, 3.8 Flash, 3.1 Pro
-Preview). Lives at
-[`process/self-test/smoke-gemini-matrix.process.md`](../../process/self-test/smoke-gemini-matrix.process.md),
-which lists the current cells.
+The [Gemini smoke matrix](../../process/self-test/smoke-gemini-matrix.process.md) lists
+the model and harness combinations it checks for end-to-end tool use.
 Independent of the openai-completions blast radius covered above — this is the
 regression guard that catches it.
 
-History: the 2026-05-25 run covered the model set of that time, since retired except for
-`gemini-3.1-pro-preview`:
+The 2026-05-25 run covered the model and harness combinations below:
 
 | Harness | gemini-3.5-flash | gemini-3.1-pro-preview | gemini-3.1-flash-lite | gemini-3-flash-preview | gemini-3-pro-preview |
 | --- | --- | --- | --- | --- | --- |
@@ -214,24 +209,24 @@ uv run metaproc run-process process/self-test/smoke-gemini-matrix.process.md \
   --var RUNS_DIR=/tmp/metaproc-runs --var RUN_ID=gemini-matrix-$(date +%Y%m%dT%H%M%S)
 ```
 
-Last verified on Vertex: 2026-05-25, with the earlier model set — all 9 cells PASS (full
-matrix wall clock: 2m). The current cells have not yet been run on Vertex.
+All nine cells passed on Vertex on 2026-05-25 (full matrix wall clock: 2m). The
+[November refresh evidence](../project/research/research-2026-11-18-model-and-harness-refresh.md)
+records later checks by model, harness, and credential route.
 
 ## 9. Execution-profile workflow smoke (operator-facing readiness)
 
-Cross-harness “deep” smoke that exercises every shipped execution profile via
+Cross-harness smoke that exercises selected shipped execution profiles via
 `metaproc probe-tool-use --execution-profile <name>`. Proves operator
 `--execution-profiles <name>` invocations from large workflow dispatch (or ad-hoc
 `metaproc run-process`) actually work end-to-end including tool use.
 Lives at
 [`process/self-test/smoke-execution-profiles.process.md`](../../process/self-test/smoke-execution-profiles.process.md),
-which has one cell per shipped profile in
-`src/metaproc/data/execution-profiles.default.yaml`.
+which lists the covered profiles and links to the separate Gemini profile comparison.
 
-History: the 2026-05-25 run covered the profiles shipped then.
-`pi-glm5`, `gemini-flash` and `pi-gemini-flash` have since been removed; their
-successors are `pi-glm52`, `gemini-flash-38` or `gemini-hydrogen`, and
-`pi-gemini-hydrogen`.
+The 2026-05-25 run covered the profiles shipped then.
+Use `pi-glm52` after Vertex’s retirement of the model in `pi-glm5`, and
+`gemini-hydrogen` for new Flash-class Gemini CLI runs.
+The `pi-gemini-flash` profile still selects the exact 3.5 Flash model on Vertex.
 
 | Profile | Adapter | Model | Status |
 | --- | --- | --- | --- |

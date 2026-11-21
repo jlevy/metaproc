@@ -11,7 +11,7 @@ from typing import cast
 from metaproc.adapters.base import StepEnvValidator
 from metaproc.adapters.registry import ADAPTER_REGISTRY, derive_variant, get_adapter
 from metaproc.config.env_vars import MetaprocEnv
-from metaproc.config.model_catalog import known_model_ids, removed_model_note
+from metaproc.config.model_catalog import known_model_ids, model_route_rejection, removed_model_note
 from metaproc.engine.discovery import discover_items_from_source
 from metaproc.engine.graph import validate_step_graph
 from metaproc.engine.lane_expand import materialize_execution_lanes
@@ -389,7 +389,7 @@ def _apply_adapter_validation(
     adapter_type: str,
     authored_adapter_type: str,
     merged_config: dict[str, object],
-    defer_model_validation: bool,
+    deferred_keys: set[str],
 ) -> dict[str, object]:
     """Validate merged config against the resolved adapter and drop or raise on rejects."""
     adapter = get_adapter(adapter_type)
@@ -397,9 +397,11 @@ def _apply_adapter_validation(
     if validate_config is None:
         return merged_config
 
-    rejections = validate_config(merged_config)
-    if defer_model_validation:
-        rejections = [rejection for rejection in rejections if rejection.key != "model"]
+    rejections = [
+        rejection
+        for rejection in validate_config(merged_config)
+        if rejection.key not in deferred_keys
+    ]
     if not rejections:
         return merged_config
 
@@ -1164,6 +1166,21 @@ def build_plan(
             extract_placeholders(configured_model)
         )
         retirement = removed_model_note(adapter_type, model) if model is not None else None
+        provider = merged_config.get("provider")
+        model_refusal = model_route_rejection(adapter_type, model, provider)
+        deferred_keys: set[str] = {"model"} if template_model else set()
+        if (
+            adapter_type == "pi-cli"
+            and (model_refusal is not None or template_model)
+            and isinstance(provider, str)
+            and extract_placeholders(provider)
+        ):
+            # A fan-out item can bind the provider. Pi checks the concrete pair
+            # again before building the child command.
+            deferred_keys.update(("model", "provider"))
+            model_refusal = None
+        if retirement is not None:
+            model_refusal = f"unknown {adapter_type} model {model!r}; {retirement}."
         if (
             step_profile is not None
             and step_profile.source.kind == "recorded"
@@ -1182,18 +1199,16 @@ def build_plan(
                         selected_by=profile_selected_by,
                     )
                 )
-        elif retirement is not None and validate_spec and step.mode == "agent":
-            raise ValueError(
-                f"step {step.id!r}: unknown {adapter_type} model {model!r}; {retirement}."
-            )
+        elif model_refusal is not None and validate_spec and step.mode == "agent":
+            raise ValueError(f"step {step.id!r}: {model_refusal}")
         else:
-            # Read-only plans keep historical IDs. Templates resolve at execution time.
+            if model_refusal is not None and not validate_spec and step.mode == "agent":
+                deferred_keys.add("model")
             merged_config = _apply_adapter_validation(
                 adapter_type=adapter_type,
                 authored_adapter_type=authored_adapter_type,
                 merged_config=merged_config,
-                defer_model_validation=template_model
-                or (retirement is not None and not validate_spec and step.mode == "agent"),
+                deferred_keys=deferred_keys,
             )
 
         for transform in get_plugin_registry().adapter_config_transforms:
