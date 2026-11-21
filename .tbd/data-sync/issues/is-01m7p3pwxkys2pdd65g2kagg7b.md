@@ -3,9 +3,9 @@ type: is
 id: is-01m7p3pwxkys2pdd65g2kagg7b
 title: "November model and harness refresh: Claude Code, Codex, Gemini CLI, Pi pins and catalog"
 kind: task
-status: in_progress
+status: closed
 priority: 1
-version: 15
+version: 16
 spec_path: docs/project/specs/active/plan-2026-09-10-model-catalog-followups.md
 labels: []
 dependencies: []
@@ -25,7 +25,11 @@ child_order_hints:
   - is-01m7zs5r5rs7pq7khhxz2k9jt6
   - is-01m7zx6xhzepthh19xgavhvjh8
 created_at: 2026-11-18T01:18:01.650Z
-updated_at: 2026-11-21T20:36:50.875Z
+updated_at: 2026-11-21T21:00:34.067Z
+closed_at: 2026-11-21T21:00:34.067Z
+close_reason: "Merged in PR #126 at aea8ac8. Exact Gemini profiles, Vertex comparisons, route-safe Pi models, current pricing, pinned reviews and all pre-merge checks passed."
+resolution: null
+duplicate_of: null
 ---
 Upgrade the four pinned agent CLIs to the newest releases outside the 14-day cool-off (Claude Code 2.1.318, Codex 0.166.0, Gemini CLI 0.66.0, Pi 1.5.0), refresh the model catalog, Pi packaged models, and pricing against current provider evidence, and preserve existing behavior: no silent default moves, retained IDs kept with lifecycle labels. Covers mp-xgrd, mp-7471, mp-z4rh, mp-4w8q and the pricing part of mp-jnws where evidence allows.
 

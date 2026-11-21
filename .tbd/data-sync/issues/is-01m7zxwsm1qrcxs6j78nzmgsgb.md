@@ -3,14 +3,18 @@ type: is
 id: is-01m7zxwsm1qrcxs6j78nzmgsgb
 title: Describe the actual coverage of execution-profile smokes
 kind: bug
-status: open
+status: closed
 priority: 3
-version: 1
+version: 2
 spec_path: docs/project/specs/active/plan-2026-09-10-model-catalog-followups.md
 labels: []
 dependencies: []
 parent_id: is-01m7zx6xhzepthh19xgavhvjh8
 created_at: 2026-11-21T20:48:47.745Z
-updated_at: 2026-11-21T20:48:47.745Z
+updated_at: 2026-11-21T21:00:34.045Z
+closed_at: 2026-11-21T21:00:34.045Z
+close_reason: "Merged in PR #126 at aea8ac8. Exact Gemini profiles, Vertex comparisons, route-safe Pi models, current pricing, pinned reviews and all pre-merge checks passed."
+resolution: null
+duplicate_of: null
 ---
 Final senior review. Correct smoke coverage prose to reflect the selected cells and link to the separate model comparison for Neon and the retained Flash 3.6.
