@@ -5,7 +5,7 @@ title: "November model and harness refresh: Claude Code, Codex, Gemini CLI, Pi p
 kind: task
 status: in_progress
 priority: 1
-version: 14
+version: 15
 spec_path: docs/project/specs/active/plan-2026-09-10-model-catalog-followups.md
 labels: []
 dependencies: []
@@ -23,8 +23,9 @@ child_order_hints:
   - is-01m7zrwpv45cthbty1p1g7v2xw
   - is-01m7zrwrh1atzkefm9e3n2v0ge
   - is-01m7zs5r5rs7pq7khhxz2k9jt6
+  - is-01m7zx6xhzepthh19xgavhvjh8
 created_at: 2026-11-18T01:18:01.650Z
-updated_at: 2026-11-21T19:26:18.294Z
+updated_at: 2026-11-21T20:36:50.875Z
 ---
 Upgrade the four pinned agent CLIs to the newest releases outside the 14-day cool-off (Claude Code 2.1.318, Codex 0.166.0, Gemini CLI 0.66.0, Pi 1.5.0), refresh the model catalog, Pi packaged models, and pricing against current provider evidence, and preserve existing behavior: no silent default moves, retained IDs kept with lifecycle labels. Covers mp-xgrd, mp-7471, mp-z4rh, mp-4w8q and the pricing part of mp-jnws where evidence allows.
 
