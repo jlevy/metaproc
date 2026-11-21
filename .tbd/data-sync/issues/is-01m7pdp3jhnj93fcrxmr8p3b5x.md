@@ -5,12 +5,14 @@ title: Use recorded namespace defaults in run-parallel and run-step; rebuild rem
 kind: task
 status: open
 priority: 2
-version: 1
+version: 2
 spec_path: docs/project/specs/active/plan-2026-09-10-model-catalog-followups.md
 labels: []
-dependencies: []
+dependencies:
+  - type: blocks
+    target: is-01m7zqb27v8m9a1zh6a41z9qgs
 parent_id: is-01m7p3pwxkys2pdd65g2kagg7b
 created_at: 2026-11-18T04:12:21.457Z
-updated_at: 2026-11-18T04:12:21.457Z
+updated_at: 2026-11-21T18:54:15.284Z
 ---
 The November refresh made run-process derive artifact namespaces against run-config's namespace_default_models and rebuild removed built-in profiles from REMOVED_EXECUTION_PROFILES. Gaps: run_parallel.py (~680) and run_step.py (~310) still derive namespaces against current defaults; a removed profile named only inside a composite child plan is not rebuilt (only root-plan profiles are recorded) and gets the clearer refusal instead; run-config.yaml does not record --adapter-config, so status --steps shows such runs as stale (pre-existing).
