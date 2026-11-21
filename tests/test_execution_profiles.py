@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 from metaproc.adapters.registry import get_adapter
 from metaproc.cli import app
 from metaproc.commands.auth_check import _resolve_variant_target
+from metaproc.config.model_catalog import known_model_ids
 from metaproc.engine.build_plan import build_plan
 from metaproc.engine.placeholders import resolve_runtime_config
 from metaproc.models.authored import ProcessSpec
@@ -157,7 +158,7 @@ def test_built_in_registry_contains_generic_profiles() -> None:
 
     codex = registry.resolve("codex-gpt55")
     claude = registry.resolve("claude-opus")
-    pi = registry.resolve("pi-glm5")
+    pi = registry.resolve("pi-glm52")
 
     assert codex.profile.adapter == "codex-cli"
     assert claude.profile.adapter == "claude-code-cli"
@@ -167,28 +168,41 @@ def test_built_in_registry_contains_generic_profiles() -> None:
 def test_built_in_registry_contains_gemini_profiles() -> None:
     """Gemini profiles must remain in the packaged catalog.
 
-    ``gemini-flash-36`` is versioned so existing ``gemini-flash`` dispatch
-    rosters continue to resolve to their reviewed 3.5 model.
-
-    ``gemini-flash``, ``gemini-pro``, and ``pi-gemini-flash`` must remain in the
-    packaged profile catalog so operators can `--execution-profiles <name>`
-    from a generic dispatch without custom YAML.
+    Operators select them with `--execution-profiles <name>` from a generic
+    dispatch without custom YAML.
     """
     registry = ExecutionProfileRegistry.load(include_builtins=True)
 
-    flash_36 = registry.resolve("gemini-flash-36")
-    flash = registry.resolve("gemini-flash")
-    pro = registry.resolve("gemini-pro")
-    pi_flash = registry.resolve("pi-gemini-flash")
+    expected = {
+        "gemini-flash-38": ("gemini-cli", "gemini-3.8-flash"),
+        "gemini-flash-36": ("gemini-cli", "gemini-3.6-flash"),
+        "gemini-hydrogen": ("gemini-cli", "gemini-4-hydrogen"),
+        "gemini-argon": ("gemini-cli", "gemini-4-argon"),
+        "gemini-carbon": ("gemini-cli", "gemini-4-carbon"),
+        "gemini-neon": ("gemini-cli", "gemini-4-neon"),
+        "gemini-pro": ("gemini-cli", "gemini-3.1-pro-preview"),
+        "pi-gemini-hydrogen": ("pi-cli", "gemini-4-hydrogen"),
+        "pi-gemini-flash": ("pi-cli", "gemini-3.5-flash"),
+        "pi-gemini-pro": ("pi-cli", "gemini-3.1-pro-preview"),
+    }
+    for name, (adapter, model) in expected.items():
+        resolved = registry.resolve(name)
+        assert (resolved.profile.adapter, resolved.profile.model) == (adapter, model)
 
-    assert flash_36.profile.adapter == "gemini-cli"
-    assert flash_36.profile.model == "gemini-3.6-flash"
-    assert flash.profile.adapter == "gemini-cli"
-    assert flash.profile.model == "gemini-3.5-flash"
-    assert pro.profile.adapter == "gemini-cli"
-    assert pro.profile.model == "gemini-3.1-pro-preview"
-    assert pi_flash.profile.adapter == "pi-cli"
-    assert pi_flash.profile.model == "gemini-3.5-flash"
+
+@pytest.mark.parametrize("name", ["gemini-flash", "pi-glm5"])
+def test_built_in_registry_drops_retired_model_profiles(name: str) -> None:
+    registry = ExecutionProfileRegistry.load(include_builtins=True)
+    with pytest.raises(ValueError, match=rf"unknown execution profile: '{name}'"):
+        registry.resolve(name)
+
+
+def test_built_in_profiles_use_accepted_models() -> None:
+    registry = ExecutionProfileRegistry.load(include_builtins=True)
+    for resolved in registry.list_resolved():
+        profile = resolved.profile
+        if profile.model is not None and profile.adapter is not None:
+            assert profile.model in known_model_ids(profile.adapter), resolved.name
 
 
 def test_build_plan_resolves_profile_and_artifact_namespace(tmp_path: Path) -> None:
@@ -255,7 +269,7 @@ profiles:
 
 
 @pytest.mark.parametrize(
-    "profile", ["claude-sonnet", "claude-opus", "gemini-flash-36", "codex-gpt55"]
+    "profile", ["claude-sonnet", "claude-opus", "gemini-hydrogen", "codex-gpt55"]
 )
 def test_selected_profile_retains_explicit_step_working_directory(
     tmp_path: Path,

@@ -60,6 +60,7 @@ makes the destination briefly absent and several of these are polled continuousl
 | `scale-state.yaml` | `<run>/.state/` or `<run>/.state/steps/<step>/` | `ScaleState` | atomic, each tick | `runpool/status.py:write_scale_state` | engine controller on reconnect |
 | `scale-override.yaml` | `<run>/.state/` or `<run>/.state/steps/<step>/` | `ScaleOverride` | atomic, on operator command | `runpool/status.py:write_scale_override` | engine controller |
 | `dispatch-manifest.yaml` | `<run>/.state/steps/<step>/` | ad-hoc dict (typed envelope pending) | atomic, once after dispatch (appendable) | `io/dispatch_manifest.py:write_dispatch_manifest` | engine on resume |
+| `step-<sha256>.json` | `<scope>/.state/steps/<step>/worker_payloads/` | `WorkerStepPayload` (`metaproc:WorkerStepPayload/0.1`) | private and atomic, published on Filestore before worker submission, with a distinct path for each payload | `cloud/gcp/worker_dispatch.py` | worker `run-parallel` |
 | `claimed-items.yaml` | `<run>/.state/steps/<step>/worker-<id>/` | `ClaimedItemsRecord` | atomic, on each claim | `io/claimed_items.py:write_claimed_items` | engine claim coordinator |
 | `runpool-status.yaml` (worker-scoped) | `<run>/.state/workers/worker-<id>/` | `RunPoolStatus` | atomic, rewritten each tick | `runpool/status.py:write_status` | human, `metaproc pool`, metabrowser |
 | `pool-kill-requested.yaml` | `<run>/.state/` or `<run>/.state/steps/<step>/` | ad-hoc dict | atomic, once | `runpool/kill.py:_write_sentinel` | engine pool loop |

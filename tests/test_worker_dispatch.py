@@ -6,11 +6,16 @@ import asyncio
 import json
 import os
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from textwrap import dedent
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from typer.testing import CliRunner
 
+from metaproc.cli import app
+from metaproc.cloud.gcp import worker_entrypoint
 from metaproc.cloud.gcp.batch_backend import GCPBatchConfig
+from metaproc.cloud.gcp.container_bootstrap import BootstrapResult
 from metaproc.cloud.gcp.worker_dispatch import (
     WorkerDispatchConfig,
     _read_nfs_pool_status,
@@ -19,8 +24,17 @@ from metaproc.cloud.gcp.worker_dispatch import (
     partition_items,
 )
 from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
+from metaproc.io import write_yaml_file
+from metaproc.io.state_io import read_run_plan
 from metaproc.osutils.memory_pressure import PressureLevel
-from metaproc.paths import POOL_STATUS_FILE, STATE_DIR, step_state_dir, worker_state_dir
+from metaproc.paths import (
+    POOL_STATUS_FILE,
+    RUN_LAYOUT_VERSION,
+    STATE_DIR,
+    run_config_file,
+    step_state_dir,
+    worker_state_dir,
+)
 from metaproc.runpool.status import PressureStatus, RunPoolStatus, write_status
 
 # ── partition_items ─────────────────────────────────────────────
@@ -553,6 +567,127 @@ class TestWorkerDispatchRuntimeVars:
             == step_state_dir(tmp_path, "mine") / "worker_payloads" / "worker-0-item-contexts.json"
         )
         assert json.loads(payload_path.read_text(encoding="utf-8")) == large_contexts
+
+
+def test_resumed_profile_executes_through_worker_entrypoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Filestore worker consumes the target the orchestrator resolved on resume."""
+    monkeypatch.chdir(tmp_path)
+    process_path = tmp_path / "example.process.md"
+    process_path.write_text(
+        dedent("""\
+            ---
+            process:
+              name: example
+              defaults:
+                default_execution_profile: pi-glm5
+              deps:
+                roster: {path: ./roster.md, as: path}
+              steps:
+                - id: predict
+                  mode: agent
+                  for_each:
+                    over: deps.roster
+                    bind: item
+                    bind_fields: [item]
+                    key: "{{item}}"
+                  outputs:
+                    result: {path: "{{run.dir}}/{{run.artifact_namespace}}/{{item}}.txt", kind: file}
+            ---
+            """),
+        encoding="utf-8",
+    )
+    (tmp_path / "roster.md").write_text("---\nprogress:\n  items:\n    - item: AFL\n---\n")
+    mount_path = tmp_path / "filestore"
+    runs_dir = mount_path / "runs"
+    run_dir = runs_dir / "previous-run"
+    config_path = run_config_file(run_dir)
+    config_path.parent.mkdir(parents=True)
+    write_yaml_file(
+        {
+            "metaproc_layout": RUN_LAYOUT_VERSION,
+            "process": "example",
+            "run_id": run_dir.name,
+            "run_dir": str(run_dir),
+            "variables": {"RUNS_DIR": str(runs_dir), "RUN_ID": run_dir.name},
+            "execution_profile": "pi-glm5",
+            "artifact_namespace": "pi-glm5",
+        },
+        config_path,
+    )
+    orchestrator_env = {
+        "METAPROC_GCP_ORCHESTRATOR": "1",
+        "METAPROC_GCP_PROJECT": "test-project",
+        "METAPROC_GCP_CONTAINER_IMAGE": "gcr.io/test/agent:latest",
+        "METAPROC_GCP_FILESTORE_SERVER": "10.0.0.1",
+        "METAPROC_GCP_FILESTORE_MOUNT_PATH": str(mount_path),
+        "RUNS_DIR": str(runs_dir),
+    }
+    runner = CliRunner()
+    client = MagicMock()
+    client.create_job.return_value.name = "projects/p/locations/r/jobs/j"
+    with (
+        patch.dict(os.environ, orchestrator_env, clear=True),
+        patch("google.cloud.batch_v1.BatchServiceClient", return_value=client),
+        patch("metaproc.cloud.gcp.worker_dispatch._poll_workers", return_value=[]),
+        patch("metaproc.engine.preflight.run_cloud_preflight_warnings", return_value=[]),
+        patch("metaproc.commands.run_process._preflight_plan_adapters", return_value=[]),
+    ):
+        resumed = runner.invoke(
+            app,
+            [
+                "run-process",
+                str(process_path),
+                "--backend",
+                "gcp-worker",
+                "--var",
+                f"RUN_ID={run_dir.name}",
+                "--adapter-config",
+                "model=glm-5.2-maas",
+            ],
+        )
+    assert resumed.exit_code == 0, (resumed.output, resumed.exception)
+
+    request = client.create_job.call_args.args[0]
+    worker_env = dict(request.job.task_groups[0].task_spec.runnables[1].environment.variables)
+    step_path = Path(worker_env["METAPROC_WORKER_STEP_FILE"])
+    assert step_path.stat().st_mode & 0o777 == 0o600
+    assert "METAPROC_ADAPTER_CONFIG" not in worker_env
+
+    def invoke_worker(cmd: list[str], *, cwd: str) -> int:
+        assert cwd == str(tmp_path)
+        result = runner.invoke(app, cmd[3:])
+        assert result.exit_code == 0, (result.output, result.exception)
+        return result.exit_code
+
+    run_pool = AsyncMock(return_value=[("AFL", 0)])
+    with (
+        patch.dict(os.environ, worker_env, clear=True),
+        patch.object(worker_entrypoint, "hydrate_secret_env", return_value=[]),
+        patch.object(worker_entrypoint, "log_resource_context"),
+        patch.object(worker_entrypoint, "ADAPTER_REGISTRY", {}),
+        patch.object(
+            worker_entrypoint, "bootstrap_container", return_value=BootstrapResult(str(tmp_path))
+        ),
+        patch.object(worker_entrypoint, "_run", side_effect=invoke_worker),
+        patch("metaproc.commands.run_parallel.run_preflight", return_value=[]),
+        patch("metaproc.commands.run_parallel._run_agent_pool", new=run_pool),
+    ):
+        assert worker_entrypoint.main() == 0
+
+    recorded_plan = read_run_plan(run_dir)
+    assert recorded_plan is not None
+    assert run_pool.await_args is not None
+    launched = run_pool.await_args.kwargs
+    assert launched["scope_run_id"] == recorded_plan.run_id
+    assert launched["step_hash"] == recorded_plan.steps[0].fingerprint
+    assert launched["effective_variant"] == "pi-glm5"
+    assert launched["pool_config"].execution_profile == "pi-glm5"
+    assert launched["adapter_type"] == "pi-cli"
+    assert launched["merged_config"]["model"] == "glm-5.2-maas"
+    assert launched["merged_config"]["no_session_persistence"] is True
+    assert launched["item_contexts"] == [{"item": "AFL"}]
 
 
 # ── Worker-scoped pool state aggregation (RF-3) ─────────────────

@@ -16,9 +16,24 @@ import json
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import ClassVar
+from typing import ClassVar, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from metaproc.config.env_vars import MetaprocEnv
+from metaproc.models.plan import ResolvedStep
+
+
+class WorkerStepPayload(BaseModel):
+    """The authoritative fan-out target and scope identity for a Batch worker."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(populate_by_name=True, extra="forbid")
+
+    schema_: Literal["metaproc:WorkerStepPayload/0.1"] = Field(
+        default="metaproc:WorkerStepPayload/0.1", alias="schema"
+    )
+    scope_run_id: str = Field(min_length=1)
+    target: ResolvedStep
 
 
 def _split_csv(raw: str) -> tuple[str, ...]:

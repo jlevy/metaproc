@@ -20,7 +20,7 @@ process:
     - id: auth-check-dry
       mode: code
       command: >-
-        bash -lc "unset METAPROC_GCP_SECRET_CLAUDE_CREDS && cd ../../.. && uv run metaproc auth-check --variant claude-code-cli"
+        bash -lc "unset METAPROC_GCP_SECRET_CLAUDE_CREDS && cd ../.. && uv run metaproc auth-check --variant claude-code-cli"
       description: >-
         Dry survey — binary path + local credential source. Explicitly
         unsets `METAPROC_GCP_SECRET_CLAUDE_CREDS` so Phase 2b does not
@@ -31,7 +31,7 @@ process:
     - id: live-probe
       mode: code
       command: >-
-        bash -lc "unset METAPROC_GCP_SECRET_CLAUDE_CREDS && cd ../../.. && uv run metaproc auth-check --live --variant claude-code-cli --assert-model opus"
+        bash -lc "unset METAPROC_GCP_SECRET_CLAUDE_CREDS && cd ../.. && uv run metaproc auth-check --live --variant claude-code-cli --assert-model opus"
       description: >-
         Send a trivial "Respond with exactly: OK" prompt via `claude -p`
         and assert the `model` field in the stream-json `system.init`

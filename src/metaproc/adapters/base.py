@@ -405,9 +405,10 @@ class AuthCapableCliAdapter(Adapter, Protocol):
     ) -> dict[str, str]:
         """Env vars that scope this CLI's credential lookup to *slot_dir*.
 
-        Claude Code (Vehicle B): ``{"CLAUDE_CONFIG_DIR": str(slot_dir)}``.
-        Claude Code (Vehicle A — schema_version 2): scopes the slot AND
-        injects ``CLAUDE_CODE_OAUTH_TOKEN=<blob>`` plus the static-bearer
+        Claude Code scopes ``CLAUDE_CONFIG_DIR`` to ``slot_dir`` and
+        ``ANTHROPIC_CONFIG_DIR`` to ``slot_dir / ".anthropic"`` in both vehicles.
+        Vehicle A (schema_version 2) also injects
+        ``CLAUDE_CODE_OAUTH_TOKEN=<blob>`` plus the static-bearer
         hardening flags (``CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1``,
         ``DISABLE_UPDATES=1``). The subprocess sees the static token and
         no ``.credentials.json`` is materialized.
@@ -533,7 +534,7 @@ class AuthCapableCliAdapter(Adapter, Protocol):
         so post-mortem can correlate API-level debug output with the
         captured stream-json session log. Returns ``()`` for adapters
         that don't write any (current default for codex / gemini /
-        pi until they grow equivalents to ``claude -d api``).
+        pi until they grow an equivalent of Claude Code's ``--debug-file`` log).
 
         Filenames are namespaced by adapter (e.g. ``claude-code-debug.log``
         rather than ``debug.log``) so a future multi-adapter slot or

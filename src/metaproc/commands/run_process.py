@@ -40,7 +40,15 @@ from metaproc.adapters.base import (
     agent_seed_env,
     validate_terminal_result_log,
 )
-from metaproc.adapters.registry import derive_variant, get_adapter, get_auth_capable
+from metaproc.adapters.registry import (
+    ADAPTER_REGISTRY,
+    UNRECORDED_NAMESPACE_DEFAULT_MODELS,
+    current_default_models,
+    derive_variant,
+    get_adapter,
+    get_auth_capable,
+    recorded_namespace_default_models,
+)
 from metaproc.agent_errors import parse_quota_reset_at
 from metaproc.cli import app, get_output
 from metaproc.cloud.gcp.resolve_token import resolve_gcp_token
@@ -92,8 +100,15 @@ from metaproc.dispatch.preflight import (
     check_step_preflight,
     validate_guard_posture,
 )
+from metaproc.dispatch.repo_sync_payload import RepoSyncPayload
 from metaproc.dispatch.slot_coordinator import SlotCoordinator, SlotLease
-from metaproc.engine.build_plan import build_plan, merge_defaults
+from metaproc.engine.build_plan import (
+    build_plan,
+    derive_run_artifact_namespace,
+    load_profile_registry,
+    merge_defaults,
+    recorded_profile_model_overrides,
+)
 from metaproc.engine.code_handler import resolve_code_handler
 from metaproc.engine.collected_inputs import (
     COLLECTED_INPUTS_UNREADABLE,
@@ -156,7 +171,7 @@ from metaproc.engine.placeholders import (
     validate_spec_placeholders,
 )
 from metaproc.engine.preflight import run_preflight
-from metaproc.engine.process_scope import expand_process_vars
+from metaproc.engine.process_scope import expand_process_vars, is_dep_ref
 from metaproc.engine.resource_finalization import finalize_run_resources
 from metaproc.engine.resource_sampling import run_sampled_step_command, sample_step_resources
 from metaproc.engine.resource_snapshot import build_resource_run_snapshot
@@ -197,6 +212,7 @@ from metaproc.engine.write_boundary import (
 )
 from metaproc.errors import AttemptTerminalConflictError, CLIError, ValidationError
 from metaproc.io import from_yaml_string, read_yaml_file, to_yaml_string
+from metaproc.io.digests import file_sha256
 from metaproc.io.orchestrator_lease import LeaseHeartbeat, acquire_lease, release_lease
 from metaproc.io.overrides import (
     OverridesDocument,
@@ -225,7 +241,13 @@ from metaproc.io.state_io import (
 )
 from metaproc.logutil.compaction import try_compact_log
 from metaproc.models.authored import IOSpec, ProcessSpec, ProcessStep, RetryPolicy, StepContext
-from metaproc.models.lane import ExecutionLane
+from metaproc.models.execution_profile import (
+    REMOVED_EXECUTION_PROFILES,
+    ExecutionProfile,
+    recorded_execution_profiles,
+    removed_profile_note,
+)
+from metaproc.models.lane import ExecutionLane, derive_lane_id
 from metaproc.models.plan import Plan, ResolvedStep, RunPlanSnapshot, RunPlanStep
 from metaproc.models.resource_budget import FinalizationState
 from metaproc.models.resource_snapshot import ResourceRunSnapshot
@@ -268,7 +290,7 @@ from metaproc.runpool.scalar_admission import (
     admitted_launch,
 )
 from metaproc.settings import POOL_MAX_CONCURRENCY
-from metaproc.viz_loader import load_plan_bundle
+from metaproc.viz_loader import PlanBundleLaunch, load_plan_bundle
 
 log = logging.getLogger(__name__)
 
@@ -480,6 +502,14 @@ class RunExecutionContext:
     sync_executor: ThreadPoolExecutor
     run_pool_owner: RunPoolOwner | None
     spend_ledger: SpendLedger | None = None
+    # What a resume's run-config.yaml records for planning composite children and
+    # deriving step namespaces: the removed profiles the run used, and the adapter
+    # defaults its derived namespaces compare against (`_ResumePlanRecord`).
+    recorded_profiles: Mapping[str, ExecutionProfile] = dataclasses.field(
+        default_factory=dict[str, ExecutionProfile]
+    )
+    namespace_default_models: Mapping[str, str] | None = None
+    profile_model_overrides: Mapping[str, str] = dataclasses.field(default_factory=dict[str, str])
 
     @classmethod
     def create(
@@ -505,6 +535,9 @@ class RunExecutionContext:
         run_dir: Path | None = None,
         enable_run_pool: bool = False,
         spend_ledger: SpendLedger | None = None,
+        recorded_profiles: Mapping[str, ExecutionProfile] | None = None,
+        namespace_default_models: Mapping[str, str] | None = None,
+        profile_model_overrides: Mapping[str, str] | None = None,
     ) -> RunExecutionContext:
         """Create the references that must remain identical through recursion."""
         if max_concurrency is not None and max_concurrency < 1:
@@ -545,6 +578,9 @@ class RunExecutionContext:
                 else None
             ),
             spend_ledger=spend_ledger,
+            recorded_profiles=dict(recorded_profiles or {}),
+            namespace_default_models=namespace_default_models,
+            profile_model_overrides=dict(profile_model_overrides or {}),
         )
 
     def agent_pool(
@@ -926,6 +962,8 @@ class _LaunchConfig:
     backend: str
     git_sha: str
     max_spend_usd: float | None = None
+    default_models: Mapping[str, str] = dataclasses.field(default_factory=dict[str, str])
+    profile_model_overrides: Mapping[str, str] = dataclasses.field(default_factory=dict[str, str])
 
 
 _LAUNCH_CONFIG_FIELDS: tuple[str, ...] = tuple(
@@ -934,9 +972,18 @@ _LAUNCH_CONFIG_FIELDS: tuple[str, ...] = tuple(
 """The launch-config fields of ``run-config.yaml``, which a resume compares, records, and
 rewrites; ``_LaunchConfig`` declares them."""
 
-_KEYED_LAUNCH_CONFIG_FIELDS = frozenset({"variables", "step_variants"})
+_KEYED_LAUNCH_CONFIG_FIELDS = frozenset(
+    {"variables", "step_variants", "default_models", "profile_model_overrides"}
+)
 """The launch-config mappings compared key by key, as ``<field>.<KEY>``; every other
-field is compared whole."""
+field is compared whole.
+
+``default_models`` maps each adapter that runs a root agent step with no ``model`` to
+the default model that step resolves to (``_plan_default_models``), so a default a later
+release moves is recorded, and warned about, as ``default_models.<ADAPTER>``.
+
+``profile_model_overrides`` maps each repaired profile to its operator-selected model.
+"""
 
 type _LaunchConfigValue = str | list[dict[str, object]] | dict[str, object] | None
 """One launch-config value as the run records it, ``None`` when absent.
@@ -950,7 +997,8 @@ type _LaunchConfigChanges = dict[str, tuple[_LaunchConfigValue, _LaunchConfigVal
 """What one resume changed in the launch config: ``field -> (recorded, current)``.
 
 ``None`` marks an absent side. A change to one of the ``_KEYED_LAUNCH_CONFIG_FIELDS`` is
-named ``variables.<NAME>`` or ``step_variants.<STEP>``, a change to any other
+named ``variables.<NAME>``, ``step_variants.<STEP>``, or ``default_models.<ADAPTER>``, a
+change to any other
 ``_LAUNCH_CONFIG_FIELDS`` entry by the field itself, and a binding the resume adopts or
 releases (``engine.input_bindings``) ``input_bindings.<NAME>``. The mapping is sorted by
 field. A changed ``run_dir``, and a changed value of an input the process binds
@@ -990,6 +1038,8 @@ def _write_run_config(  # noqa: PLR0913
     git_sha: str | None = None,
     spec: ProcessSpec | None = None,
     max_spend_usd: float | None = None,
+    default_models: Mapping[str, str] | None = None,
+    profile_model_overrides: Mapping[str, str] | None = None,
 ) -> _RunConfigWrite:
     """Write run-config.yaml at run creation time; validate a resume against it.
 
@@ -999,7 +1049,9 @@ def _write_run_config(  # noqa: PLR0913
     intent.
 
     The first write records the launch-config fields (``_LaunchConfig``) with the rest of
-    the run's creation record. *git_sha* is the launch checkout's; ``None`` reads it here.
+    the run's creation record, which includes ``namespace_default_models``: the adapter
+    defaults the run's derived artifact namespaces compare against for its whole life
+    (``derive_variant``), so a default a later release moves does not rename them. *git_sha* is the launch checkout's; ``None`` reads it here.
     It also binds the root scope's ``on_change: new_run`` inputs, when *spec* declares
     any, by writing ``input-bindings.yaml`` beside the config
     (``engine.input_bindings``); *spec* absent means a process declaring none.
@@ -1057,6 +1109,11 @@ def _write_run_config(  # noqa: PLR0913
         data["resolved_profiles"] = resolved_profiles
     if step_variants:
         data["step_variants"] = dict(sorted(step_variants.items()))
+    if default_models:
+        data["default_models"] = dict(sorted(default_models.items()))
+    if profile_model_overrides:
+        data["profile_model_overrides"] = dict(sorted(profile_model_overrides.items()))
+    data["namespace_default_models"] = current_default_models()
     if auth_flags is not None and auth_flags.is_pool_dispatch_enabled():
         data["auth"] = _serialize_auth_flags(auth_flags)
     if max_concurrency is not None:
@@ -1305,7 +1362,7 @@ def _preflight_plan_adapters(plan: Plan, *, active_step_ids: set[str]) -> list[s
 
 
 def _validate_backend_topology(
-    plan: Plan,
+    spec: ProcessSpec,
     *,
     active_step_ids: set[str],
     backend_name: str,
@@ -1314,15 +1371,96 @@ def _validate_backend_topology(
     if backend_name != "gcp-worker":
         return
     unsupported = [
-        step.step_id
-        for step in plan.steps
-        if step.step_id in active_step_ids and step.mode == "composite" and step.fan_out is not None
+        step.id
+        for step in spec.steps
+        if step.id in active_step_ids and step.mode == "composite" and step.for_each is not None
     ]
     if unsupported:
         raise CLIError(
             "mapped composite steps do not yet support gcp-worker "
             f"({', '.join(unsupported)}); run the orchestrator on one host or use "
             "agent/code fan-out for partitioned work"
+        )
+
+
+def _cloud_active_step_ids(
+    spec: ProcessSpec, *, from_step: str | None, only_step: str | None
+) -> set[str]:
+    """Resolve selection from authored graph edges without a profile or namespace."""
+    if from_step:
+        steps = [
+            ResolvedStep(
+                step_id=step.id,
+                mode=step.mode,
+                needs=[
+                    *step.needs,
+                    *(
+                        io.ref.partition(".")[0]
+                        for io in step.inputs.values()
+                        if io.ref and not is_dep_ref(io.ref)
+                    ),
+                ],
+            )
+            for step in spec.steps
+        ]
+        return {from_step, *downstream(steps, from_step)}
+    if only_step:
+        return {only_step}
+    return {step.id for step in spec.steps}
+
+
+def _cloud_profile_digests(repo_root: Path, profile_files: Sequence[Path]) -> dict[str, str]:
+    """Identify explicit profiles by workspace path and content, in precedence order."""
+    if not profile_files:
+        return {}
+    source = RepoSyncPayload.from_env()
+    uses_clone = bool(source.repo_url and source.run_branch and not source.workspace_gcs)
+    sparse_dirs = tuple(
+        Path(path.strip()) for path in source.sparse_paths.split(",") if path.strip()
+    )
+    digests: dict[str, str] = {}
+    for profile_file in profile_files:
+        resolved = profile_file.resolve()
+        try:
+            relative = resolved.relative_to(repo_root)
+        except ValueError as exc:
+            raise ValidationError(
+                f"--cloud profile file {str(profile_file)!r} must be inside the repository checkout"
+            ) from exc
+        if (
+            uses_clone
+            and sparse_dirs
+            and not any(
+                relative.is_relative_to(directory) or relative.parent in directory.parents
+                for directory in sparse_dirs
+            )
+        ):
+            raise ValidationError(
+                f"--cloud profile file {relative.as_posix()!r} is outside the sparse checkout"
+            )
+        key = relative.as_posix()
+        # Repeating a file makes its definitions win over any intervening files.
+        digests.pop(key, None)
+        try:
+            digests[key] = file_sha256(resolved)
+        except OSError as exc:
+            raise ValidationError(f"could not read --cloud profile file {key!r}") from exc
+    return digests
+
+
+def _validate_execution_lanes(lane_ids: Sequence[str]) -> None:
+    """Refuse to run multiple lanes until the runner can route per-lane adapter config."""
+    if len(lane_ids) > 1:
+        raise CLIError(
+            "process declares a lane_matrix with multiple lanes "
+            f"({len(lane_ids)}: {', '.join(lane_ids)}), but same-runpool "
+            "multi-lane execution is not implemented yet. The runner would "
+            "launch one task per item under the single run profile, ignoring "
+            "the other lanes. For multi-lane comparisons today, compile a "
+            "dispatch plan with --execution-profiles (one sibling run per "
+            "lane) — see "
+            "src/metaproc/docs/metaproc-design.md "
+            "§ Phase 2 follow-up."
         )
 
 
@@ -1676,6 +1814,189 @@ def _resume_step_variants(run_dir: Path, requested: Mapping[str, str]) -> dict[s
     return recorded_step_variants(_read_run_config(config_path))
 
 
+def _recorded_default_models(raw: Mapping[object, object]) -> dict[str, str] | None:
+    """Return the ``default_models`` a ``run-config.yaml`` records, ``None`` when absent.
+
+    A config written before the field existed, or by a launch with no root agent step
+    that left its model unset, has none.
+    """
+    recorded = raw.get("default_models")
+    if not isinstance(recorded, Mapping):
+        return None
+    return {
+        str(adapter_type): str(model)
+        for adapter_type, model in cast("Mapping[object, object]", recorded).items()
+        if isinstance(model, str) and model
+    }
+
+
+# The alias tokens still drive dispatch and namespace derivation. Record the targets
+# served by the pinned clients so a release that moves an alias can report the change.
+_DEFAULT_MODEL_ALIAS_MOVES = {
+    "claude-code-cli": ("opus", "claude-opus-5", "claude-opus-5-5"),
+    "pi-cli": ("sonnet", "claude-sonnet-5", "claude-sonnet-5-5"),
+}
+
+
+def _plan_default_models(plan: Plan) -> dict[str, str]:
+    """Return the default model each root agent step that sets no ``model`` resolves to.
+
+    Keyed by adapter type. A step that names a model, a code step, and a composite's
+    children (planned per scope) contribute nothing.
+    """
+    defaults: dict[str, str] = {}
+    for step in plan.steps:
+        if step.mode != "agent" or step.adapter.config.get("model"):
+            continue
+        adapter = ADAPTER_REGISTRY.get(step.adapter.type)
+        if adapter is None or not adapter.default_model:
+            continue
+        model = adapter.default_model
+        move = _DEFAULT_MODEL_ALIAS_MOVES.get(step.adapter.type)
+        defaults[step.adapter.type] = move[2] if move is not None and model == move[0] else model
+    return dict(sorted(defaults.items()))
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class _ResumePlanRecord:
+    """What a resumed run's ``run-config.yaml`` records that its plan must follow.
+
+    ``recorded_profiles`` are the removed built-in profiles the run used, rebuilt from
+    their former definitions (``recorded_execution_profiles``). ``namespace_default_models``
+    are the adapter defaults its derived artifact namespaces compare against
+    (``recorded_namespace_default_models``). ``default_models`` is what the last launch
+    resolved for steps with no model, ``None`` when the config does not record it. A
+    new run has no recorded profiles and derives against the current defaults.
+    """
+
+    resumed: bool
+    recorded_profiles: dict[str, ExecutionProfile]
+    namespace_default_models: dict[str, str]
+    default_models: dict[str, str] | None
+    has_resource_snapshot: bool
+
+
+def _resume_plan_record(run_dir: Path) -> _ResumePlanRecord:
+    """Read the planning record of the run at *run_dir*; a new run has an empty one."""
+    config_path = paths_mod.run_config_file(run_dir)
+    if not config_path.exists():
+        return _ResumePlanRecord(
+            resumed=False,
+            recorded_profiles={},
+            namespace_default_models=current_default_models(),
+            default_models=None,
+            has_resource_snapshot=False,
+        )
+    raw = _read_run_config(config_path)
+    return _ResumePlanRecord(
+        resumed=True,
+        recorded_profiles=recorded_execution_profiles(raw),
+        namespace_default_models=recorded_namespace_default_models(
+            raw.get("namespace_default_models")
+        ),
+        default_models=_recorded_default_models(raw),
+        has_resource_snapshot=raw.get("resources") is not None,
+    )
+
+
+def _resume_plan_warnings(
+    plan: Plan,
+    record: _ResumePlanRecord,
+    *,
+    process_path: Path,
+    profile_files: Sequence[Path],
+    variant: str | None,
+    config_overrides: Mapping[str, str] | None,
+    namespace_is_explicit: bool,
+) -> list[str]:
+    """Return what a resume's plan follows from its record rather than the current release.
+
+    A removed built-in profile the run used, rebuilt from its former definition, and an
+    artifact namespace derived against the defaults the run was created with when the
+    current defaults would derive another. Neither refuses the resume; each is said.
+    """
+    if not record.resumed:
+        return []
+    warnings: list[str] = []
+    used = {step.execution_profile for step in plan.steps if step.execution_profile}
+    if plan.execution_profile:
+        used.add(plan.execution_profile)
+    used_recorded = used & record.recorded_profiles.keys()
+    if used_recorded:
+        registry = load_profile_registry(
+            process_path, profile_files, recorded_profiles=record.recorded_profiles
+        )
+        for name in sorted(used_recorded):
+            entry = registry.entries.get(name)
+            if entry is None or entry.source.kind != "recorded":
+                continue
+            successor = REMOVED_EXECUTION_PROFILES[name].successor
+            warnings.append(
+                f"{removed_profile_note(name)}. This resume rebuilds it from the definition the "
+                "run was created with, so completed steps it does not change are reused. "
+                f"Select {successor!r} (--variant, --step-variant, or the process file) to move "
+                "to the successor; the steps that changes re-run."
+            )
+    if not namespace_is_explicit and plan.artifact_namespace:
+        current = derive_run_artifact_namespace(variant, config_overrides)
+        if current is not None and current != plan.artifact_namespace and variant:
+            earlier = record.namespace_default_models.get(variant)
+            warnings.append(
+                f"Artifact namespace stays {plan.artifact_namespace!r}: the run was created "
+                f"when the {variant} default model was {earlier}, and a resume derives its "
+                f"namespace as the run did. A new run with these flags would use "
+                f"{current!r}; pass --artifact-namespace {current} to move this one."
+            )
+    return warnings
+
+
+def _default_model_change_warnings(
+    changes: _LaunchConfigChanges, record: _ResumePlanRecord
+) -> list[str]:
+    """Explain each ``default_models.<ADAPTER>`` change a resume records.
+
+    Completed steps keep the results their earlier model produced, since a step's
+    fingerprint covers the model it names, not a default it leaves unset; steps the
+    resume runs use the new default. A config that does not record the earlier default
+    names the default of the releases that wrote it, as the likely earlier model.
+    """
+    prefix = "default_models."
+    warnings: list[str] = []
+    for field, (old, new) in changes.items():
+        if not field.startswith(prefix) or not isinstance(new, str):
+            continue
+        adapter_type = field.removeprefix(prefix)
+        move = _DEFAULT_MODEL_ALIAS_MOVES.get(adapter_type)
+        if (
+            move is not None
+            and new == move[2]
+            and (old == move[0] or (old is None and record.default_models is None))
+        ):
+            alias, prior_target, _ = move
+            earlier = (
+                f"most likely ran {prior_target} through the {alias!r} alias at the former pin"
+            )
+        elif isinstance(old, str):
+            earlier = f"ran {old}"
+        elif record.default_models is None and (
+            legacy := UNRECORDED_NAMESPACE_DEFAULT_MODELS.get(adapter_type)
+        ):
+            if legacy == new:
+                continue
+            earlier = (
+                f"most likely ran {legacy}, the {adapter_type} default of the releases that "
+                "did not record it"
+            )
+        else:
+            continue
+        warnings.append(
+            f"{adapter_type} steps that set no model: those completed earlier {earlier} and "
+            f"are reused; steps this resume runs use {new}. Set the model explicitly to run "
+            "one model throughout (steps whose model changes re-run)."
+        )
+    return warnings
+
+
 def _validate_run_config(
     config_path: Path,
     *,
@@ -1722,6 +2043,20 @@ def _validate_run_config(
         changes[f"step_variants.{step_id}"] = (
             recorded_overrides.get(step_id),
             launch.step_variants.get(step_id),
+        )
+
+    recorded_defaults = _recorded_default_models(raw) or {}
+    for adapter_type in _changed_keys(recorded_defaults, launch.default_models):
+        changes[f"default_models.{adapter_type}"] = (
+            recorded_defaults.get(adapter_type),
+            launch.default_models.get(adapter_type),
+        )
+
+    recorded_model_overrides = recorded_profile_model_overrides(raw)
+    for profile in _changed_keys(recorded_model_overrides, launch.profile_model_overrides):
+        changes[f"profile_model_overrides.{profile}"] = (
+            recorded_model_overrides.get(profile),
+            launch.profile_model_overrides.get(profile),
         )
 
     for field in _LAUNCH_CONFIG_FIELDS:
@@ -1845,12 +2180,14 @@ def _read_resumable_run_config(
 def _recorded_launch_config(launch: _LaunchConfig) -> dict[str, object]:
     """Return *launch* as ``run-config.yaml`` records it: field -> value, ``None`` if absent.
 
-    The two mappings keep their shape, ``step_variants`` sorted as the first write sorts
-    it; every other field goes through ``_persisted_launch_value``.
+    The keyed mappings keep their shape and sort as on first write. Every other
+    field goes through ``_persisted_launch_value``.
     """
     record: dict[str, object] = {
         "variables": dict(launch.variables) or None,
         "step_variants": dict(sorted(launch.step_variants.items())) or None,
+        "default_models": dict(sorted(launch.default_models.items())) or None,
+        "profile_model_overrides": dict(sorted(launch.profile_model_overrides.items())) or None,
     }
     for field in _LAUNCH_CONFIG_FIELDS:
         if field not in _KEYED_LAUNCH_CONFIG_FIELDS:
@@ -3173,7 +3510,13 @@ async def _execute_agent_step(
         merged_config.setdefault("max_budget_usd", merged["max_budget_usd"])
     runtime_config = cast("dict[str, object]", resolve_runtime_config(merged_config, variables))
 
-    derived_variant = derive_variant(adapter_type, runtime_config)
+    derived_variant = derive_variant(
+        adapter_type,
+        runtime_config,
+        default_models=(
+            execution_context.namespace_default_models if execution_context is not None else None
+        ),
+    )
     effective_execution_profile = (
         target.execution_profile
         or step_def.execution_profile
@@ -3952,6 +4295,9 @@ def _prepare_composite_scope(
         adapter_override=child_execution_profile,
         artifact_namespace=target.artifact_namespace,
         profile_files=execution_context.profile_files,
+        profile_model_overrides=execution_context.profile_model_overrides,
+        recorded_profiles=execution_context.recorded_profiles,
+        namespace_default_models=execution_context.namespace_default_models,
     )
     if profile_pinned and child_plan.artifact_namespace:
         child_vars.setdefault("ARTIFACT_NAMESPACE", child_plan.artifact_namespace)
@@ -4216,15 +4562,18 @@ def _resolve_spend_cap(
 
     The flag wins; a resume without it keeps the cap its run recorded; a run with
     neither takes the process's declared default. A process that declares the cap
-    required refuses a launch left with none, before any step runs.
+    required refuses a launch left with none, before any step runs. A cloud
+    submission leaves this decision to the orchestrator and its run record.
     """
     if flag is not None and flag <= 0:
         raise ValidationError(f"--max-spend-usd must be positive, got {flag:g}")
-    if cloud and flag is not None:
-        raise ValidationError(
-            "--max-spend-usd is not forwarded to a --cloud orchestrator; launch the "
-            "orchestrator on this host or run without a cap"
-        )
+    if cloud:
+        if flag is not None:
+            raise ValidationError(
+                "--max-spend-usd is not forwarded to a --cloud orchestrator; launch the "
+                "orchestrator on this host or run without a cap"
+            )
+        return None
     cap = flag
     config_path = paths_mod.run_config_file(run_dir)
     if cap is None and config_path.exists():
@@ -4233,12 +4582,10 @@ def _resolve_spend_cap(
     if cap is None and policy is not None:
         cap = policy.default_usd
     if cap is None and policy is not None and policy.required:
-        detail = (
-            "--cloud cannot forward one yet, so launch the orchestrator on this host"
-            if cloud
-            else "pass --max-spend-usd, or resume a run that recorded one"
+        raise ValidationError(
+            f"process '{spec.name}' requires a spend cap: pass --max-spend-usd, "
+            "or resume a run that recorded one"
         )
-        raise ValidationError(f"process '{spec.name}' requires a spend cap: {detail}")
     return cap
 
 
@@ -4778,7 +5125,13 @@ async def _execute_fan_out_step(
         merged_config.setdefault("max_budget_usd", merged["max_budget_usd"])
     runtime_config = cast("dict[str, object]", resolve_runtime_config(merged_config, variables))
 
-    derived_variant = derive_variant(adapter_type, runtime_config)
+    derived_variant = derive_variant(
+        adapter_type,
+        runtime_config,
+        default_models=(
+            execution_context.namespace_default_models if execution_context is not None else None
+        ),
+    )
     effective_execution_profile = (
         target.execution_profile
         or step_def.execution_profile
@@ -4883,6 +5236,8 @@ async def _execute_fan_out_step(
                 else None
             ),
             auth_flags=auth_flags,
+            target=target,
+            run_id=run_id,
             out=out,
         )
 
@@ -5116,6 +5471,8 @@ async def _execute_gcp_worker_dispatch(
     max_retries: int | None,
     out: Any,
     auth_flags: AuthPoolFlags = AuthPoolFlags(),
+    target: ResolvedStep | None = None,
+    run_id: str | None = None,
 ) -> bool:
     """Dispatch a fan-out step to GCP worker VMs via worker_dispatch.
 
@@ -5141,6 +5498,8 @@ async def _execute_gcp_worker_dispatch(
         variant=variant,
         adapter_config_json=adapter_config_json,
         auth_flags=auth_flags,
+        resolved_step=target,
+        scope_run_id=run_id,
     )
 
     resolved = process_path.resolve()
@@ -6346,7 +6705,7 @@ def run_process_command(
     ),
     spot: bool = typer.Option(True, "--spot/--no-spot", help="Use Spot VMs for gcp-worker backend"),
     variant: str | None = typer.Option(  # noqa: UP007
-        None, "--variant", help="Override adapter/variant for fan-out steps (e.g. pi-deepseek-v3.2)"
+        None, "--variant", help="Override adapter/variant for fan-out steps (e.g. pi-glm52)"
     ),
     artifact_namespace: str | None = typer.Option(  # noqa: UP007
         None,
@@ -6600,10 +6959,22 @@ def run_process_command(
         log.info("Auto-generated RUN_ID: %s", variables["RUN_ID"])
         out.progress(f"Auto-generated RUN_ID: {variables['RUN_ID']}")
 
+    # The orchestrator expands defaults and resolves the namespace in its own checkout.
+    dispatch_variables = variables
     variables = expand_process_vars(spec, variables, process_dir=process_dir)
     require_runtime_runs_dir(variables, command="run-process")
-    step_profile_overrides = _resume_step_variants(
-        compute_run_dir(spec, variables), step_profile_overrides
+    run_dir = compute_run_dir(spec, variables)
+    submit_cloud = cloud and not dry_run
+    resume_record = None
+    if not submit_cloud:
+        step_profile_overrides = _resume_step_variants(run_dir, step_profile_overrides)
+        resume_record = _resume_plan_record(run_dir)
+    # Only the remote run record can establish whether a removed built-in profile
+    # was used. Let the orchestrator check that record before resolving the plan.
+    recorded_profiles = (
+        {name: removed.definition for name, removed in REMOVED_EXECUTION_PROFILES.items()}
+        if resume_record is None
+        else resume_record.recorded_profiles
     )
 
     # Launch validation runs before any step, so it carries the validation exit
@@ -6620,38 +6991,19 @@ def run_process_command(
         profile_files=profile_files,
         adapter_override=variant or None,
         step_profile_overrides=step_profile_overrides,
+        recorded_profiles=recorded_profiles,
     )
     if launch_errors:
         raise ValidationError(format_launch_errors(launch_errors))
     spend_cap_usd = _resolve_spend_cap(
         spec,
-        run_dir=compute_run_dir(spec, variables),
+        run_dir=run_dir,
         flag=max_spend_usd,
         cloud=cloud,
     )
 
-    try:
-        plan = build_plan(
-            spec,
-            variables,
-            process_path=process_path,
-            adapter_override=variant or None,
-            artifact_namespace=artifact_namespace,
-            profile_files=profile_files,
-            step_profile_overrides=step_profile_overrides,
-            config_overrides=config_overrides or None,
-        )
-    except (TypeError, ValueError) as exc:
-        raise ValidationError(str(exc)) from exc
-
-    if plan.execution_profile:
-        variables["EXECUTION_PROFILE"] = plan.execution_profile
-    if plan.artifact_namespace:
-        variables["ARTIFACT_NAMESPACE"] = plan.artifact_namespace
-        variables.setdefault("VARIANT", plan.artifact_namespace)
-
     # Validate step references
-    all_step_ids = {s.step_id for s in plan.steps}
+    all_step_ids = {step.id for step in spec.steps}
     for s in skip:
         if s not in all_step_ids:
             raise CLIError(f"--skip '{s}' not found. Available: {', '.join(sorted(all_step_ids))}")
@@ -6665,6 +7017,179 @@ def run_process_command(
         )
     if scope_selections and scope_selections[0][0] not in all_step_ids:
         raise CLIError(f"selected root step {scope_selections[0][0]!r} does not exist")
+
+    # ── Batch-dispatch warnings ──
+    # Any dispatch path that sends work to GCP Batch (orchestrator or per-step
+    # worker fan-out) exercises the agent image's baked metaproc/ code unless
+    # METAPROC_WHEEL_GCS is set. Surface the preflight warnings once, before
+    # a cloud submission. Emit on dry-run too so operators
+    # iterating invocations see the warning before they hit enter.
+    if backend == "gcp-worker":
+        from metaproc.engine.preflight import (  # noqa: PLC0415 -- pre-existing local import; needs review
+            run_cloud_preflight_warnings,
+        )
+
+        for ok, msg in run_cloud_preflight_warnings():
+            if ok:
+                log.info(msg)
+            else:
+                out.warning(f"Cloud preflight warning: {msg}")
+
+    # ── Cloud dispatch path ──────────────────────────────────────────
+    if submit_cloud:
+        if backend != "gcp-worker":
+            raise CLIError("--cloud requires --backend gcp-worker")
+
+        active_cloud_steps = _cloud_active_step_ids(spec, from_step=from_step, only_step=only_step)
+        _validate_backend_topology(
+            spec, active_step_ids=active_cloud_steps.difference(skip), backend_name=backend
+        )
+        if spec.lane_matrix is not None:
+            _validate_execution_lanes(
+                [
+                    lane.lane_id
+                    or derive_lane_id(
+                        execution_profile=lane.execution_profile,
+                        replica_index=lane.replica_index,
+                        overrides=lane.overrides,
+                    )
+                    for lane in spec.lane_matrix.lanes
+                ]
+            )
+
+        from metaproc.engine.preflight import (  # noqa: PLC0415 -- pre-existing local import; needs review
+            run_cloud_preflight,
+        )
+
+        cloud_results = run_cloud_preflight()
+        cloud_failures = [msg for ok, msg in cloud_results if not ok]
+        if cloud_failures:
+            raise CLIError("Cloud preflight failed:\n  " + "\n  ".join(cloud_failures))
+
+        from metaproc.cloud.gcp.orchestrator_dispatch import (  # noqa: PLC0415 -- pre-existing local import; needs review
+            OrchestratorDispatchConfig,
+            dispatch_orchestrator,
+        )
+        from metaproc.cloud.gcp.worker_dispatch import (  # noqa: PLC0415 -- pre-existing local import; needs review
+            build_gcp_config_from_env,
+        )
+
+        gcp_config = build_gcp_config_from_env(machine_type=machine_type, spot=spot)
+
+        # Compute process_spec_rel: relative to the git repo root so the
+        # orchestrator VM can join it with /workspace/repo (the clone dir).
+        # .resolve() collapses ".." that would otherwise escape the clone root.
+        resolved = process_path.resolve()
+        repo_root = Path.cwd().resolve()
+        for parent in [repo_root, *repo_root.parents]:
+            if (parent / ".git").exists():
+                repo_root = parent
+                break
+        try:
+            process_spec_rel = str(resolved.relative_to(repo_root))
+        except ValueError:
+            process_spec_rel = str(resolved)
+        cloud_profile_files = _cloud_profile_digests(repo_root, profile_files)
+
+        if auth_account and auth_include_labels and auth_exclude_labels:
+            raise CLIError("--auth-include-labels and --auth-exclude-labels are mutually exclusive")
+
+        orch_config = OrchestratorDispatchConfig(
+            gcp=gcp_config,
+            process_spec_rel=process_spec_rel,
+            variables=dispatch_variables,
+            num_workers=num_workers,
+            worker_machine_type=machine_type,
+            max_concurrency=max_concurrency,
+            initial_concurrency=initial_concurrency,
+            spot_workers=spot,
+            variant=variant or "",
+            artifact_namespace=artifact_namespace or "",
+            adapter_config=config_overrides or None,
+            step_variants=step_profile_overrides,
+            profile_files=cloud_profile_files,
+            skip_steps=list(skip) if skip else None,
+            from_step=from_step or "",
+            only_step=only_step or "",
+            force=force,
+            continue_on_error=continue_on_error,
+            orchestrator_machine_type=orchestrator_machine_type,
+            max_duration_s=_parse_duration(max_duration),
+            auth_flags=AuthPoolFlags(
+                auth_account=auth_account or "",
+                auth_backend=auth_backend or "",
+                auth_fallback_policy=(
+                    auth_fallback_policy if auth_fallback_policy != "none" else ""
+                ),
+                auth_policy=auth_policy or "",
+                auth_include_labels=tuple(auth_include_labels),
+                auth_exclude_labels=tuple(auth_exclude_labels),
+                auth_cross_quota_group=auth_cross_quota_group,
+            ),
+        )
+
+        out.progress("run-process --cloud: submitting orchestrator to GCP Batch")
+        out.progress(f"  Process: {spec.name}")
+        out.progress(f"  Orchestrator VM: {orchestrator_machine_type}")
+        out.progress(f"  Max duration: {max_duration}")
+
+        result = asyncio.run(dispatch_orchestrator(orch_config))
+
+        out.progress(f"\nOrchestrator job {result.job_id}: {result.state}")
+        if result.exit_code != 0:
+            raise CLIError(
+                f"Orchestrator job {result.job_id} {result.state} (exit code {result.exit_code})"
+            )
+        return
+
+    assert resume_record is not None
+    profile_model_overrides: dict[str, str] = {}
+    planning_config_overrides = config_overrides
+    selected_profile = variant or spec.defaults.default_execution_profile
+    if (
+        selected_profile is not None
+        and selected_profile in resume_record.recorded_profiles
+        and "model" in config_overrides
+    ):
+        profile_model_overrides[selected_profile] = config_overrides["model"]
+        planning_config_overrides = {
+            key: value for key, value in config_overrides.items() if key != "model"
+        }
+
+    try:
+        plan = build_plan(
+            spec,
+            variables,
+            process_path=process_path,
+            adapter_override=variant or None,
+            artifact_namespace=artifact_namespace,
+            profile_files=profile_files,
+            step_profile_overrides=step_profile_overrides,
+            config_overrides=planning_config_overrides or None,
+            profile_model_overrides=profile_model_overrides,
+            recorded_profiles=resume_record.recorded_profiles,
+            namespace_default_models=resume_record.namespace_default_models,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValidationError(str(exc)) from exc
+    for message in _resume_plan_warnings(
+        plan,
+        resume_record,
+        process_path=process_path,
+        profile_files=profile_files,
+        variant=variant or None,
+        config_overrides=config_overrides or None,
+        namespace_is_explicit=bool(
+            artifact_namespace or variables.get("ARTIFACT_NAMESPACE") or variables.get("VARIANT")
+        ),
+    ):
+        out.warning(message)
+
+    if plan.execution_profile:
+        variables["EXECUTION_PROFILE"] = plan.execution_profile
+    if plan.artifact_namespace:
+        variables["ARTIFACT_NAMESPACE"] = plan.artifact_namespace
+        variables.setdefault("VARIANT", plan.artifact_namespace)
 
     # Determine active step IDs (subgraph)
     active_step_ids = set(all_step_ids)
@@ -6682,7 +7207,7 @@ def run_process_command(
     # Topology is a launch precondition, not a late step failure. Validate it before
     # adapter preflight, cloud dispatch, run-directory mutation, or any DAG level runs.
     _validate_backend_topology(
-        plan,
+        spec,
         active_step_ids=active_step_ids - skip_set,
         backend_name=backend,
     )
@@ -6715,36 +7240,8 @@ def run_process_command(
     # the launch and direct operators at the sibling-run shape until
     # same-runpool multi-lane execution can preserve per-lane configuration.
     # Dry-run remains permissive so plan inspection works.
-    if not dry_run and len(plan.execution_lanes) > 1:
-        lane_ids = ", ".join(lane.lane_id for lane in plan.execution_lanes)
-        raise CLIError(
-            "process declares a lane_matrix with multiple lanes "
-            f"({len(plan.execution_lanes)}: {lane_ids}), but same-runpool "
-            "multi-lane execution is not implemented yet. The runner would "
-            "launch one task per item under the single run profile, ignoring "
-            "the other lanes. For multi-lane comparisons today, compile a "
-            "dispatch plan with --execution-profiles (one sibling run per "
-            "lane) — see "
-            "src/metaproc/docs/metaproc-design.md "
-            "§ Phase 2 follow-up."
-        )
-
-    # ── Batch-dispatch warnings ──
-    # Any dispatch path that sends work to GCP Batch (orchestrator or per-step
-    # worker fan-out) exercises the agent image's baked metaproc/ code unless
-    # METAPROC_WHEEL_GCS is set. Surface the preflight warnings once, before
-    # a cloud submission. Emit on dry-run too so operators
-    # iterating invocations see the warning before they hit enter.
-    if backend == "gcp-worker":
-        from metaproc.engine.preflight import (  # noqa: PLC0415 -- pre-existing local import; needs review
-            run_cloud_preflight_warnings,
-        )
-
-        for ok, msg in run_cloud_preflight_warnings():
-            if ok:
-                log.info(msg)
-            else:
-                out.warning(f"Cloud preflight warning: {msg}")
+    if not dry_run:
+        _validate_execution_lanes([lane.lane_id for lane in plan.execution_lanes])
 
     # Dry-run output
     if dry_run:
@@ -6796,92 +7293,6 @@ def run_process_command(
         orchestrator_marker=MetaprocEnv.METAPROC_GCP_ORCHESTRATOR.read_str(default=None),
     )
 
-    # ── Cloud dispatch path ──────────────────────────────────────────
-    if cloud:
-        if backend != "gcp-worker":
-            raise CLIError("--cloud requires --backend gcp-worker")
-
-        from metaproc.engine.preflight import (  # noqa: PLC0415 -- pre-existing local import; needs review
-            run_cloud_preflight,
-        )
-
-        cloud_results = run_cloud_preflight()
-        cloud_failures = [msg for ok, msg in cloud_results if not ok]
-        if cloud_failures:
-            raise CLIError("Cloud preflight failed:\n  " + "\n  ".join(cloud_failures))
-
-        from metaproc.cloud.gcp.orchestrator_dispatch import (  # noqa: PLC0415 -- pre-existing local import; needs review
-            OrchestratorDispatchConfig,
-            dispatch_orchestrator,
-        )
-        from metaproc.cloud.gcp.worker_dispatch import (  # noqa: PLC0415 -- pre-existing local import; needs review
-            build_gcp_config_from_env,
-        )
-
-        gcp_config = build_gcp_config_from_env(machine_type=machine_type, spot=spot)
-
-        # Compute process_spec_rel: relative to the git repo root so the
-        # orchestrator VM can join it with /workspace/repo (the clone dir).
-        # .resolve() collapses ".." that would otherwise escape the clone root.
-        resolved = process_path.resolve()
-        repo_root = Path.cwd().resolve()
-        for parent in [repo_root, *repo_root.parents]:
-            if (parent / ".git").exists():
-                repo_root = parent
-                break
-        try:
-            process_spec_rel = str(resolved.relative_to(repo_root))
-        except ValueError:
-            process_spec_rel = str(resolved)
-
-        if auth_account and auth_include_labels and auth_exclude_labels:
-            raise CLIError("--auth-include-labels and --auth-exclude-labels are mutually exclusive")
-
-        orch_config = OrchestratorDispatchConfig(
-            gcp=gcp_config,
-            process_spec_rel=process_spec_rel,
-            variables=variables,
-            num_workers=num_workers,
-            worker_machine_type=machine_type,
-            max_concurrency=max_concurrency,
-            initial_concurrency=initial_concurrency,
-            spot_workers=spot,
-            variant=variant or "",
-            adapter_config=config_overrides or None,
-            skip_steps=list(skip) if skip else None,
-            from_step=from_step or "",
-            only_step=only_step or "",
-            force=force,
-            continue_on_error=continue_on_error,
-            orchestrator_machine_type=orchestrator_machine_type,
-            max_duration_s=_parse_duration(max_duration),
-            auth_flags=AuthPoolFlags(
-                auth_account=auth_account or "",
-                auth_backend=auth_backend or "",
-                auth_fallback_policy=(
-                    auth_fallback_policy if auth_fallback_policy != "none" else ""
-                ),
-                auth_policy=auth_policy or "",
-                auth_include_labels=tuple(auth_include_labels),
-                auth_exclude_labels=tuple(auth_exclude_labels),
-                auth_cross_quota_group=auth_cross_quota_group,
-            ),
-        )
-
-        out.progress("run-process --cloud: submitting orchestrator to GCP Batch")
-        out.progress(f"  Process: {spec.name}")
-        out.progress(f"  Orchestrator VM: {orchestrator_machine_type}")
-        out.progress(f"  Max duration: {max_duration}")
-
-        result = asyncio.run(dispatch_orchestrator(orch_config))
-
-        out.progress(f"\nOrchestrator job {result.job_id}: {result.state}")
-        if result.exit_code != 0:
-            raise CLIError(
-                f"Orchestrator job {result.job_id} {result.state} (exit code {result.exit_code})"
-            )
-        return
-
     # ── Local execution path ──────────────────────────────────────────
 
     # Compute run directory
@@ -6905,13 +7316,31 @@ def run_process_command(
         auth_exclude_labels=tuple(auth_exclude_labels),
         auth_cross_quota_group=auth_cross_quota_group,
     )
-    snapshot_bundle = load_plan_bundle(process_path, params=variables)
-    snapshot_bundle = dataclasses.replace(snapshot_bundle, plan=plan, spec=spec)
-    resource_snapshot = (
-        None
-        if paths_mod.run_config_file(run_dir).exists()
-        else build_resource_run_snapshot(snapshot_bundle, run_id=run_id)
+    snapshot_bundle = None
+    resource_snapshot = None
+    snapshot_launch = PlanBundleLaunch(
+        adapter_override=variant or None,
+        profile_files=tuple(profile_files),
+        recorded_profiles=resume_record.recorded_profiles,
+        profile_model_overrides=profile_model_overrides,
+        namespace_default_models=resume_record.namespace_default_models,
     )
+    if not paths_mod.run_config_file(run_dir).exists():
+        snapshot_bundle = load_plan_bundle(
+            process_path, resolved_root=(spec, plan), launch=snapshot_launch
+        )
+        resource_snapshot = build_resource_run_snapshot(snapshot_bundle, run_id=run_id)
+    elif not resume_record.has_resource_snapshot:
+        # Older runs have no hierarchy snapshot for terminal resource reporting.
+        try:
+            snapshot_bundle = load_plan_bundle(
+                process_path,
+                resolved_root=(spec, plan),
+                validate_spec=False,
+                launch=snapshot_launch,
+            )
+        except (CLIError, OSError, TypeError, ValueError) as exc:
+            log.warning("Could not rebuild the legacy resource hierarchy for %s: %s", run_dir, exc)
     # The launch config this launch runs with: a new run records it, and a resume
     # records how it differs from the record once it holds the orchestrator lease below.
     launch_config = _LaunchConfig(
@@ -6924,6 +7353,8 @@ def run_process_command(
         backend=backend,
         git_sha=_get_git_sha(),
         max_spend_usd=spend_cap_usd,
+        default_models=_plan_default_models(plan),
+        profile_model_overrides=profile_model_overrides,
     )
     # Write run-config.yaml for a new run. A resume is only checked against it here.
     run_config = _write_run_config(
@@ -6944,6 +7375,8 @@ def run_process_command(
         git_sha=launch_config.git_sha,
         spec=spec,
         max_spend_usd=spend_cap_usd,
+        default_models=launch_config.default_models,
+        profile_model_overrides=launch_config.profile_model_overrides,
     )
 
     out.progress(f"run-process: {spec.name} ({len(active_step_ids)} steps, {len(levels)} levels)")
@@ -7171,6 +7604,8 @@ def run_process_command(
     # The operator sees the changes once recorded.
     for field, (old, new) in launch_changes.items():
         out.warning(_describe_launch_config_change(field, old, new))
+    for message in _default_model_change_warnings(launch_changes, resume_record):
+        out.warning(message)
     if launch_changes:
         out.warning(
             f"Recorded {len(launch_changes)} launch-config change(s) as a "
@@ -7236,6 +7671,9 @@ def run_process_command(
                     run_dir=run_dir,
                     enable_run_pool=backend == "local",
                     spend_ledger=spend_ledger,
+                    recorded_profiles=resume_record.recorded_profiles,
+                    namespace_default_models=resume_record.namespace_default_models,
+                    profile_model_overrides=profile_model_overrides,
                 )
                 primary_error: BaseException | None = None
                 try:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import hashlib
 import json
 import logging
 import secrets as _secrets
@@ -21,6 +22,7 @@ from typing import Any, NotRequired, TypedDict
 from strif import atomic_write_text
 
 from metaproc import paths as paths_mod
+from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cloud.gcp.batch_backend import (
     GCPBatchConfig,
     apply_container_runs_dir,
@@ -39,8 +41,10 @@ from metaproc.cloud.gcp.secret_hydration import (
 )
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
+from metaproc.dispatch.credential_pool import FallbackPolicy
 from metaproc.dispatch.repo_sync_payload import RepoSyncPayload
 from metaproc.dispatch.secret_refs import SecretRefSet
+from metaproc.dispatch.worker_payload import WorkerStepPayload
 from metaproc.errors import CLIError
 from metaproc.io.claimed_items import clear_claimed_items, collect_claimed_items, read_claimed_items
 from metaproc.io.dispatch_manifest import (
@@ -48,6 +52,8 @@ from metaproc.io.dispatch_manifest import (
     read_dispatch_manifest,
     write_dispatch_manifest,
 )
+from metaproc.io.secret_io import write_secret_text
+from metaproc.models.plan import ResolvedStep
 from metaproc.paths import POOL_STATUS_FILE, SCALE_STATE_FILE, step_state_dir
 from metaproc.plugins.discovery import get_bootstrap_env_vars
 from metaproc.runpool.status import read_scale_state, read_status
@@ -88,6 +94,8 @@ class WorkerDispatchConfig:
     variant: str = ""
     adapter_config_json: str = ""
     auth_flags: AuthPoolFlags = field(default_factory=AuthPoolFlags)
+    resolved_step: ResolvedStep | None = None
+    scope_run_id: str | None = None
 
 
 @dataclass
@@ -480,6 +488,37 @@ async def reconcile_dispatched_workers(
     )
 
 
+def _publish_worker_step(
+    config: WorkerDispatchConfig, *, run_dir: Path | None, step: str
+) -> Path | None:
+    """Publish one payload shared by all partitions of the resolved step."""
+    if config.resolved_step is None or not config.gcp.filestore_server:
+        return None
+    if run_dir is None or config.scope_run_id is None:
+        raise CLIError("resolved worker step requires the run directory and scope identity")
+    payload = WorkerStepPayload(scope_run_id=config.scope_run_id, target=config.resolved_step)
+    serialized = payload.model_dump_json(
+        by_alias=True, exclude={"target": {"fan_out": {"items", "filtered_count"}}}
+    )
+    # Reconciled jobs can still be starting when a resumed orchestrator submits another
+    # partition. Give each distinct payload its own path so each job keeps its target.
+    digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    payload_dir = step_state_dir(run_dir, step) / "worker_payloads"
+    payload_path = payload_dir / f"step-{digest}.json"
+    write_secret_text(payload_path, serialized, make_parents=True)
+    return payload_path
+
+
+def _worker_uses_pi(target: ResolvedStep | None, auth_flags: AuthPoolFlags) -> bool:
+    """Keep Pi available when a worker's executable adapter is not known in advance."""
+    if target is None or target.mode != "agent" or target.adapter.type not in ADAPTER_REGISTRY:
+        return True
+    return target.adapter.type == "pi-cli" or (
+        auth_flags.is_pool_dispatch_enabled()
+        and auth_flags.auth_fallback_policy in {FallbackPolicy.CROSS_PROVIDER, FallbackPolicy.BOTH}
+    )
+
+
 async def _submit_workers(
     *,
     partitions: list[list[str]],
@@ -508,6 +547,9 @@ async def _submit_workers(
     runtime_vars = apply_container_runs_dir(config.gcp, json.loads(vars_json))
     run_id = runtime_vars.get("RUN_ID", "unknown")
     vars_json = json.dumps(runtime_vars)
+    worker_step_path = _publish_worker_step(config, run_dir=run_dir, step=step)
+    # Without the shared step file the legacy worker resolves its own adapter.
+    worker_target = config.resolved_step if worker_step_path is not None else None
 
     for partition_index, partition in enumerate(partitions):
         wi = starting_worker_id + partition_index
@@ -536,7 +578,9 @@ async def _submit_workers(
             env_vars["METAPROC_MAX_RETRIES"] = str(config.max_retries)
         if config.initial_concurrency is not None:
             env_vars["METAPROC_INITIAL_CONCURRENCY"] = str(config.initial_concurrency)
-        if config.adapter_config_json:
+        if worker_step_path is not None:
+            env_vars[MetaprocEnv.METAPROC_WORKER_STEP_FILE.name] = str(worker_step_path)
+        elif config.adapter_config_json:
             env_vars["METAPROC_ADAPTER_CONFIG"] = config.adapter_config_json
 
         # Worker ID — used by run-parallel to scope pool state per worker,
@@ -627,10 +671,10 @@ async def _submit_workers(
         secret_refs = SecretRefSet.all_known().resolve_env_refs()
         require_secret_service_account(secret_refs, config.gcp.service_account_email)
 
-        # Pi CLI models config.
-        pi_models = build_pi_models_json(config.gcp.project)
-        if pi_models:
-            env_vars["METAPROC_PI_MODELS_JSON"] = pi_models
+        if _worker_uses_pi(worker_target, auth_flags):
+            pi_models = build_pi_models_json(config.gcp.project)
+            if pi_models:
+                env_vars["METAPROC_PI_MODELS_JSON"] = pi_models
 
         bootstrap_env = get_bootstrap_env_vars()
         plaintext_conflicts = SecretRefSet.all_known().plaintext_conflicts(bootstrap_env)

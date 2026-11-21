@@ -44,6 +44,10 @@ def _load_plan_from_run(run_dir: Path) -> Plan | None:
     so ``metaproc status`` keeps working even when the spec has moved,
     when the layout is too old, or when the plan would not build under
     current params.
+
+    The plan follows the run's record as a resume does: a removed built-in profile
+    the run used resolves from its former definition, and a derived namespace
+    compares against the defaults the run was created with.
     """
     config_path = run_dir / ".state" / "run-config.yaml"
     if not config_path.exists():
@@ -66,15 +70,22 @@ def _load_plan_from_run(run_dir: Path) -> Plan | None:
                 variables[key] = value
 
     try:
+        from metaproc.adapters.registry import (  # noqa: PLC0415 -- guarded import (optional dep / circular)
+            recorded_namespace_default_models,
+        )
         from metaproc.commands.helpers import (  # noqa: PLC0415 -- guarded import (optional dep / circular)
             load_process_spec,
             recorded_step_variants,
         )
         from metaproc.engine.build_plan import (  # noqa: PLC0415 -- guarded import (optional dep / circular)
             build_plan,
+            recorded_profile_model_overrides,
         )
         from metaproc.engine.process_scope import (  # noqa: PLC0415 -- guarded import (optional dep / circular)
             expand_process_vars,
+        )
+        from metaproc.models.execution_profile import (  # noqa: PLC0415 -- guarded import (optional dep / circular)
+            recorded_execution_profiles,
         )
 
         spec_path = Path(process_spec)
@@ -87,8 +98,13 @@ def _load_plan_from_run(run_dir: Path) -> Plan | None:
             adapter_override=_optional_config_string(config, "execution_profile"),
             artifact_namespace=_optional_config_string(config, "artifact_namespace"),
             step_profile_overrides=recorded_step_variants(config),
+            profile_model_overrides=recorded_profile_model_overrides(config),
             validate_required_inputs=False,
             validate_spec=False,
+            recorded_profiles=recorded_execution_profiles(config),
+            namespace_default_models=recorded_namespace_default_models(
+                config.get("namespace_default_models")
+            ),
         )
     except Exception as exc:  # noqa: BLE001 — best-effort
         log.info(

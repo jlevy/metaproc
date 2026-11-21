@@ -13,32 +13,46 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import stat
 import subprocess
 import tempfile
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import NamedTuple
+from urllib.parse import urlsplit
 
 import typer
 from strif import temp_output_file
 
-from metaproc.adapters.base import agent_seed_env, parse_jsonl_event
-from metaproc.adapters.gemini_cli import format_served_models
+from metaproc.adapters.base import AGENT_ENV_OVERRIDES, agent_seed_env, parse_jsonl_event
+from metaproc.adapters.codex_cli import codex_rollout_model, codex_thread_id, resolve_codex_home
+from metaproc.adapters.gemini_cli import GEMINI_ALIAS_SERVED_MODELS, format_served_models
 from metaproc.adapters.gemini_cli import served_models as gemini_served_models
 from metaproc.adapters.pi_cli import resolve_pi_binary
-from metaproc.adapters.registry import ADAPTER_REGISTRY
+from metaproc.adapters.registry import ADAPTER_REGISTRY, get_auth_capable
 from metaproc.cli import app, get_output
-from metaproc.commands.claude_auth import _validate_creds_payload
 from metaproc.config.env_vars import MetaprocEnv
+from metaproc.config.model_catalog import resolve_model
 from metaproc.config.providers import infer_provider, provider_by_name
+from metaproc.dispatch.slot_coordinator import apply_slot_env
 from metaproc.engine.preflight import check_disk_space
 from metaproc.engine.resource_sampling import run_command_in_process_group
 from metaproc.errors import CLIError
-from metaproc.io import fmf_read_frontmatter
+from metaproc.io import atomic_write_text, fmf_read_frontmatter
 from metaproc.models.execution_profile import ExecutionProfileRegistry
 
 log = logging.getLogger(__name__)
+
+
+_ISOLATED_PROBE_ENV_KEYS = frozenset(
+    {"PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TMP", "TEMP", *AGENT_ENV_OVERRIDES}
+)
+
+
+def _isolated_probe_env(env: Mapping[str, str], *extra_keys: str) -> dict[str, str]:
+    return {key: env[key] for key in _ISOLATED_PROBE_ENV_KEYS.union(extra_keys) if key in env}
 
 
 def _check_gcloud_token() -> tuple[bool, str]:
@@ -62,11 +76,11 @@ def _check_gcloud_token() -> tuple[bool, str]:
     return True, f"GCP token: ok via google.auth (len={len(token)}, expiry={expiry})"
 
 
-def _check_adapter(adapter_type: str) -> list[tuple[bool, str]]:
+def _check_adapter(adapter_type: str, *, live: bool = False) -> list[tuple[bool | None, str]]:
     """Run credential checks for a single adapter."""
     adapter = ADAPTER_REGISTRY[adapter_type]
     status = adapter.check_auth()
-    results: list[tuple[bool, str]] = []
+    results: list[tuple[bool | None, str]] = []
 
     # Binary check
     if status.cli_found:
@@ -80,6 +94,14 @@ def _check_adapter(adapter_type: str) -> list[tuple[bool, str]]:
     # Credentials check
     if status.credentials_found:
         results.append((True, f"{adapter_type}: credentials ok ({status.auth_mode})"))
+    elif adapter_type == "codex-cli" and status.auth_mode == "unknown":
+        next_step = "checking in the live probe" if live else "use --live to verify"
+        results.append(
+            (
+                None if live else False,
+                f"{adapter_type}: credentials unverified — {status.details}; {next_step}",
+            )
+        )
     else:
         results.append((False, f"{adapter_type}: no credentials found"))
         if status.setup_hint:
@@ -156,7 +178,9 @@ def _infer_pi_provider(model_name: str | None) -> str | None:
     return spec.name if spec else None
 
 
-def _pi_list_models(env: dict[str, str], timeout_s: int = 15) -> tuple[bool, str]:
+def _pi_list_models(
+    env: dict[str, str], timeout_s: int = 15, *, isolated: bool = False
+) -> tuple[bool, str]:
     """Capture ``pi --list-models`` output under ``env``.
 
     Returns ``(ok, combined_output)``. ``ok`` is ``False`` only when the
@@ -170,13 +194,15 @@ def _pi_list_models(env: dict[str, str], timeout_s: int = 15) -> tuple[bool, str
     except FileNotFoundError as exc:
         return False, str(exc)
 
+    flags = ["--no-mcp", "--no-extensions"] if isolated else []
     try:
         proc = subprocess.run(
-            [pi_binary, "--list-models"],
+            [pi_binary, "--list-models", *flags],
             capture_output=True,
             text=True,
             timeout=timeout_s,
             env=env,
+            cwd=env["PI_CODING_AGENT_DIR"] if isolated else None,
         )
     except subprocess.TimeoutExpired:
         return False, f"pi --list-models timed out after {timeout_s}s"
@@ -190,6 +216,8 @@ def _pi_validate_registration(
     model: str | None,
     env: dict[str, str],
     timeout_s: int = 15,
+    *,
+    isolated: bool = False,
 ) -> tuple[bool, str]:
     """Verify that ``provider`` and ``model`` are registered with pi-cli.
 
@@ -198,7 +226,7 @@ def _pi_validate_registration(
     ``auth-check --live`` from false-greening when pi-cli silently falls
     back to its default provider.
     """
-    ok, output = _pi_list_models(env, timeout_s=timeout_s)
+    ok, output = _pi_list_models(env, timeout_s=timeout_s, isolated=isolated)
     if not ok:
         return False, output
 
@@ -216,11 +244,146 @@ def _pi_validate_registration(
     return True, "registration validated via pi --list-models"
 
 
+_PI_GCP_TOKEN_ENV = "METAPROC_PI_API_KEY"
+_MAX_PI_PROBE_CATALOG_BYTES = 4 * 1024 * 1024
+_PI_GCP_TOKEN_SOURCES = frozenset(
+    {
+        "$METAPROC_PI_API_KEY",
+        "${METAPROC_PI_API_KEY}",
+        # The command in the packaged and Batch-rendered provider catalog.
+        (
+            '!sh -c \'if [ -n "$METAPROC_PI_API_KEY" ]; then '
+            'printf "%s" "$METAPROC_PI_API_KEY"; else exec gcp-access-token.sh; fi\''
+        ),
+    }
+)
+
+
+def _stage_pi_gcp_probe_catalog(
+    provider: str, requested_model: str, env: Mapping[str, str], stage_dir: Path
+) -> str:
+    """Stage one MaaS route with an explicit key source and no inherited Pi login."""
+    agent_dir = env.get("PI_CODING_AGENT_DIR")
+    home = env.get("HOME")
+    models_path = (
+        Path(agent_dir).expanduser()
+        if agent_dir
+        else (Path(home) if home else Path.home()) / ".pi" / "agent"
+    ) / "models.json"
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        fd = os.open(models_path, flags)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise ValueError("not a regular file")
+            with os.fdopen(fd, "rb", closefd=False) as stream:
+                data = stream.read(_MAX_PI_PROBE_CATALOG_BYTES + 1)
+        finally:
+            os.close(fd)
+        if len(data) > _MAX_PI_PROBE_CATALOG_BYTES:
+            raise ValueError("exceeds the Pi probe catalog read limit")
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"could not read {provider} probe catalog {models_path}: {exc}") from exc
+    try:
+        config = json.loads(data.decode("utf-8-sig"))["providers"][provider]
+        api_key = config["apiKey"]
+    except OSError, ValueError, KeyError, TypeError:
+        config = {}
+        api_key = None
+    if not isinstance(api_key, str) or api_key not in _PI_GCP_TOKEN_SOURCES:
+        raise ValueError(
+            f'set providers.{provider}.apiKey in {models_path} to "${_PI_GCP_TOKEN_ENV}" '
+            "or use Metaproc's packaged provider configuration"
+        )
+
+    base_url = config.get("baseUrl", "")
+    try:
+        parsed = urlsplit(base_url if isinstance(base_url, str) else "")
+        trusted_url = (
+            parsed.scheme == "https"
+            and parsed.username is None
+            and parsed.port in (None, 443)
+            and re.fullmatch(r"(?:[a-z0-9-]+-)?aiplatform\.googleapis\.com", parsed.hostname or "")
+        )
+    except ValueError:
+        trusted_url = False
+    if not trusted_url or config.get("api") != "openai-completions":
+        raise ValueError(f"{models_path} must route {provider} to an HTTPS Vertex AI endpoint")
+
+    defs = config.get("models")
+    matching = (
+        [
+            model
+            for model in defs
+            if isinstance(model, dict)
+            and isinstance(model.get("id"), str)
+            and (
+                model["id"] == requested_model or model["id"].rsplit("/", 1)[-1] == requested_model
+            )
+        ]
+        if isinstance(defs, list)
+        else []
+    )
+    if len(matching) != 1:
+        raise ValueError(
+            f"{models_path} must define one {provider} model matching {requested_model!r}"
+        )
+
+    selected = matching[0]
+    catalog = {
+        "providers": {
+            provider: {
+                "baseUrl": base_url,
+                "api": "openai-completions",
+                "apiKey": f"${_PI_GCP_TOKEN_ENV}",
+                "authHeader": True,
+                "models": [
+                    {
+                        key: value
+                        for key, value in selected.items()
+                        if key
+                        in {
+                            "id",
+                            "name",
+                            "reasoning",
+                            "input",
+                            "contextWindow",
+                            "maxTokens",
+                            "cost",
+                        }
+                    }
+                ],
+            }
+        }
+    }
+    atomic_write_text(stage_dir / "models.json", json.dumps(catalog))
+    return selected["id"]
+
+
+def _resolve_pi_gcp_probe_token() -> str:
+    """Mint a bearer in the parent using its application default credentials."""
+    try:
+        from metaproc.cloud.gcp.resolve_token import (  # noqa: PLC0415 -- optional [gcp] dependency
+            resolve_gcp_token,
+        )
+
+        token = resolve_gcp_token()
+    except ImportError:
+        raise ValueError("install metaproc[gcp] to resolve a Vertex MaaS credential") from None
+    except Exception as exc:  # noqa: BLE001 -- report any upstream credential failure safely
+        raise ValueError(
+            f"GCP access token unavailable ({type(exc).__name__}); check Application Default Credentials"
+        ) from None
+    if not token.strip():
+        raise ValueError("GCP access token unavailable; check Application Default Credentials")
+    return token
+
+
 # Adapter-specific matchers for the identity event that carries model ID.
 # Each entry is (event type or None, event subtype or None, dotted-path to
 # model within the event). `None` for type means "any line" — used for
-# codex-cli, whose config-dump preamble carries `{"model": ..., ...}` with
-# no `type` field. The first JSONL line matching both type/subtype (when
+# the config-dump preamble older codex-cli releases printed, `{"model": ..., ...}`
+# with no `type` field. The first JSONL line matching both type/subtype (when
 # specified) and containing a non-empty string at *model_path* wins.
 #
 # An identity event is not billing accounting, so it need not name the model
@@ -233,11 +396,11 @@ _MODEL_EVENT_MATCHERS: dict[str, tuple[str | None, str | None, tuple[str, ...]]]
     # assistant turn. Matching `message_start` directly gives us the
     # identity event even when agent_start is empty.
     "pi-cli": ("message_start", None, ("message", "model")),
-    # codex-cli 0.124.0 prints an untyped config-dump line as its first
-    # stdout line (e.g. `{"model":"gpt-5","provider":"openai",...}`). The
-    # typed event stream (thread.started → turn.started → item.* →
-    # turn.completed) does NOT carry a model ID, so this preamble is the
-    # only place the observed model shows up.
+    # Older codex-cli releases (0.124.0) printed an untyped config-dump line
+    # first (e.g. `{"model":"gpt-5","provider":"openai",...}`). The pinned
+    # 0.166.0 prints none under `--json`, and its typed stream carries no model
+    # at all, so `_evaluate_codex_model_assertion` falls back to the session
+    # rollout and then the argv.
     "codex-cli": (None, None, ("model",)),
 }
 
@@ -288,10 +451,17 @@ def _extract_observed_model(adapter_type: str, stdout: str) -> str | None:
 # it sent a request to, and `gemini_cli.served_models` keeps the ones that billed
 # tokens. `GeminiCliAdapter.validate_result_event` refuses a run's result through
 # the same function, so the probe and the run path decide which model served by
-# one rule. They still compare differently: the run path requires the resolved
-# requested id itself, while `--assert-model` takes an operator-supplied substring.
+# one rule, and they compare by one rule too: the asserted id must itself have
+# billed, or, for a moving alias, one of the models `_SERVED_MODEL_ALIASES` says the
+# pinned CLI serves it as. A substring match would pass `gemini-3.1-pro-preview`
+# when `gemini-3.1-pro-preview-customtools` served, and could never pass `auto`.
 _SERVED_MODEL_READERS: dict[str, Callable[[dict[str, object]], dict[str, int]]] = {
     "gemini-cli": gemini_served_models,
+}
+
+# Per adapter: moving alias -> the concrete models the pinned CLI may bill it as.
+_SERVED_MODEL_ALIASES: dict[str, Mapping[str, frozenset[str]]] = {
+    "gemini-cli": GEMINI_ALIAS_SERVED_MODELS,
 }
 
 
@@ -331,8 +501,9 @@ def _run_live_check(
     then sets what the probe itself needs.
 
     When *assert_model* is set, also parse the subprocess stdout and fail unless
-    the model it names contains the expected substring. Where that model is read
-    differs by adapter:
+    the model it names contains the expected substring (gemini-cli: equals it, or
+    is one a moving alias is served as). Where that model is read differs by
+    adapter:
 
     - gemini-cli: the terminal `result` event's `stats.models`, the models that
       billed the call, so a request the CLI rewrote or answered with a fallback
@@ -341,13 +512,18 @@ def _run_live_check(
       request to. Its `result.modelUsage` carries the models that billed but is
       not read yet.
     - pi-cli: `message.model` on the first assistant `message_start` event.
-    - codex-cli: the `model` field of the untyped config preamble it prints
-      before its event stream; the assertion fails when the preamble is absent.
+    - codex-cli: the model Codex *requested*: a legacy config preamble if one is
+      printed, else the `turn_context` model in the thread's session rollout. With
+      neither, the assertion fails as not verifiable; the probe's `-m` is not
+      evidence. `codex exec` reports no model that served the call.
     """
 
     adapter = ADAPTER_REGISTRY[adapter_type]
     status = adapter.check_auth()
-    if not status.cli_found or not status.credentials_found:
+    can_probe_credentials = status.credentials_found or (
+        adapter_type == "codex-cli" and status.auth_mode == "unknown"
+    )
+    if not status.cli_found or not can_probe_credentials:
         return [(False, f"{adapter_type}: skipping live check (no binary or credentials)")]
 
     # Start from the profile's own adapter config, as a run seeds a step's config
@@ -402,6 +578,7 @@ def _run_live_check(
         f.write("Respond with exactly: OK")
         prompt_path = Path(f.name)
 
+    pi_stage: tempfile.TemporaryDirectory[str] | None = None
     try:
         try:
             cmd = adapter.build_command(
@@ -425,26 +602,28 @@ def _run_live_check(
         if adapter_type == "pi-cli" and "--no-tools" not in cmd:
             cmd = [*cmd, "--no-tools"]
 
-        # Inject a fresh GCP access token as `--api-key` only for providers
-        # that actually use one (e.g. vertex-maas). Doing this unconditionally
-        # for pi-cli false-greens direct-API providers: the GCP token gets
-        # passed in place of (e.g.) DEEPSEEK_API_KEY, then pi-cli reports the
-        # real auth failure as a JSONL `stopReason: error` event while still
-        # exiting 0 — caught below by the JSONL error scanner.
+        # The registration command filters by credential availability, so both
+        # Pi children need the key in their environment. Never put it in argv.
+        pi_gcp_token: str | None = None
+        registration_model = variant
         if adapter_type == "pi-cli" and effective_provider:
             spec = provider_by_name(effective_provider)
             if spec is not None and spec.requires_gcp_token:
+                pi_stage = tempfile.TemporaryDirectory(prefix="metaproc-pi-maas-check-")
                 try:
-                    from metaproc.cloud.gcp.resolve_token import (  # noqa: PLC0415 -- optional [gcp-batch] dependency
-                        resolve_gcp_token,  # noqa: PLC0415  # optional GCP extra
+                    registration_model = _stage_pi_gcp_probe_catalog(
+                        effective_provider,
+                        resolve_model("pi-cli", merged_config.get("model")),
+                        env,
+                        Path(pi_stage.name),
                     )
-
-                    token = resolve_gcp_token()
-                    cmd = [cmd[0], "--api-key", token, *cmd[1:]]
-                except ImportError:
-                    pass  # GCP extra not installed — skip token injection
-                except Exception:
-                    log.warning("Failed to inject GCP token for live check", exc_info=True)
+                    pi_gcp_token = _resolve_pi_gcp_probe_token()
+                except ValueError as exc:
+                    return [(False, f"{label}: {exc}")]
+                env = _isolated_probe_env(env, "HOME", "PI_SKIP_VERSION_CHECK", "PI_TELEMETRY")
+                env["PI_CODING_AGENT_DIR"] = pi_stage.name
+                env[_PI_GCP_TOKEN_ENV] = pi_gcp_token
+                cmd = [*cmd, "--no-extensions"]
 
         # Pre-flight: confirm pi-cli actually knows the requested provider/model
         # before we dispatch a trivial prompt. Without this gate, pi-cli
@@ -453,11 +632,14 @@ def _run_live_check(
         if adapter_type == "pi-cli" and (effective_provider or variant):
             ok, diag = _pi_validate_registration(
                 effective_provider,
-                variant,
+                registration_model,
                 env,
                 timeout_s=min(timeout_s, 15),
+                isolated=pi_stage is not None,
             )
             if not ok:
+                if pi_gcp_token:
+                    diag = diag.replace(pi_gcp_token, "[redacted]")
                 results.append((False, f"{label}: {diag}"))
                 return results
 
@@ -471,22 +653,29 @@ def _run_live_check(
                 text=True,
                 timeout=timeout_s,
                 env=env,
-                cwd=adapter.working_directory(merged_config),
+                cwd=Path(pi_stage.name) if pi_stage else adapter.working_directory(merged_config),
             )
             elapsed = time.monotonic() - t0
+            stdout, stderr = proc.stdout or "", proc.stderr or ""
+            if pi_gcp_token:
+                stdout = stdout.replace(pi_gcp_token, "[redacted]")
+                stderr = stderr.replace(pi_gcp_token, "[redacted]")
             # pi-cli reports terminal errors as JSONL events with
             # stopReason="error" while still exiting 0. Without this scan
             # the live check false-greens on missing/invalid API keys, 401s,
             # 429s, etc.
-            jsonl_error = (
-                _extract_pi_jsonl_error(proc.stdout or "") if adapter_type == "pi-cli" else None
-            )
+            jsonl_error = _extract_pi_jsonl_error(stdout) if adapter_type == "pi-cli" else None
             if proc.returncode == 0 and jsonl_error is None:
                 results.append((True, f"{label}: live check passed ({elapsed:.1f}s)"))
                 if assert_model:
                     results.append(
                         _evaluate_model_assertion(
-                            adapter_type, proc.stdout or "", assert_model, label
+                            adapter_type,
+                            stdout,
+                            assert_model,
+                            label,
+                            env=env,
+                            cmd=cmd,
                         )
                     )
             elif proc.returncode == 0 and jsonl_error is not None:
@@ -503,7 +692,7 @@ def _run_live_check(
             else:
                 # Extract first useful line of stderr
                 err_line = ""
-                for line in (proc.stderr or "").splitlines():
+                for line in stderr.splitlines():
                     stripped = line.strip()
                     if stripped and not stripped.startswith("{"):
                         err_line = stripped[:120]
@@ -518,6 +707,8 @@ def _run_live_check(
             results.append((False, f"{label}: live check timed out after {timeout_s}s"))
     finally:
         prompt_path.unlink(missing_ok=True)
+        if pi_stage is not None:
+            pi_stage.cleanup()
 
     return results
 
@@ -609,16 +800,23 @@ def _evaluate_model_assertion(
     stdout: str,
     expected: str,
     label: str,
+    *,
+    env: Mapping[str, str] | None = None,
+    cmd: list[str] | None = None,
 ) -> tuple[bool, str]:
-    """Compare the model the probe's output names against *expected* substring.
+    """Compare the model the probe's output names against *expected*.
 
     For an adapter in `_SERVED_MODEL_READERS` this reads the terminal event's
     served-model accounting, so a CLI that rewrites the request to another model
-    fails the assertion. Every other adapter's assertion reads the model named by
-    its identity event in `_MODEL_EVENT_MATCHERS`.
+    fails the assertion. codex-cli reports no model at all, so its assertion reads
+    the requested model (`_evaluate_codex_model_assertion`); *env* and *cmd* are
+    the probe's child environment and argv it needs. Every other adapter's
+    assertion reads the model named by its identity event in `_MODEL_EVENT_MATCHERS`.
     """
     if adapter_type in _SERVED_MODEL_READERS:
         return _evaluate_served_model_assertion(adapter_type, stdout, expected, label)
+    if adapter_type == "codex-cli":
+        return _evaluate_codex_model_assertion(stdout, expected, label, env=env, cmd=cmd)
 
     observed = _extract_observed_model(adapter_type, stdout)
     if observed is None:
@@ -637,6 +835,75 @@ def _evaluate_model_assertion(
     )
 
 
+def _codex_requested_model(stdout: str, env: Mapping[str, str] | None) -> tuple[str, str] | None:
+    """Return Codex's requested model and where it was read, or None when Codex recorded none.
+
+    1. An untyped config preamble, which codex-cli 0.124.0 printed and the pinned
+       0.166.0 does not.
+    2. The `turn_context` record of the thread's session rollout (plain `.jsonl`
+       or compressed `.jsonl.zst`) under `$CODEX_HOME/sessions`: the model Codex
+       sent the request for after its own config resolution.
+
+    The probe's own `-m` argument is not evidence: it is what Metaproc asked for,
+    so comparing against it could never fail.
+    """
+    preamble = _extract_observed_model("codex-cli", stdout)
+    if preamble is not None:
+        return preamble, "the codex-cli config preamble"
+    thread_id = codex_thread_id(stdout)
+    if thread_id is not None:
+        codex_home = resolve_codex_home(env)
+        recorded = codex_rollout_model(codex_home, thread_id)
+        if recorded is not None:
+            return recorded, f"Codex's session rollout for thread {thread_id}"
+    return None
+
+
+def _argv_model(cmd: list[str] | None) -> str | None:
+    """Return the `-m` value in the probe's argv, for the failure message only."""
+    if cmd and "-m" in cmd:
+        index = cmd.index("-m")
+        if index + 1 < len(cmd):
+            return cmd[index + 1]
+    return None
+
+
+def _evaluate_codex_model_assertion(
+    stdout: str,
+    expected: str,
+    label: str,
+    *,
+    env: Mapping[str, str] | None,
+    cmd: list[str] | None,
+) -> tuple[bool, str]:
+    """Assert *expected* against the model Codex *requested*, labelled as such.
+
+    `codex exec --json` (0.166.0) names no model in its events, and its rollout
+    records only the requested model, so no evidence shows which model served the
+    call. The assertion therefore confirms the request Codex made, not the answer,
+    and every message says so. Without a rollout or preamble naming the model it
+    fails as not verifiable; the probe's `-m` is quoted but never matched.
+    """
+    found = _codex_requested_model(stdout, env)
+    unserved = "codex-cli reports no served model"
+    if found is None:
+        argv_model = _argv_model(cmd)
+        asked = f"; the probe passed -m {argv_model!r}" if argv_model else ""
+        missing = (
+            f"{label}: cannot verify a model containing {expected!r}: Codex recorded no "
+            f"requested model (no config preamble, no session rollout for the thread)"
+            f"{asked}, which is what Metaproc asked for, not evidence ({unserved})"
+        )
+        return (False, missing)
+    requested, source = found
+    verdict = "matches" if expected in requested else "does not match"
+    message = (
+        f"{label}: requested model {requested!r} {verdict} expected {expected!r} "
+        f"(from {source}; {unserved})"
+    )
+    return (expected in requested, message)
+
+
 def _evaluate_served_model_assertion(
     adapter_type: str,
     stdout: str,
@@ -645,10 +912,12 @@ def _evaluate_served_model_assertion(
 ) -> tuple[bool, str]:
     """Assert *expected* against the models the terminal event says billed the call.
 
-    Any one billing model matching passes, because utility and sub-agent requests
-    legitimately bill other models beside the requested one. Both the pass and the
-    fail line list every billing model with its token count, so a fallback that
-    answered beside or instead of the requested model is visible either way.
+    The match is exact: *expected* must be a model that billed, or a moving alias
+    (`_SERVED_MODEL_ALIASES`) one of whose served models billed. Any one billing
+    model matching passes, because utility and sub-agent requests legitimately bill
+    other models beside the requested one. Both the pass and the fail line list
+    every billing model with its token count, so a fallback that answered beside or
+    instead of the requested model is visible either way.
     """
     served = _extract_served_models(adapter_type, stdout)
     requested = _extract_observed_model(adapter_type, stdout)
@@ -657,29 +926,35 @@ def _evaluate_served_model_assertion(
     if served is None:
         missing = (
             f"{label}: no terminal result event in stdout, so the served model is "
-            f"unknown{asked}; cannot confirm a model containing {expected!r}"
+            f"unknown{asked}; cannot confirm model {expected!r}"
         )
         return (False, missing)
     if not served:
         unaccounted = (
             f"{label}: terminal result event reported no served model (no model billed "
-            f"tokens){asked}; cannot confirm a model containing {expected!r}"
+            f"tokens){asked}; cannot confirm model {expected!r}"
         )
         return (False, unaccounted)
 
     billed = format_served_models(served)
+    alias_targets = _SERVED_MODEL_ALIASES.get(adapter_type, {}).get(expected)
+    accepted = {expected} | (alias_targets or frozenset())
     matching = sorted(
-        (name for name in served if expected in name),
+        (name for name in served if name in accepted),
         key=lambda name: (-served[name], name),
     )
+    as_alias = ""
+    if alias_targets is not None:
+        as_alias = f" (alias served as {' or '.join(sorted(alias_targets))})"
     if matching:
         passed = (
-            f"{label}: served model {matching[0]!r} matches expected {expected!r}; billed: {billed}"
+            f"{label}: served model {matching[0]!r} matches expected {expected!r}"
+            f"{as_alias}; billed: {billed}"
         )
         return (True, passed)
     mismatch = (
-        f"{label}: no served model matches expected {expected!r}{asked} — the CLI "
-        f"answered with a different model; billed: {billed}"
+        f"{label}: no served model matches expected {expected!r}{as_alias}{asked} — the "
+        f"CLI answered with a different model; billed: {billed}"
     )
     return (False, mismatch)
 
@@ -704,10 +979,8 @@ def _run_claude_secret_live_check(
     """Validate a Secret Manager claude-code credential end-to-end.
 
     Exercises the cloud path that GCP Batch workers use: fetch the Secret
-    Manager payload, materialize it to a throwaway ``~/.claude/.credentials.json``,
-    and run ``claude -p`` against it. Catches stale/invalidated OAuth tokens
-    that the local keychain check cannot detect because the keychain blob
-    and the Secret Manager blob can drift apart.
+    Manager payload, materialize it in a temporary credential slot, and run
+    ``claude -p`` with that slot's credential and configuration paths.
 
     ``secret_ref`` must be a fully-qualified resource name:
     ``projects/PROJECT/secrets/NAME/versions/VERSION``.
@@ -733,77 +1006,68 @@ def _run_claude_secret_live_check(
         first_err = next((line for line in err if line.strip()), "gcloud failed")[:160]
         return [(False, f"{label}: fetch failed — {first_err}")]
 
-    payload = proc.stdout
-    try:
-        _validate_creds_payload(payload)
-    except RuntimeError as exc:
-        return [(False, f"{label}: payload rejected — {exc}")]
-
-    adapter = ADAPTER_REGISTRY["claude-code-cli"]
-    status = adapter.check_auth()
-    if not status.cli_found:
+    adapter = get_auth_capable("claude-code-cli")
+    if adapter is None or not adapter.check_auth().cli_found:
         return [(False, f"{label}: claude binary not found on PATH")]
 
     merged_config: dict[str, object] = {
-        "permission_mode": "bypassPermissions",
+        "permission_mode": "default",
         "output_format": "text",
         "verbose": False,
         "no_session_persistence": True,
+        "strict_mcp_config": True,
+        "tools": [],
     }
 
     with tempfile.TemporaryDirectory(prefix="metaproc-claude-secret-check-") as tmp:
         tmp_home = Path(tmp)
         claude_dir = tmp_home / ".claude"
-        claude_dir.mkdir(mode=0o700)
-        creds_file = claude_dir / ".credentials.json"
-        creds_file.write_text(payload)
-        creds_file.chmod(0o600)
-
-        with tempfile.NamedTemporaryFile(
-            encoding="utf-8", mode="w", suffix=".md", delete=False
-        ) as prompt_f:
-            prompt_f.write("Respond with exactly: OK")
-            prompt_path = Path(prompt_f.name)
-
         try:
-            cmd = adapter.build_command(
-                prompt_file=prompt_path,
-                merged_config=merged_config,
-                variables={},
-            )
-            env = adapter.prepare_env(agent_seed_env(), merged_config)
-            env.pop("ANTHROPIC_API_KEY", None)
-            env["HOME"] = str(tmp_home)
+            adapter.materialize_credential(claude_dir, proc.stdout)
+        except RuntimeError as exc:
+            return [(False, f"{label}: payload rejected — {exc}")]
 
-            t0 = time.monotonic()
-            try:
-                run = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout_s,
-                    env=env,
-                )
-                elapsed = time.monotonic() - t0
-                if run.returncode == 0:
-                    results.append((True, f"{label}: live check passed ({elapsed:.1f}s)"))
-                else:
-                    err_line = ""
-                    for line in (run.stderr or run.stdout or "").splitlines():
-                        stripped = line.strip()
-                        if stripped and not stripped.startswith("{"):
-                            err_line = stripped[:160]
-                            break
-                    results.append(
-                        (
-                            False,
-                            f"{label}: live check failed (exit {run.returncode}, {elapsed:.1f}s) — {err_line}",
-                        )
+        prompt_path = tmp_home / "prompt.md"
+        atomic_write_text(prompt_path, "Respond with exactly: OK")
+        cmd = adapter.build_command(
+            prompt_file=prompt_path, merged_config=merged_config, variables={}
+        )
+        cmd = [cmd[0], "--setting-sources", "user", *cmd[1:]]
+        env = apply_slot_env(
+            adapter.prepare_env(_isolated_probe_env(agent_seed_env()), merged_config),
+            scope_env=adapter.credential_scope_env(claude_dir),
+            scrub_env=adapter.credential_scrub_env(),
+            extra={"HOME": str(tmp_home), "XDG_CONFIG_HOME": str(tmp_home / ".config")},
+        )
+
+        t0 = time.monotonic()
+        try:
+            run = run_command_in_process_group(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+                env=env,
+                cwd=tmp_home,
+            )
+            elapsed = time.monotonic() - t0
+            if run.returncode == 0:
+                results.append((True, f"{label}: live check passed ({elapsed:.1f}s)"))
+            else:
+                err_line = ""
+                for line in (run.stderr or run.stdout or "").splitlines():
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith("{"):
+                        err_line = stripped[:160]
+                        break
+                results.append(
+                    (
+                        False,
+                        f"{label}: live check failed (exit {run.returncode}, {elapsed:.1f}s) — {err_line}",
                     )
-            except subprocess.TimeoutExpired:
-                results.append((False, f"{label}: live check timed out after {timeout_s}s"))
-        finally:
-            prompt_path.unlink(missing_ok=True)
+                )
+        except subprocess.TimeoutExpired:
+            results.append((False, f"{label}: live check timed out after {timeout_s}s"))
 
     return results
 
@@ -903,14 +1167,16 @@ def auth_check(
             "Fail the --live probe unless the model its output names contains this "
             "substring. Where that model is read differs by adapter. "
             "gemini-cli: the terminal result event's stats.models, the models that "
-            "billed the call, so a request the CLI rewrote or answered with a "
+            "billed the call, matched exactly (an alias such as auto matches the models "
+            "it is served as), so a request the CLI rewrote or answered with a "
             "fallback fails. "
             "claude-code-cli: system.init.model, the model Claude Code resolved the "
             "request to; its result.modelUsage carries the models that billed but is "
             "not read yet. "
             "pi-cli: message.model on the first assistant message_start event. "
-            "codex-cli: the model field of the config preamble it prints before its "
-            "event stream; the check fails when the preamble is absent."
+            "codex-cli: the model Codex requested, read from the thread's session rollout; "
+            "with no rollout the assertion fails as not verifiable. codex exec reports no "
+            "model that served the call."
         ),
     ),
     adapter: str | None = typer.Option(  # noqa: UP007
@@ -943,11 +1209,11 @@ def auth_check(
     out.progress("Phase 1: Environment and credential audit")
 
     # Disk space
-    all_results.append(check_disk_space())
+    environment_results: list[tuple[bool | None, str]] = [check_disk_space()]
 
     # gcloud token (informational — needed for vertex-maas adapters)
     gcloud_ok, gcloud_msg = _check_gcloud_token()
-    all_results.append((gcloud_ok, gcloud_msg))
+    environment_results.append((gcloud_ok, gcloud_msg))
 
     # --adapter is mutually exclusive with --variant. When --adapter is set we
     # bypass execution-profile resolution and probe (adapter, model) directly;
@@ -970,10 +1236,14 @@ def auth_check(
         scoped_adapter, scoped_model = adapter, model
     adapter_types = [scoped_adapter] if scoped_adapter else list(ADAPTER_REGISTRY)
     for adapter_type in adapter_types:
-        all_results.extend(_check_adapter(adapter_type))
+        environment_results.extend(_check_adapter(adapter_type, live=live))
 
     # Print Phase 1 results
-    for ok, msg in all_results:
+    for ok, msg in environment_results:
+        if ok is None:
+            out.data(f"[!] {msg}")
+            continue
+        all_results.append((ok, msg))
         icon = "+" if ok else "-"
         out.data(f"[{icon}] {msg}")
         if not ok:

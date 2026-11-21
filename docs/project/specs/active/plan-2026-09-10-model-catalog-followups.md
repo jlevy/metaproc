@@ -8,9 +8,11 @@ tracking_bead: mp-qmr0
 ---
 # Plan: Model Catalog Compatibility Follow-Ups
 
-**Date:** 2026-09-10 (last updated 2026-09-10)
+**Date:** 2026-09-10 (last updated 2026-11-18)
 
-**Status:** Catalog consolidation is merged; three compatibility follow-ups remain open.
+**Status:** Catalog consolidation is merged.
+The November refresh (`mp-5212`) resolves the client and retirement follow-ups; route
+and pricing verification remains open.
 
 ## Overview
 
@@ -29,18 +31,15 @@ triggers; the configured Codex follow-up performs a read-only review.
 
 ## Implementation and Acceptance
 
-- [ ] **Client compatibility — `mp-xgrd`:** coordinate pinned clients and deployment
-  images for Fable 5.1. The September review found Claude Code requires at least 2.1.257
-  while the repository pins 2.1.234, and Pi 0.84.2 lacks the native ID. Recheck those
-  facts before selecting upgrades, apply the supply-chain policy, and verify exact model
-  identity and representative tool calls through each intended route.
-  Preserve version checks and add Pi acceptance only when its deployed catalog supports
-  the ID.
-- [ ] **Retirement migration — `mp-4w8q`:** review replacement routes by October 1 for
-  the announced October 21 retirement of GLM 5, GLM 4.7, DeepSeek V3.2, and Kimi K2
-  Thinking on Vertex MaaS. Recheck the provider’s schedule, identify affected accepted
-  IDs and configurations, test replacements, and record migration and historical-ID
-  retention decisions before removing acceptance.
+- [x] **Client compatibility — `mp-xgrd`:** resolved by the November refresh.
+  Claude Code 2.1.325 and Pi 1.5.2 were adopted under reviewed cool-off exemptions for
+  Fable 5.2; every current Claude ID completed a live tool-call probe on the Anthropic
+  first-party route
+  ([refresh record](../../research/research-2026-11-18-model-and-harness-refresh.md)).
+- [x] **Retirement migration — `mp-4w8q`:** resolved by the November refresh.
+  The six Vertex MaaS IDs retired on 2026-10-21 were removed and replaced by
+  `zai-org/glm-5.2-maas` and `deepseek-ai/deepseek-v4.1-flash-maas`; the `pi-glm5`
+  profile became `pi-glm52`. The Vertex MaaS route itself is unprobed.
 - [ ] **Uncertain routes and pricing — `mp-jnws`:** establish the exact retained Kimi
   K2.6 ID and Vertex custom-tools availability from primary evidence and bounded account
   probes. Verify model identity and tool calls for new Pi Responses and native Vertex

@@ -122,7 +122,7 @@ def test_default_native_settings_reach_gemini_without_a_root_owned_file(tmp_path
     assert skipped == []
     general = cast("dict[str, dict[str, object]]", loaded["general"])
     assert general["sessionRetention"]["enabled"] is False
-    assert loaded["experimental"] == {"dynamicModelConfiguration": True}
+    assert loaded["experimental"] == {"dynamicModelConfiguration": False}
     assert loaded["tools"] == {"core": ["read_file"]}
     assert loaded["agents"] == GEMINI_DEFAULT_NATIVE_SETTINGS["agents"]
     assert loaded["modelConfigs"] == GEMINI_DEFAULT_NATIVE_SETTINGS["modelConfigs"]
@@ -178,6 +178,47 @@ def _write_workspace_settings(directory: Path, content: str) -> Path:
     settings.parent.mkdir(parents=True)
     settings.write_text(content, encoding="utf-8")
     return settings
+
+
+def test_workspace_settings_an_earlier_release_wrote_reach_gemini_updated(
+    tmp_path: Path,
+) -> None:
+    """A workspace-scope relaunch over v0.6.1's file hands Gemini today's settings.
+
+    v0.6.1 turned dynamic model configuration on and matched its thinking override by
+    `overrideScope`, which never applied. Left in place, that file would keep every
+    relaunch of the run on the old behavior.
+    """
+    cwd = tmp_path / "scope"
+    v061 = _merge(
+        cast("dict[str, object]", json.loads(json.dumps(GEMINI_DEFAULT_NATIVE_SETTINGS))),
+        {
+            "experimental": {"dynamicModelConfiguration": True},
+            "modelConfigs": {
+                "overrides": [
+                    {
+                        "match": {"overrideScope": "chat-base-3"},
+                        "modelConfig": {
+                            "generateContentConfig": {"thinkingConfig": {"thinkingLevel": "HIGH"}}
+                        },
+                    }
+                ]
+            },
+        },
+    )
+    _write_workspace_settings(cwd, json.dumps(v061, sort_keys=True, separators=(",", ":")))
+    environment = {"HOME": str(_operator_home(tmp_path))}
+    config: dict[str, object] = {
+        "native_settings_scope": "workspace",
+        "working_directory": str(cwd),
+    }
+
+    env = GeminiCliAdapter().prepare_env(environment, config)
+    loaded, skipped = _settings_gemini_loads(env, cwd)
+
+    assert skipped == []
+    assert loaded["experimental"] == {"dynamicModelConfiguration": False}
+    assert loaded["modelConfigs"] == GEMINI_DEFAULT_NATIVE_SETTINGS["modelConfigs"]
 
 
 def test_working_directory_settings_cannot_override_metaproc_settings(tmp_path: Path) -> None:
@@ -254,13 +295,13 @@ def test_working_directory_settings_with_comments_are_read_as_gemini_reads_them(
     _write_workspace_settings(
         cwd,
         '{\n  // the theme a developer prefers\n  "ui": {"theme": "a // b /* c */"},\n'
-        '  /* the step\'s own value */ "experimental": {"dynamicModelConfiguration": true}\n}\n',
+        '  /* the step\'s own value */ "experimental": {"dynamicModelConfiguration": false}\n}\n',
     )
     adapter = GeminiCliAdapter()
     adapter.prepare_env({"HOME": str(tmp_path)}, {"working_directory": str(cwd)})
 
     (cwd / ".gemini" / "settings.json").write_text(
-        '{\n  // turned off locally\n  "experimental": {"dynamicModelConfiguration": false}\n}\n',
+        '{\n  // turned on locally\n  "experimental": {"dynamicModelConfiguration": true}\n}\n',
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match=r"experimental\.dynamicModelConfiguration"):

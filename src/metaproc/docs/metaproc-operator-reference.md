@@ -660,12 +660,26 @@ Git commit it runs from.
 Metaproc prints a `Resume changes <field>: <old> -> <new>` warning for each change,
 where the field is `variables.<NAME>`, `step_variants.<STEP>`, `variant`,
 `execution_profile`, `artifact_namespace`, `resolved_profiles`, `backend`, `git_sha`,
-or, for a binding the resume adopts or releases, `input_bindings.<NAME>`. It appends one
-`launch_config_change` event listing them to `.logs/dispatch-config-changes.jsonl` and
-then rewrites those fields in `run-config.yaml` to the values the resume ran with, so
-the file describes the latest launch and the event log holds its history.
+`default_models.<ADAPTER>` (the model an adapter’s root-process agent steps with no
+`model:` resolve to, including known targets of moving aliases),
+`profile_model_overrides.<PROFILE>` (the replacement model selected for a removed
+profile), or `input_bindings.<NAME>` for a binding the resume adopts or releases.
+It appends one `launch_config_change` event listing them to
+`.logs/dispatch-config-changes.jsonl` and then rewrites those fields in
+`run-config.yaml` to the values the resume ran with, so the file describes the latest
+launch and the event log holds its history.
 The event carries a `resolved_profiles` change in full; the warning names only the
 profiles. What re-runs still follows fingerprints.
+A run also records, once at creation, the adapter defaults its derived artifact
+namespaces compare against (`namespace_default_models`), and a resume derives against
+those, so a later release that changes an adapter default keeps the run’s namespace and
+its completed steps; the resume warns what a new run would derive.
+A run that recorded a built-in execution profile a later release removed is rebuilt from
+that profile’s former definition, so `metaproc status` shows its plan and a resume warns
+and continues; where the profile’s model is retired, the resume is refused with the
+successor profile and the exact override to use.
+If you select a replacement model and keep the recorded profile, `metaproc status` uses
+that model to check completed steps.
 A value substituted into a resolved field such as `env:` or an output path re-runs that
 step and its downstream.
 A step that binds the value through `with:`, or reads it at runtime, as a code handler
@@ -780,10 +794,44 @@ uv run metaproc variants <process.process.md>
 uv run metaproc auth-check --live --variant <execution-profile>
 ```
 
+### Compare execution profiles
+
+Run each profile against the same inputs with its own run ID. If the process pins the
+agent step to a profile, pass both `--variant` and `--step-variant` so the run label and
+the actual model match.
+For example, with `PROCESS_SPEC`, `MODEL_STEP`, and `RUNS_DIR` set, pass the same
+process inputs to every invocation in this loop:
+
+```bash
+export GOOGLE_GENAI_USE_VERTEXAI=true GOOGLE_GENAI_USE_GCA=false
+export GOOGLE_CLOUD_LOCATION=global GOOGLE_API_KEY= GEMINI_API_KEY=
+
+pids=()
+for profile in gemini-flash-36 gemini-flash-38 gemini-hydrogen gemini-neon gemini-argon gemini-carbon; do
+  run_id=$(uv run python -c 'from metaproc.ids import new_timestamped_typed_id; print(new_timestamped_typed_id("run"))')
+  uv run metaproc run-process "$PROCESS_SPEC" \
+    --variant "$profile" --step-variant "$MODEL_STEP=$profile" \
+    --var RUNS_DIR="$RUNS_DIR" --var RUN_ID="$run_id" &
+  pids+=("$!")
+done
+failed=0
+for pid in "${pids[@]}"; do
+  wait "$pid" || failed=1
+done
+test "$failed" -eq 0
+```
+
+Each run writes its own outputs and records the selected profile in
+`.state/run-config.yaml`. Review the output and billed model from each run before
+comparing results. The Flash 3.6 profile pins `gemini-3.6-flash`. Google Vertex
+restricted access for new and inactive projects on 2026-11-19. Existing active projects
+retain access until 2027-01-28.
+[Gemini 3.6 Flash availability](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-6-flash).
+
 ### Agent CLI Versions
 
-Each adapter pins the CLI version it was tested against: Claude Code 2.1.234, Codex
-0.147.0, Gemini CLI 0.59.0 and Pi 0.84.2 (the `PINNED_*_VERSION` constants in
+Each adapter pins the CLI version it was tested against: Claude Code 2.1.325, Codex
+0.166.0, Gemini CLI 0.66.0 and Pi 1.5.2 (the `PINNED_*_VERSION` constants in
 `src/metaproc/adapters/`). At launch, `run-process` checks every adapter the launched
 process’s own agent steps use against its pin and prints a drift banner when they
 differ; drift does not stop the run.
@@ -797,12 +845,17 @@ A deployment image that installs a CLI must be rebuilt when its pin moves.
 drift banner and, for Gemini, the minimum-version refusal as well; use them only where
 the binary is never launched, such as CI or tests.
 
-Gemini CLI answers any model id ending in `flash`, other than its own flash default,
-with that default, unless `experimental.dynamicModelConfiguration` is on.
-Whether it recognizes the id is not the test: ids it ships a definition for are
-rewritten too. Metaproc turns the flag on in the settings it writes for every Gemini
-step. A step’s own `native_settings` override Metaproc’s, so a step or adapter config
-transform must not turn it off.
+Metaproc keeps Gemini CLI on its static model resolution: the settings it writes for
+every Gemini step set `experimental.dynamicModelConfiguration` to false, because the
+dynamic path sends an explicit `gemini-3.1-pro-preview` as
+`gemini-3.1-pro-preview-customtools` under API-key auth.
+Under Vertex, API-key and gateway auth either path sends `gemini-3.5-flash` and
+`gemini-3-flash` as `gemini-3.8-flash` and `gemini-3.1-flash-lite` as
+`gemini-3.5-flash-lite`, so the catalog does not accept those IDs.
+The same settings set thinking level `HIGH` for every chat model, including Gemini 4 and
+3.6 Flash, which the CLI would otherwise run at the server default.
+A step’s own `native_settings` override Metaproc’s, so a step or adapter config
+transform must not turn the flag on or replace `modelConfigs.overrides`.
 
 By default each Gemini launch reads those settings from a private Gemini home
 (`native_settings_scope: user`) rather than the operator’s `~/.gemini`; authentication
@@ -822,7 +875,11 @@ to `--adapter-config native_settings_scope=workspace` on a run whose Gemini step
 set `working_directory` to their own run scope.
 The adapter writes the merged native settings to that directory’s
 `.gemini/settings.json`; the existing `--skip-trust` flag allows Gemini to load them.
-It refuses a conflicting existing settings file or a symlink.
+It refuses a symlink, and an existing settings file that differs anywhere other than the
+defaults Metaproc itself wrote there.
+When only those defaults changed, as after an upgrade, it replaces them and logs a
+warning naming the keys; it records the defaults it wrote in
+`.gemini/.metaproc-settings.json` beside the file.
 Workspace settings remain after the invocation so retries use the same bytes.
 
 Under the default scope each private home has its own Gemini project registry, so
@@ -841,7 +898,7 @@ uv run metaproc auth-check --live --variant <execution-profile> --assert-model <
 ```
 
 The probe runs with the profile’s own adapter config, `native_settings` included, so a
-profile that turns the flag off fails it.
+profile that turns the flag on fails it.
 A step’s own adapter config and a config transform apply only inside a run, where the
 run’s terminal-result check still refuses a rewritten result.
 For Gemini that assertion reads the terminal result event’s `stats.models` and counts
@@ -851,6 +908,10 @@ requested model failed, therefore fails the check, and so does a terminal event 
 no model billed. The pass and fail lines list each model that billed with its token
 count. A run holds every Gemini step to the same rule and refuses a result in which the
 requested model billed no tokens.
+For the moving aliases `flash`, `flash-lite`, `pro` and `auto`, a run accepts the model
+Gemini CLI 0.66.0 resolves the alias to (`flash`: `gemini-3.8-flash`; `flash-lite`:
+`gemini-3.5-flash-lite`; `pro`: `gemini-3.1-pro-preview` or its `-customtools` variant;
+`auto`: either Pro ID or `gemini-3.8-flash`); any other model is refused.
 
 For the other adapters the assertion reads a model the CLI names for the call, not the
 models that billed it:
@@ -859,10 +920,15 @@ models that billed it:
   Its terminal `result.modelUsage` carries the models that billed, but the assertion
   does not read it yet.
 - Pi: `message.model` on the first assistant `message_start` event.
-- Codex: the `model` field of the config preamble codex-cli prints before its event
-  stream. The check fails when the preamble is absent.
+- Codex: the model Codex requested, read from a legacy config preamble when one is
+  printed, else from the `turn_context` of the thread’s session rollout, else the
+  probe’s `-m`. Codex 0.166.0 reports no served model anywhere, so the check confirms
+  the request, and the adapter’s refusal of unknown models is the first safeguard.
 
 For Codex, `OPENAI_API_KEY` is an API-platform credential and uses API billing.
+`codex exec` reads an API key only from `CODEX_API_KEY`, so when no stored Codex login
+exists (no `auth.json` under a file-backed credential store) the adapter passes
+`OPENAI_API_KEY` under that name; a stored ChatGPT login keeps precedence.
 It does not consume the ChatGPT Pro Codex allowance.
 To use the ChatGPT-plan Codex allowance, authenticate the CLI with `codex login`; for
 remote workers, materialize that OAuth credential through the `codex-auth` Secret

@@ -84,14 +84,18 @@ profiles:
       permission_mode: bypassPermissions
       web_search: true
 
-  pi-glm5:
+  pi-glm52:
     schema: metaproc:ExecutionProfile/0.1
-    status: tested
+    status: experimental
     adapter: pi-cli
     provider: vertex-maas
-    model: glm-5-maas
+    model: glm-5.2-maas
     thinking: high
-    notes: GLM-5 Vertex MaaS profile; no native web or shell tool support.
+    notes: |
+      GLM 5.2 (Vertex MaaS preview, global region) through pi-cli. Replaces
+      pi-glm5, whose glm-5-maas model Google retired on 2026-10-21. No native
+      web or shell tool support. Resource figures are carried over from
+      pi-glm5 until GLM 5.2 samples exist.
     capabilities:
       native_tools: [Read, Write]
       native_web_search: false
@@ -109,22 +113,22 @@ profiles:
       initial_memory_budget_fraction: 0.25
     config:
       provider: vertex-maas
-      model: glm-5-maas
+      model: glm-5.2-maas
       no_session_persistence: true
 
   gemini-flash-38:
     schema: metaproc:ExecutionProfile/0.1
-    status: tested
+    status: experimental
     adapter: gemini-cli
     provider: google-vertex
     model: gemini-3.8-flash
     notes: |
       Gemini 3.8 Flash (GA 2026-09-02) via gemini-cli through Vertex AI.
-      Newest Flash model, and the one with the longest remaining life: 3.6,
-      3.7 and 3.8 are all in Google's short-term-availability class, which
-      retires a model 45 days after its replacement ships. Reaching it needs
-      the dynamic model-resolution setting, because gemini-cli rewrites any
-      flash id it does not recognize.
+      Newest Gemini 3 Flash model; Vertex availability until at least
+      2027-09-02. gemini-cli 0.62.0 and later also send it for the flash
+      alias. Demoted to experimental on 2026-11-18: operator comparisons rated
+      it below 3.6 Flash, so gemini-hydrogen is the recommended Flash-class
+      lane.
     capabilities:
       native_tools: [Read, Write, Edit, Bash, WebSearch, Glob, Grep, LS]
       native_web_search: true
@@ -134,55 +138,6 @@ profiles:
       initial_memory_budget_fraction: 0.5
     config:
       model: gemini-3.8-flash
-      permission_mode: bypassPermissions
-      output_format: stream-json
-
-  gemini-flash-36:
-    schema: metaproc:ExecutionProfile/0.1
-    status: tested
-    adapter: gemini-cli
-    provider: google-vertex
-    model: gemini-3.6-flash
-    notes: |
-      Gemini 3.6 Flash (GA 2026-07-21) via gemini-cli through Vertex AI.
-      Current stable Flash profile for bounded agentic workflows. A direct
-      model check and bounded agent runs passed on 2026-07-24.
-    capabilities:
-      native_tools: [Read, Write, Edit, Bash, WebSearch, Glob, Grep, LS]
-      native_web_search: true
-      shell: true
-    resources:
-      estimated_process_rss_mb: 250
-      initial_memory_budget_fraction: 0.5
-    config:
-      model: gemini-3.6-flash
-      permission_mode: bypassPermissions
-      output_format: stream-json
-
-  gemini-flash:
-    schema: metaproc:ExecutionProfile/0.1
-    status: experimental
-    adapter: gemini-cli
-    provider: google-vertex
-    model: gemini-3.5-flash
-    notes: |
-      Gemini 3.5 Flash (GA 2026-05-19, Google I/O) via gemini-cli through
-      Vertex AI. Speed-tilted profile for opt-in ensemble lanes; tool use is
-      exercised by smoke-gemini-matrix before any large workflow dispatch. Promote
-      status to "tested" only after a clean tier-1 large workflow dry run.
-    capabilities:
-      native_tools: [Read, Write, Edit, Bash, Glob, Grep, LS]
-      native_web_search: false
-      shell: true
-    resources:
-      # Placeholder mirroring claude-* baseline (500 MB) until a few hours
-      # of health.jsonl samples are collected under large workflow load; refine per
-      # the arch-runpool RSS-benchmark methodology in the same way as
-      # claude-opus / pi-glm5.
-      estimated_process_rss_mb: 250
-      initial_memory_budget_fraction: 0.5
-    config:
-      model: gemini-3.5-flash
       permission_mode: bypassPermissions
       output_format: stream-json
 
@@ -207,31 +162,6 @@ profiles:
       model: gemini-3.1-pro-preview
       permission_mode: bypassPermissions
       output_format: stream-json
-
-  pi-gemini-flash:
-    schema: metaproc:ExecutionProfile/0.1
-    status: experimental
-    adapter: pi-cli
-    provider: google-vertex
-    model: gemini-3.5-flash
-    notes: |
-      Gemini 3.5 Flash via pi-cli routed through Vertex AI. Mirrors
-      gemini-flash (gemini-cli harness) but uses the pi-cli harness to
-      exercise google-vertex's pi quirks (notably the Gemini-3
-      thought_signature contract on tool calls). Smoke is
-      smoke-adapter-pi-gemini. Promote to "tested" after a clean tier-1
-      large workflow dry run.
-    capabilities:
-      native_tools: [Read, Write]
-      native_web_search: false
-      shell: false
-    resources:
-      estimated_process_rss_mb: 500
-      initial_memory_budget_fraction: 0.25
-    config:
-      provider: google-vertex
-      model: gemini-3.5-flash
-      no_session_persistence: true
 
   pi-gpt55:
     schema: metaproc:ExecutionProfile/0.1
@@ -266,7 +196,7 @@ profiles:
       Gemini 3.1 Pro (preview) via pi-cli routed through Vertex AI.
       Mirrors gemini-pro (gemini-cli harness) but uses the pi-cli harness
       to exercise google-vertex's pi quirks (Gemini-3 thought_signature
-      contract on tool calls). Companion to pi-gemini-flash for the
+      contract on tool calls). Companion to pi-gemini-hydrogen for the
       4-Gemini-lane ensemble shape. Promote to "tested" after a clean
       tier-1 large workflow dry run.
     capabilities:
@@ -279,4 +209,206 @@ profiles:
     config:
       provider: google-vertex
       model: gemini-3.1-pro-preview
+      no_session_persistence: true
+
+  gemini-flash-36:
+    schema: metaproc:ExecutionProfile/0.1
+    status: tested
+    adapter: gemini-cli
+    provider: google-vertex
+    model: gemini-3.6-flash
+    notes: |
+      Gemini 3.6 Flash (GA 2026-07-21) via gemini-cli through Vertex AI.
+      Current stable Flash profile for bounded agentic workflows. A direct
+      model check and bounded agent runs passed on 2026-07-24.
+    capabilities:
+      native_tools: [Read, Write, Edit, Bash, WebSearch, Glob, Grep, LS]
+      native_web_search: true
+      shell: true
+    resources:
+      estimated_process_rss_mb: 250
+      initial_memory_budget_fraction: 0.5
+    config:
+      model: gemini-3.6-flash
+      permission_mode: bypassPermissions
+      output_format: stream-json
+
+  gemini-hydrogen:
+    schema: metaproc:ExecutionProfile/0.1
+    status: experimental
+    adapter: gemini-cli
+    provider: google-vertex
+    model: gemini-4-hydrogen
+    notes: |
+      Gemini 4 Hydrogen (GA 2026-11-12) via gemini-cli. Google recommends it
+      as the upgrade from Gemini 3.6 Flash and 3.8 Flash. Promote to "tested"
+      after a clean tier-1 large workflow dry run.
+    capabilities:
+      native_tools: [Read, Write, Edit, Bash, WebSearch, Glob, Grep, LS]
+      native_web_search: true
+      shell: true
+    resources:
+      estimated_process_rss_mb: 250
+      initial_memory_budget_fraction: 0.5
+    config:
+      model: gemini-4-hydrogen
+      permission_mode: bypassPermissions
+      output_format: stream-json
+
+  gemini-argon:
+    schema: metaproc:ExecutionProfile/0.1
+    status: experimental
+    adapter: gemini-cli
+    provider: google-vertex
+    model: gemini-4-argon
+    notes: |
+      Gemini 4 Argon (GA 2026-10-13) via gemini-cli; Vertex availability until
+      at least 2027-10-13. Promote to "tested" after a clean tier-1 large
+      workflow dry run.
+    capabilities:
+      native_tools: [Read, Write, Edit, Bash, WebSearch, Glob, Grep, LS]
+      native_web_search: true
+      shell: true
+    resources:
+      estimated_process_rss_mb: 250
+      initial_memory_budget_fraction: 0.5
+    config:
+      model: gemini-4-argon
+      permission_mode: bypassPermissions
+      output_format: stream-json
+
+  gemini-carbon:
+    schema: metaproc:ExecutionProfile/0.1
+    status: experimental
+    adapter: gemini-cli
+    provider: google-vertex
+    model: gemini-4-carbon
+    notes: |
+      Gemini 4 Carbon (GA 2026-11-10) via gemini-cli; Google's strongest model,
+      paid tier only. Deeper-reasoning lane for parity comparisons against
+      claude-opus. Promote to "tested" after a clean tier-1 large workflow dry run.
+    capabilities:
+      native_tools: [Read, Write, Edit, Bash, WebSearch, Glob, Grep, LS]
+      native_web_search: true
+      shell: true
+    resources:
+      estimated_process_rss_mb: 250
+      initial_memory_budget_fraction: 0.5
+    config:
+      model: gemini-4-carbon
+      permission_mode: bypassPermissions
+      output_format: stream-json
+
+  gemini-neon:
+    schema: metaproc:ExecutionProfile/0.1
+    status: experimental
+    adapter: gemini-cli
+    provider: google-vertex
+    model: gemini-4-neon
+    notes: |
+      Gemini 4 Neon (GA 2026-11-18) via gemini-cli through Vertex AI.
+      Use for low-latency coding and multi-step agent workflows.
+    capabilities:
+      native_tools: [Read, Write, Edit, Bash, WebSearch, Glob, Grep, LS]
+      native_web_search: true
+      shell: true
+    resources:
+      estimated_process_rss_mb: 250
+      initial_memory_budget_fraction: 0.5
+    config:
+      model: gemini-4-neon
+      permission_mode: bypassPermissions
+      output_format: stream-json
+
+  pi-gemini-flash:
+    schema: metaproc:ExecutionProfile/0.1
+    status: experimental
+    adapter: pi-cli
+    provider: google-vertex
+    model: gemini-3.5-flash
+    notes: |
+      Gemini 3.5 Flash via Pi's native Vertex AI provider. The Vertex route
+      served the requested model and completed a file-read tool call on
+      2026-11-21. The direct Gemini API redirects this ID to Gemini 3.6 Flash.
+    capabilities:
+      native_tools: [Read, Write]
+      native_web_search: false
+      shell: false
+    resources:
+      estimated_process_rss_mb: 500
+      initial_memory_budget_fraction: 0.25
+    config:
+      provider: google-vertex
+      model: gemini-3.5-flash
+      no_session_persistence: true
+
+  pi-gemini-hydrogen:
+    schema: metaproc:ExecutionProfile/0.1
+    status: experimental
+    adapter: pi-cli
+    provider: google-vertex
+    model: gemini-4-hydrogen
+    notes: |
+      Gemini 4 Hydrogen via pi-cli routed through Vertex AI. Mirrors
+      gemini-hydrogen on the pi-cli harness. Smoke is smoke-adapter-pi-gemini.
+      Promote to "tested"
+      after a clean tier-1 large workflow dry run.
+    capabilities:
+      native_tools: [Read, Write]
+      native_web_search: false
+      shell: false
+    resources:
+      estimated_process_rss_mb: 500
+      initial_memory_budget_fraction: 0.25
+    config:
+      provider: google-vertex
+      model: gemini-4-hydrogen
+      no_session_persistence: true
+
+  codex-gpt61:
+    schema: metaproc:ExecutionProfile/0.1
+    status: experimental
+    adapter: codex-cli
+    provider: openai
+    model: gpt-6.1-sol
+    effort: high
+    notes: |
+      Codex GPT-6.1 Sol high-effort profile, the codex-cli default model.
+      Successor to codex-gpt55: Codex retired gpt-5.5 for ChatGPT sign-in on
+      2026-10-14, so pooled sign-in slots need this profile; codex-gpt55
+      remains for API-key runs. Resources match codex-gpt55.
+    capabilities:
+      native_tools: [Read, Write, Edit, Bash, WebSearch, WebFetch, Glob, Grep, LS]
+      native_web_search: true
+      shell: true
+    resources:
+      estimated_process_rss_mb: 1024
+      initial_memory_budget_fraction: 0.25
+      max_concurrency_hint: 20
+      host_max_concurrency: 20
+    config:
+      model: gpt-6.1-sol
+      effort: high
+      permission_mode: bypassPermissions
+      web_search: true
+
+  pi-gpt61:
+    schema: metaproc:ExecutionProfile/0.1
+    status: experimental
+    adapter: pi-cli
+    provider: openai
+    model: gpt-6.1-sol
+    notes: |
+      OpenAI GPT-6.1 Sol routed through pi-cli, the harness-comparison twin of
+      codex-gpt61. Promote to "tested" after a clean tier-1 large workflow dry run.
+    capabilities:
+      native_tools: [Read, Write]
+      native_web_search: false
+      shell: false
+    resources:
+      estimated_process_rss_mb: 500
+      initial_memory_budget_fraction: 0.25
+    config:
+      provider: openai
+      model: gpt-6.1-sol
       no_session_persistence: true

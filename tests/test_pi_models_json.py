@@ -2,15 +2,31 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
+from contextlib import nullcontext
+from importlib import resources
 from pathlib import Path
-from unittest.mock import patch
+from typing import Any, cast
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from metaproc.cloud.gcp.batch_backend import (
+    GCPBatchConfig,
     _merge_pi_models_json,
     _rewrite_pi_models_json,
     build_pi_models_json,
 )
+from metaproc.cloud.gcp.orchestrator_dispatch import (
+    OrchestratorDispatchConfig,
+    dispatch_orchestrator,
+)
+from metaproc.cloud.gcp.worker_dispatch import WorkerDispatchConfig, _submit_workers
+from metaproc.config.model_catalog import MODEL_CATALOG
+from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
+from metaproc.models.plan import ResolvedAdapter, ResolvedStep
 
 
 def test_rewrite_swaps_gcloud_apikey_helper() -> None:
@@ -47,6 +63,157 @@ def test_rewrite_retargets_project_in_vertex_base_url() -> None:
     )
 
 
+def test_rewrite_turns_bare_api_key_env_name_into_reference(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A bare `*_API_KEY` name is a literal key to Pi, so it becomes `$NAME`."""
+    src = json.dumps(
+        {
+            "providers": {
+                "openai": {"apiKey": "OPENAI_API_KEY"},
+                "deepseek": {"apiKey": "DEEPSEEK_API_KEY"},
+            }
+        }
+    )
+    with caplog.at_level(logging.WARNING, logger="metaproc.cloud.gcp.batch_backend"):
+        out = json.loads(_rewrite_pi_models_json(src, "exampletool"))
+    assert out["providers"]["openai"]["apiKey"] == "$OPENAI_API_KEY"
+    assert out["providers"]["deepseek"]["apiKey"] == "$DEEPSEEK_API_KEY"
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any("'openai'" in w and "$OPENAI_API_KEY" in w for w in warnings)
+    assert any("'deepseek'" in w for w in warnings)
+
+
+def test_rewrite_leaves_cloud_credential_references_alone(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    providers = {
+        "ref": {
+            "apiKey": "$OPENAI_API_KEY",
+            "headers": {"Authorization": "Bearer ${AUTH_TOKEN}", "X-API-Key": "$HEADER_KEY"},
+        },
+        "cmd": {"apiKey": "!gcp-access-token.sh"},
+        "creds": {"api": "google-vertex", "apiKey": "gcp-vertex-credentials"},
+    }
+    with caplog.at_level(logging.WARNING, logger="metaproc.cloud.gcp.batch_backend"):
+        out = json.loads(
+            _rewrite_pi_models_json(json.dumps({"providers": providers}), "exampletool")
+        )
+    assert out["providers"] == providers
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"apiKey": "example-private-value"},
+        {"apiKey": "!echo example-private-value"},
+        {"headers": {"Authorization": "Bearer example-private-value"}},
+        {"headers": {"CF-Access-Client-Secret": "example-private-value"}},
+        {"models": [{"id": "demo", "headers": {"X-API-Key": "example-private-value"}}]},
+        {"modelOverrides": {"demo": {"headers": {"x-portkey-api-key": "example-private-value"}}}},
+    ],
+)
+def test_build_refuses_operator_credentials_in_batch_metadata(
+    fields: dict[str, Any], tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    pi_dir = tmp_path / ".pi" / "agent"
+    pi_dir.mkdir(parents=True)
+    (pi_dir / "models.json").write_text(json.dumps({"providers": {"operator": fields}}))
+
+    with (
+        patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=False),
+        pytest.raises(ValueError, match="Pi provider 'operator'.*Secret Manager") as exc,
+    ):
+        build_pi_models_json("exampletool")
+
+    assert "example-private-value" not in str(exc.value)
+    assert "example-private-value" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("adapter", "shared_target", "fallback", "requires_pi"),
+    [
+        ("codex-cli", True, "", False),
+        ("pi-cli", True, "", True),
+        ("codex-cli", False, "", True),
+        ("codex-cli", True, "both", True),
+    ],
+)
+def test_batch_worker_checks_pi_overlay_for_possible_consumers(
+    tmp_path: Path, adapter: str, shared_target: bool, fallback: str, requires_pi: bool
+) -> None:
+    pi_dir = tmp_path / ".pi" / "agent"
+    pi_dir.mkdir(parents=True)
+    (pi_dir / "models.json").write_text('{"providers":{"gateway":{"apiKey":"fixture-only"}}}')
+    step = ResolvedStep(step_id="review", mode="agent", adapter=ResolvedAdapter(type=adapter))
+    config = WorkerDispatchConfig(
+        gcp=GCPBatchConfig(project="test", filestore_server="10.0.0.1" if shared_target else ""),
+        resolved_step=step,
+        scope_run_id="test-run",
+        auth_flags=AuthPoolFlags(
+            auth_account="codex-cli" if fallback else "", auth_fallback_policy=fallback
+        ),
+    )
+    client = MagicMock()
+    client.create_job.return_value.name = "jobs/test"
+    with (
+        patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=True),
+        patch("google.cloud.batch_v1.BatchServiceClient", return_value=client),
+        pytest.raises(ValueError, match="Pi provider 'gateway'") if requires_pi else nullcontext(),
+    ):
+        asyncio.run(
+            _submit_workers(
+                config=config,
+                partitions=[["item"]],
+                context_partitions=[[{"ITEM": "item"}]],
+                step=step.step_id,
+                process_spec_rel="example.process.md",
+                vars_json='{"RUN_ID":"test-run"}',
+                run_dir=tmp_path / "runs" / "test-run",
+                out=MagicMock(),
+            )
+        )
+    if requires_pi:
+        client.create_job.assert_not_called()
+    else:
+        job = client.create_job.call_args.args[0].job
+        env = job.task_groups[0].task_spec.runnables[-1].environment.variables
+        assert "METAPROC_PI_MODELS_JSON" not in env
+
+
+def test_root_variant_cannot_exclude_pi_from_an_unresolved_orchestrator(tmp_path: Path) -> None:
+    pi_dir = tmp_path / ".pi" / "agent"
+    pi_dir.mkdir(parents=True)
+    (pi_dir / "models.json").write_text('{"providers":{"gateway":{"apiKey":"fixture-only"}}}')
+    config = OrchestratorDispatchConfig(
+        gcp=GCPBatchConfig(project="test"),
+        process_spec_rel="example.process.md",
+        variables={"RUN_ID": "existing-run"},
+        variant="codex-cli",
+    )
+    with (
+        patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=True),
+        patch("google.cloud.batch_v1.BatchServiceClient") as client,
+        pytest.raises(ValueError, match="Pi provider 'gateway'"),
+    ):
+        asyncio.run(dispatch_orchestrator(config))
+    client.return_value.create_job.assert_not_called()
+
+
+def test_build_rewrites_bare_api_key_from_operator_overlay(tmp_path: Path) -> None:
+    """A stale operator overlay must not reintroduce the literal-key 401."""
+    operator_models = {"providers": {"openai": {"apiKey": "OPENAI_API_KEY"}}}
+    pi_dir = tmp_path / ".pi" / "agent"
+    pi_dir.mkdir(parents=True)
+    (pi_dir / "models.json").write_text(json.dumps(operator_models))
+
+    with patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=False):
+        out = json.loads(build_pi_models_json("exampletool"))
+
+    assert out["providers"]["openai"]["apiKey"] == "$OPENAI_API_KEY"
+
+
 def test_build_merges_operator_file_into_packaged(tmp_path: Path) -> None:
     """Operator-added models augment the packaged vertex-maas block; rewrite still runs."""
     operator_models = {
@@ -68,7 +235,7 @@ def test_build_merges_operator_file_into_packaged(tmp_path: Path) -> None:
     model_ids = {m["id"] for m in out["providers"]["vertex-maas"]["models"]}
     assert "operator/custom-model" in model_ids
     # Packaged models survive the overlay — the whole point of merge semantics.
-    assert "zai-org/glm-5-maas" in model_ids
+    assert "zai-org/glm-5.2-maas" in model_ids
     # Project rewrite and apiKey swap both fire on the merged result.
     assert "projects/exampletool/" in out["providers"]["vertex-maas"]["baseUrl"]
     assert "METAPROC_PI_API_KEY" in out["providers"]["vertex-maas"]["apiKey"]
@@ -94,11 +261,24 @@ def test_build_falls_back_to_packaged_default(tmp_path: Path) -> None:
         == "https://aiplatform.googleapis.com/v1/projects/exampletool/locations/global/endpoints/openapi"
     )
     model_ids = {m["id"] for m in vertex["models"]}
-    assert {
-        "zai-org/glm-5-maas",
-        "zai-org/glm-4.7-maas",
-        "deepseek-ai/deepseek-v3.2-maas",
-    } <= model_ids
+    assert model_ids == {
+        "zai-org/glm-5.2-maas",
+        "deepseek-ai/deepseek-v4.1-flash-maas",
+        "deepseek-ai/deepseek-v4.1-flash-1017-maas",
+    }
+    models = {m["id"]: m for m in vertex["models"]}
+    glm = models["zai-org/glm-5.2-maas"]
+    assert (glm["contextWindow"], glm["maxTokens"], glm["reasoning"]) == (1000000, 64000, True)
+    for model_id in (
+        "deepseek-ai/deepseek-v4.1-flash-maas",
+        "deepseek-ai/deepseek-v4.1-flash-1017-maas",
+    ):
+        flash = models[model_id]
+        assert (flash["contextWindow"], flash["maxTokens"]) == (1048576, 1048576)
+        assert flash["reasoning"] is True
+    snapshot = models["deepseek-ai/deepseek-v4.1-flash-1017-maas"]
+    assert snapshot["input"] == ["text", "image"]
+    assert snapshot["cost"] == {"input": 0.3, "output": 1.2, "cacheRead": 0.006, "cacheWrite": 0}
 
 
 def test_packaged_default_includes_google_vertex_provider(tmp_path: Path) -> None:
@@ -128,47 +308,186 @@ def test_packaged_default_includes_google_vertex_provider(tmp_path: Path) -> Non
     # stays templated (project is not part of the URL for the native SDK).
     assert gv["baseUrl"] == "https://{location}-aiplatform.googleapis.com"
 
-    model_ids = {m["id"] for m in gv["models"]}
-    # Native Vertex uses unprefixed publisher model names.
-    assert {
-        "gemini-3.8-flash",
-        "gemini-3.7-flash",
-        "gemini-3.6-flash",
-        "gemini-3.5-flash-lite",
-    } <= model_ids
-    pro = next(model for model in gv["models"] if model["id"] == "gemini-3.1-pro-preview")
-    assert pro["contextWindow"] == 1048576
-    assert "gemini-3.5-flash" in model_ids
-    assert "gemini-3.1-flash-lite" in model_ids
-    assert "gemini-3-flash-preview" in model_ids
-    assert "gemini-3.1-pro-preview" in model_ids
-    assert "gemini-3.1-pro-preview-customtools" in model_ids
+    # Native Vertex uses unprefixed publisher model names. Pi 1.5.2 ships the
+    # other accepted Gemini models, including gemini-3.1-pro-preview-customtools
+    # with its 1,048,576-token context. Only Carbon, Hydrogen, and Neon need
+    # packaged entries.
+    models = {m["id"]: m for m in gv["models"]}
+    assert set(models) == {"gemini-4-carbon", "gemini-4-hydrogen", "gemini-4-neon"}
+    for model in models.values():
+        assert model["contextWindow"] == 1048576
+        assert model["maxTokens"] == 65536
+        assert model["reasoning"] is True
+        # Pi's Google thinking map covers low through high; minimal and off are
+        # rejected by Gemini 4 and must clamp rather than reach the API.
+        levels = model["thinkingLevelMap"]
+        assert levels["minimal"] is None
+        assert levels["off"] is None
+        assert {levels[level] for level in ("low", "medium", "high")} == {
+            "low",
+            "medium",
+            "high",
+        }
+        assert model["cost"]["input"] > 0
+    assert models["gemini-4-neon"]["cost"] == {
+        "input": 3,
+        "output": 15,
+        "cacheRead": 0.15,
+        "cacheWrite": 0,
+    }
 
 
 def test_packaged_default_includes_openai_provider(tmp_path: Path) -> None:
-    """OpenAI dispatch retains older routes and uses Responses for the new models."""
+    """OpenAI models are Pi built-ins; only deliberate differences and new IDs are listed."""
     with patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=False):
         raw = build_pi_models_json("exampletool")
 
     out = json.loads(raw)
-    providers = out["providers"]
-    assert "openai" in providers
-
-    oa = providers["openai"]
-    assert oa["api"] == "openai-completions"
+    oa = out["providers"]["openai"]
     assert oa["baseUrl"] == "https://api.openai.com/v1"
+    # Built-in openai models use Pi's env lookup; a literal apiKey would replace it.
+    assert "apiKey" not in oa
+
+    overrides = oa["modelOverrides"]
+    for model_id in (
+        "gpt-6.1-sol",
+        "gpt-6.1-terra",
+        "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+    ):
+        assert overrides[model_id] == {"contextWindow": 1050000}
+    assert overrides["gpt-5.5"] == {"contextWindow": 1000000}
 
     models = {m["id"]: m for m in oa["models"]}
-    model_ids = set(models)
-    # Preserve existing routes while new models select Responses per model.
-    for model_id in ("gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"):
-        assert models[model_id]["api"] == "openai-responses"
-        assert models[model_id]["contextWindow"] == 1050000
-        assert models[model_id]["maxTokens"] == 128000
-    assert "api" not in models["gpt-5.5"]
-    # Pro has not undergone a Pi route review; it remains absent here.
-    assert {"gpt-5.5", "gpt-5.4-mini", "gpt-5.4-nano"} <= model_ids
-    assert "gpt-5.5-pro" not in model_ids
+    # GPT-6.2 postdates Pi 1.5.2's built-in catalog.
+    assert set(models) == {"gpt-6.2-astra", "gpt-6.2-sol"}
+    for model in models.values():
+        assert model["api"] == "openai-responses"
+        assert model["contextWindow"] == 1050000
+        assert model["maxTokens"] == 128000
+        # The GPT-6.2 API rejects reasoning effort `none`.
+        assert model["thinkingLevelMap"]["off"] is None
+        assert model["cost"]["input"] > 0
+
+
+def test_packaged_default_turns_off_anthropic_message_threads(tmp_path: Path) -> None:
+    """Pi 1.5.1 enabled Anthropic message threads by default; the packaged file keeps them off."""
+    with patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=False):
+        out = json.loads(build_pi_models_json("exampletool"))
+
+    anthropic = out["providers"]["anthropic"]
+    assert anthropic["compat"] == {"supportsMessageThreads": False}
+    assert "models" not in anthropic
+
+
+def test_packaged_default_moonshot_models(tmp_path: Path) -> None:
+    """The moonshot route lists current Kimi models plus the closing kimi-k2.6."""
+    with patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=False):
+        out = json.loads(build_pi_models_json("exampletool"))
+
+    moonshot = out["providers"]["moonshot"]
+    assert moonshot["baseUrl"] == "https://api.moonshot.ai/v1"
+    models = {m["id"]: m for m in moonshot["models"]}
+    assert set(models) == {"kimi-k3.1-pro", "kimi-k3", "kimi-k2.6"}
+    for model in models.values():
+        # Copied from Pi's built-in moonshotai entries, including the wire format.
+        assert model["compat"]["thinkingFormat"] in {"openai", "deepseek"}
+        assert model["cost"]["input"] > 0
+    assert "deepseek" not in out["providers"], "DeepSeek models are Pi built-ins"
+
+
+def _packaged_doc() -> dict[str, Any]:
+    raw = resources.files("metaproc.data").joinpath("pi-models.default.json").read_text()
+    return cast("dict[str, Any]", json.loads(raw))
+
+
+def test_packaged_api_keys_are_never_literal_env_names() -> None:
+    """Since Pi 0.77 a bare apiKey string is a literal key that outranks the environment.
+
+    `"OPENAI_API_KEY"` would send that text as the bearer token, so every apiKey must
+    be a `$NAME` reference, a `!command`, or the Vertex ADC sentinel.
+    """
+    for name, provider in _packaged_doc()["providers"].items():
+        api_key = provider.get("apiKey")
+        if api_key is None:
+            continue
+        assert isinstance(api_key, str)
+        assert api_key.startswith(("$", "!")) or api_key == "gcp-vertex-credentials", (
+            f"provider {name!r} has a literal apiKey {api_key!r}"
+        )
+
+
+def test_packaged_models_do_not_duplicate_accepted_native_models() -> None:
+    """A models[] entry with a built-in ID replaces Pi's whole definition.
+
+    That zeroes its cost and drops its thinking map and compat flags, so packaged
+    entries must not repeat the built-in IDs Metaproc accepts; deliberate
+    differences belong in modelOverrides.
+    """
+    native = MODEL_CATALOG.native_models["pi-cli"]
+    for name, provider in _packaged_doc()["providers"].items():
+        if name == "moonshot":
+            # A separate provider ID: its entries do not replace Pi's moonshotai models.
+            continue
+        for model in provider.get("models", []):
+            assert model["id"] not in native, (name, model["id"])
+        for model_id in provider.get("modelOverrides", {}):
+            assert model_id in native, (name, model_id)
+
+
+# Field names from Pi 1.5.2's schemas/models.schema.json (also published at
+# https://pi.dev/schemas/models.schema.json). Keys starting with `_` are notes.
+_PI_PROVIDER_KEYS = frozenset(
+    {
+        "api",
+        "apiKey",
+        "authHeader",
+        "baseUrl",
+        "compat",
+        "headers",
+        "modelOverrides",
+        "models",
+        "name",
+        "oauth",
+    }
+)
+_PI_MODEL_KEYS = frozenset(
+    {
+        "api",
+        "baseUrl",
+        "compat",
+        "contextWindow",
+        "cost",
+        "headers",
+        "id",
+        "input",
+        "inputLimits",
+        "maxTokens",
+        "name",
+        "promptCache",
+        "reasoning",
+        "samplingParams",
+        "samplingParamsByThinkingLevel",
+        "thinkingLevelMap",
+    }
+)
+_PI_OVERRIDE_KEYS = _PI_MODEL_KEYS - {"api", "baseUrl", "id"}
+
+
+def test_packaged_default_uses_only_pi_schema_fields() -> None:
+    for name, provider in _packaged_doc()["providers"].items():
+        assert set(provider) - _PI_PROVIDER_KEYS <= {"_note"}, name
+        for model in provider.get("models", []):
+            assert set(model) <= _PI_MODEL_KEYS, (name, model["id"])
+            for key in ("input", "output", "cacheRead", "cacheWrite"):
+                if "cost" in model:
+                    assert key in model["cost"], (name, model["id"], key)
+        for model_id, override in provider.get("modelOverrides", {}).items():
+            assert set(override) <= _PI_OVERRIDE_KEYS, (name, model_id)
 
 
 def test_merge_only_local_adds_new_provider() -> None:

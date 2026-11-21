@@ -19,7 +19,7 @@ process:
     - id: auth-check-dry
       mode: code
       command: >-
-        bash -lc "cd ../../.. && uv run metaproc auth-check --variant codex-cli"
+        bash -lc "cd ../.. && uv run metaproc auth-check --variant codex-cli"
       description: >-
         Dry survey — binary path + credential source (OPENAI_API_KEY or
         ChatGPT OAuth via ~/.codex/auth.json). Exits non-zero if either
@@ -29,14 +29,17 @@ process:
     - id: live-probe
       mode: code
       command: >-
-        bash -lc "cd ../../.. && uv run metaproc auth-check --live --variant codex-cli --assert-model gpt"
+        bash -lc "cd ../.. && uv run metaproc auth-check --live --variant codex-cli --assert-model gpt"
       description: >-
         Send a trivial "Respond with exactly: OK" prompt via
-        `codex exec --json` and assert the `model` field in codex-cli's
-        untyped config-dump preamble line contains "gpt". The typed
-        event stream (thread.started → turn.started → item.* →
-        turn.completed) never carries a model ID — the preamble is the
-        only place it appears. RED against auth_check.py prior to the
+        `codex exec --json` and assert that the model Codex requested
+        contains "gpt". codex-cli 0.166.0 names no model in its event
+        stream and prints no config preamble, so the check reads the
+        `turn_context` model from the thread's session rollout under
+        `$CODEX_HOME/sessions` (plain or `.jsonl.zst`). With no rollout
+        the step fails as not verifiable; the probe's own `-m` is never
+        matched. That is the requested model, not proof of the model
+        that served the call. RED against auth_check.py prior to the
         permission-mode-default fix.
       needs: [auth-check-dry]
 ---
@@ -52,17 +55,21 @@ Serial because each step gates the next; total wall clock ≈ 10–15 seconds en
    credential source is detectable without dispatching a prompt.
 3. **live-probe** — `metaproc auth-check --live --variant codex-cli --assert-model gpt`.
    Dispatches the trivial “Respond with exactly: OK” prompt through the real OpenAI
-   backend and asserts the `model` field in codex-cli’s untyped config-dump preamble
-   line contains “gpt”.
-   The typed event stream does not carry a model ID; the preamble is the only place it
-   appears. Bogus-model negative control lives in
-   `smoke-adapters-negative-control.process.md`.
+   backend and asserts that the model Codex requested contains “gpt”.
+   codex-cli 0.166.0 names no model in its event stream and prints no config preamble,
+   so the check reads the `turn_context` model from the thread’s session rollout under
+   `$CODEX_HOME/sessions` (plain or `.jsonl.zst`). With no rollout the step fails as not
+   verifiable rather than matching the probe’s own `-m`. That is the requested model; no
+   Codex output shows which model served the call.
+   Bogus-model negative control lives in `smoke-adapters-negative-control.process.md`.
 
 ## Credentials
 
 One of:
 
-- `OPENAI_API_KEY` environment variable, or
+- `OPENAI_API_KEY` environment variable, which the adapter passes to Codex as
+  `CODEX_API_KEY` only when no stored Codex login can exist (no `CODEX_ACCESS_TOKEN`, no
+  `auth.json`, and a `file` credential store in every Codex config layer), or
 - `~/.codex/auth.json` from `codex login` with `cli_auth_credentials_store = "file"` in
   `~/.codex/config.toml`.
 

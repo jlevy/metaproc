@@ -30,7 +30,7 @@ from metaproc.adapters.base import (
     resolve_templates,
 )
 from metaproc.config.env_vars import MetaprocEnv
-from metaproc.config.model_catalog import resolve_model
+from metaproc.config.model_catalog import removed_model_note, resolve_model
 from metaproc.dispatch.auth_usage import query_label_headroom
 from metaproc.dispatch.credential_pool import Vehicle
 from metaproc.dispatch.known_bugs import detect_known_bug
@@ -54,12 +54,22 @@ CLAUDE_KEYCHAIN_SERVICE = "Claude Code-credentials"
 #   2. install the matching version locally (`claude` self-updates; verify
 #      `claude --version` matches)
 #   3. rebuild any deployment images and run an adapter smoke test
-PINNED_CLAUDE_CODE_CLI_VERSION = "2.1.234"
+# 2.1.325 is the first release with Claude Fable 5.2 (2.1.321+), the
+# `--no-session-persistence` tool-result cleanup fix (2.1.323), and the
+# zstd response-decoding security fix (2.1.325). It was adopted inside the
+# 14-day cool-off under the reviewed exception in SUPPLY-CHAIN-SECURITY.md.
+PINNED_CLAUDE_CODE_CLI_VERSION = "2.1.325"
 CLAUDE_CODE_INSTALL_HINT = (
     f"Install: npm install -g @anthropic-ai/claude-code@{PINNED_CLAUDE_CODE_CLI_VERSION}"
 )
 
 log = logging.getLogger(__name__)
+
+
+def _unknown_model_reason(adapter: str, value: object) -> str:
+    """Name an unknown model, with its retirement and replacement when recorded."""
+    note = removed_model_note(adapter, str(value))
+    return f"unknown {adapter} model {value!r}" + (f"; {note}" if note else "")
 
 
 class ClaudeCodeVersionMismatch(RuntimeError):
@@ -291,7 +301,7 @@ _RETRY_AFTER_RE = re.compile(r'"retry_after"\s*:\s*(\d+)|retry-after[:=]\s*(\d+)
 
 @dataclass(frozen=True)
 class ClaudeApiSignals:
-    """Structured HTTP-axis signals parsed from a ``claude -d api`` run.
+    """Structured HTTP-axis signals parsed from a Claude Code debug-logged run.
 
     Populated by :func:`parse_claude_api_signals` from any combination of
     stderr, the stream-json session log, and the slot-local
@@ -308,11 +318,11 @@ class ClaudeApiSignals:
 
 
 def parse_claude_api_signals(*, debug_text: str = "", stdout: str = "") -> ClaudeApiSignals:
-    """Pull HTTP-axis signals from ``claude -d api`` debug log + stdout.
+    """Pull HTTP-axis signals from the Claude Code debug log + stdout.
 
     Inputs are typically:
     - ``debug_text`` — content of ``<slot>/claude-code-debug.log`` written by
-      ``claude -d api --debug-file=...``.
+      ``claude --debug-file <path>``.
     - ``stdout`` — claude's user-visible output, which carries the final
       ``Failed to authenticate. API Error: 401 ...`` body with
       ``request_id`` baked in.
@@ -449,7 +459,7 @@ def _extract_error_excerpt(stderr: str, session_log_text: str) -> str:
     Priority (most → least specific):
     1. Stream-json result event with ``is_error`` / ``api_error_status``
        (``Failed to authenticate. API Error: 401 ...``).
-    2. ``[ERROR] API error (attempt N/M):`` line from ``claude -d api``
+    2. ``[ERROR] API error (attempt N/M):`` line from the Claude Code debug log
        output (when ``classify_failure_for_slot`` prepended the
        slot-local ``claude-code-debug.log``).
     3. ``AxiosError: [url=https://platform.claude.com/v1/oauth/token,
@@ -468,7 +478,7 @@ def _extract_error_excerpt(stderr: str, session_log_text: str) -> str:
             result = ev.get("result")
             if isinstance(result, str) and result:
                 return result[:_ERROR_EXCERPT_MAX]
-    # 2. Per-attempt API error lines from claude -d api debug output.
+    # 2. Per-attempt API error lines from the Claude Code debug log.
     for source in (stderr, session_log_text):
         for line in source.splitlines():
             stripped = line.strip()
@@ -610,7 +620,7 @@ class ClaudeCodeCliAdapter:
                 rejections.append(
                     ConfigRejection(
                         key=key,
-                        reason=f"unknown claude-code-cli model {value!r}",
+                        reason=_unknown_model_reason("claude-code-cli", value),
                     )
                 )
         return rejections
@@ -750,20 +760,30 @@ class ClaudeCodeCliAdapter:
     # ── AuthCapableCliAdapter methods ───────────────────────────────
 
     def debug_capture_args(self, slot_dir: Path) -> list[str]:
-        """Capture Claude Code's API-level debug output into the slot.
+        """Capture Claude Code's debug log, including API-level lines, into the slot.
 
-        ``claude -d api`` emits the OAuth refresh attempt boundaries
-        (``[API:auth] OAuth token check ...``), the refresh-endpoint
+        The debug log carries ``[API:auth]`` credential lines (older
+        releases logged ``OAuth token check ...`` boundaries), the refresh-endpoint
         AxiosError on failure, and per-attempt ``[API REQUEST] /v1/messages``
         + ``[ERROR] API error`` lines. Without this, the only failure
         signature available to the classifier is the user-visible
         ``Failed to authenticate. API Error: 401 ...`` body, which
         cannot distinguish OAuth-refresh-failure from access-token-rejection.
 
+        ``--debug-file`` alone enables debug mode unfiltered. Earlier releases
+        passed ``-d api`` as well, but a space-separated ``-d`` value is not a
+        filter, so those logs were unfiltered too. The ``--debug=api`` form does
+        bind a filter, and it matches none of the lines above: the ``[ERROR]``
+        lines carry no category and the API ones are ``API:auth``,
+        ``API REQUEST``, and so on. Checked against Claude Code 2.1.325, where
+        a ``--debug=api`` run that got an API 404 wrote no debug file.
+
         The filename is reported by :meth:`diagnostic_filenames` so the
         orchestrator preserves it next to the session log on teardown.
+        Claude Code also writes a ``latest`` symlink to the file in the same
+        directory; it is not a diagnostic and is not preserved.
         """
-        return ["-d", "api", "--debug-file", str(slot_dir / "claude-code-debug.log")]
+        return ["--debug-file", str(slot_dir / "claude-code-debug.log")]
 
     def diagnostic_filenames(self) -> tuple[str, ...]:
         return ("claude-code-debug.log",)
@@ -804,10 +824,11 @@ class ClaudeCodeCliAdapter:
     ) -> dict[str, str]:
         """Scope Claude Code CLI credential lookup to *slot_dir*.
 
-        Vehicle B (default / vehicle is None or LOGIN_CREDENTIALS):
-        scopes ``CLAUDE_CONFIG_DIR`` only. The CLI reads
-        ``<slot>/.credentials.json`` (materialized via
-        :meth:`materialize_credential`).
+        Both vehicles scope ``CLAUDE_CONFIG_DIR`` to the slot and
+        ``ANTHROPIC_CONFIG_DIR`` to its private profile directory. An active
+        profile in the host directory can otherwise outrank the slot login.
+        Vehicle B (default / LOGIN_CREDENTIALS) reads
+        ``<slot>/.credentials.json`` (written by :meth:`materialize_credential`).
 
         Vehicle A (OAUTH_TOKEN — schema_version 2): also injects
         ``CLAUDE_CODE_OAUTH_TOKEN=<blob>`` plus ``DISABLE_UPDATES=1``.
@@ -836,7 +857,10 @@ class ClaudeCodeCliAdapter:
           present too, but ``METAPROC_WORKER_ID`` only exists inside
           a Batch worker container.
         """
-        env = {"CLAUDE_CONFIG_DIR": str(slot_dir)}
+        env = {
+            "CLAUDE_CONFIG_DIR": str(slot_dir),
+            "ANTHROPIC_CONFIG_DIR": str(slot_dir / ".anthropic"),
+        }
         if vehicle is Vehicle.OAUTH_TOKEN:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = blob
             env["DISABLE_UPDATES"] = "1"
@@ -848,9 +872,10 @@ class ClaudeCodeCliAdapter:
     def credential_scrub_env(self, *, vehicle: Any = None) -> dict[str, str]:
         """Unset higher-precedence Claude auth vars before spawning a slot.
 
-        Documented precedence chain (current Anthropic docs, 2026-04-28):
+        Documented precedence chain (current Anthropic docs, 2026-11-18):
         cloud-provider → ``ANTHROPIC_AUTH_TOKEN`` → ``ANTHROPIC_API_KEY``
-        → ``apiKeyHelper`` → ``CLAUDE_CODE_OAUTH_TOKEN`` → stored
+        → ``apiKeyHelper`` → ``CLAUDE_CODE_OAUTH_TOKEN`` → Anthropic
+        profile / Workload Identity Federation credentials → stored
         ``/login`` credentials. A pooled credential is useless if any
         higher-precedence var is live in the subprocess env — the step
         would appear to use the pool while actually hitting a different
@@ -870,8 +895,22 @@ class ClaudeCodeCliAdapter:
         ``ANTHROPIC_AUTH_TOKEN``, ``apiKeyHelper`` helper, the
         provisioning-only ``CLAUDE_CODE_OAUTH_REFRESH_TOKEN`` /
         ``CLAUDE_CODE_OAUTH_SCOPES`` vars).
+
+        Both vehicles scrub the profile and federation variables.
+        ``ANTHROPIC_PROFILE``, or ``ANTHROPIC_FEDERATION_RULE_ID`` together
+        with ``ANTHROPIC_ORGANIZATION_ID``, selects a credential that ranks
+        above the slot's ``.credentials.json`` (Vehicle B). Under Vehicle A
+        the token already outranks them, so scrubbing them there changes no
+        selection; it keeps the federation identity token out of the
+        session's tool subprocesses. Unsetting ``ANTHROPIC_PROFILE`` and
+        either federation variable stops Claude Code selecting those sources;
+        the identity-token, service-account, and workspace variables are read
+        only during the federation exchange. An active profile file can
+        also outrank ``/login``. :meth:`credential_scope_env` redirects
+        the profile lookup to the slot's own Anthropic configuration directory.
         """
         scrub: dict[str, str] = {
+            CLAUDE_CREDS_ENV_VAR: "",
             "ANTHROPIC_AUTH_TOKEN": "",
             "CLAUDE_CODE_APIKEY_HELPER": "",
             # Cloud-provider mode flags would silently route every API
@@ -884,6 +923,15 @@ class ClaudeCodeCliAdapter:
             # never be inherited from the operator's shell.
             "CLAUDE_CODE_OAUTH_REFRESH_TOKEN": "",
             "CLAUDE_CODE_OAUTH_SCOPES": "",
+            # Anthropic profile and Workload Identity Federation sources rank
+            # above stored /login credentials (precedence level 6 of 7).
+            "ANTHROPIC_PROFILE": "",
+            "ANTHROPIC_FEDERATION_RULE_ID": "",
+            "ANTHROPIC_ORGANIZATION_ID": "",
+            "ANTHROPIC_IDENTITY_TOKEN": "",
+            "ANTHROPIC_IDENTITY_TOKEN_FILE": "",
+            "ANTHROPIC_SERVICE_ACCOUNT_ID": "",
+            "ANTHROPIC_WORKSPACE_ID": "",
         }
         if vehicle is not Vehicle.OAUTH_TOKEN:
             # Vehicle B path: the env var would silently win over the
@@ -916,21 +964,25 @@ class ClaudeCodeCliAdapter:
         """
         slot_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         slot_dir.chmod(0o700)
+        (slot_dir / ".anthropic").mkdir(mode=0o700, exist_ok=True)
         # Pre-write hardening so claude --print actually reaches the API:
         #
         # 1. ``.claude.json`` with ``hasCompletedOnboarding: true`` —
         #    anthropics/claude-code#46259 makes the CLI exit 1 silently
         #    if the onboarding gate isn't satisfied, regardless of
         #    CLAUDE_CODE_OAUTH_TOKEN.
-        # 2. ``settings.json`` with ``sandbox.enabled: false`` — the
-        #    Dockerfile sets IS_SANDBOX=1 to bypass the root-user check
-        #    on --dangerously-skip-permissions, but that env var also
-        #    activates Claude Code's network sandbox proxy. Without an
-        #    explicit allowedDomains list, every outbound request
-        #    (including Claude's own api.anthropic.com calls) returns
-        #    403 with X-Proxy-Error: blocked-by-allowlist. The container
-        #    is already isolated by the GCP Batch VM boundary, so the
-        #    nested sandbox is redundant.
+        # 2. ``settings.json`` with a ``sandbox.network.allowedDomains``
+        #    list and no ``sandbox.enabled`` key, so Claude Code's own
+        #    default for the sandbox applies. ``prepare_env`` sets
+        #    IS_SANDBOX=1 for bypassPermissions launches to bypass the
+        #    root-user check on --dangerously-skip-permissions, and that
+        #    env var has also been observed to activate Claude Code's
+        #    network sandbox proxy. Without an explicit allowedDomains
+        #    list, every outbound request (including Claude's own
+        #    api.anthropic.com calls) then returns 403 with
+        #    X-Proxy-Error: blocked-by-allowlist. The container is already
+        #    isolated by the GCP Batch VM boundary, so the nested sandbox
+        #    is redundant there.
         #
         # Both files have to live in the slot dir because per-item
         # launches set CLAUDE_CONFIG_DIR=<slot_dir>; the Dockerfile

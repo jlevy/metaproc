@@ -38,6 +38,7 @@ from metaproc.engine.dep_state import fingerprint_step
 from metaproc.engine.operations_summary import read_operations_summary
 from metaproc.errors import CLIError
 from metaproc.io import read_yaml_file, to_yaml_string
+from metaproc.io.digests import file_sha256
 from metaproc.io.state_io import write_result_at
 from metaproc.logutil.resource_events import read_events
 from metaproc.models.resource_budget import FinalizationState
@@ -54,6 +55,7 @@ _SYNTHETIC_PROCESS = str(
 from metaproc.commands.helpers import validate_gcp_worker_topology
 from metaproc.commands.run_process import (
     RunExecutionContext,
+    _cloud_profile_digests,
     _execute_code_step,
     _execute_composite_step,
     _execute_fan_out_step,
@@ -160,7 +162,19 @@ def test_adapter_preflight_skips_active_steps_without_agent_leaves() -> None:
     adapter.preflight.assert_not_called()
 
 
-def test_gcp_worker_rejects_mapped_composite_before_running_upstream(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("options", "refused"),
+    [
+        ((), True),
+        (("--cloud",), True),
+        (("--cloud", "--from", "prepare"), True),
+        (("--cloud", "--only", "prepare"), False),
+        (("--cloud", "--skip", "mapped"), False),
+    ],
+)
+def test_gcp_worker_rejects_active_mapped_composite_before_execution_or_submission(
+    tmp_path: Path, options: tuple[str, ...], refused: bool
+) -> None:
     process_dir = tmp_path / "process"
     process_dir.mkdir()
     marker = tmp_path / "upstream-ran"
@@ -186,10 +200,13 @@ def test_gcp_worker_rejects_mapped_composite_before_running_upstream(tmp_path: P
                 - id: prepare
                   mode: code
                   command: touch {marker}
+                  outputs:
+                    marker: {{path: "{marker}", kind: file}}
                 - id: mapped
                   mode: composite
                   uses: deps.child
-                  needs: [prepare]
+                  inputs:
+                    marker: {{ref: prepare.marker}}
                   for_each:
                     over: deps.roster
                     bind: item
@@ -201,42 +218,99 @@ def test_gcp_worker_rejects_mapped_composite_before_running_upstream(tmp_path: P
         encoding="utf-8",
     )
 
-    result = CliRunner().invoke(
-        app,
-        [
-            "run-process",
-            str(process_path),
-            "--var",
-            f"RUNS_DIR={tmp_path / 'runs'}",
-            "--var",
-            "RUN_ID=unsupported-worker-map",
-            "--backend",
-            "gcp-worker",
-        ],
-    )
+    fake_dispatch = AsyncMock(return_value=MagicMock(job_id="test-job", state="OK", exit_code=0))
+    with (
+        patch("metaproc.engine.preflight.run_cloud_preflight_warnings", return_value=[]),
+        patch("metaproc.engine.preflight.run_cloud_preflight", return_value=[]),
+        patch("metaproc.cloud.gcp.worker_dispatch.build_gcp_config_from_env"),
+        patch("metaproc.cloud.gcp.orchestrator_dispatch.dispatch_orchestrator", fake_dispatch),
+    ):
+        result = CliRunner().invoke(
+            app,
+            [
+                "run-process",
+                str(process_path),
+                "--var",
+                f"RUNS_DIR={tmp_path / 'runs'}",
+                "--var",
+                "RUN_ID=unsupported-worker-map",
+                "--backend",
+                "gcp-worker",
+                *options,
+            ],
+        )
 
-    assert result.exit_code != 0
-    assert "mapped composite steps do not yet support gcp-worker" in str(result.exception)
+    if refused:
+        assert result.exit_code != 0
+        assert "mapped composite steps do not yet support gcp-worker" in str(result.exception)
+        fake_dispatch.assert_not_awaited()
+    else:
+        assert result.exit_code == 0, result.output
+        fake_dispatch.assert_awaited_once()
     assert not marker.exists()
 
 
 def test_backend_topology_allows_local_mapped_composites() -> None:
-    plan = Plan(
-        process="local-map",
+    spec = ProcessSpec(
+        name="local-map",
         steps=[
-            ResolvedStep(
-                step_id="mapped",
+            ProcessStep(
+                id="mapped",
                 mode="composite",
-                fan_out=FanOut(over="deps.items", bind="item", source="items.md"),
+                uses="deps.child",
+                for_each=ForEach(over="deps.items", bind="item", bind_fields=["item"]),
             )
         ],
     )
 
     _validate_backend_topology(
-        plan,
+        spec,
         active_step_ids={"mapped"},
         backend_name="local",
     )
+
+
+def test_cloud_rejects_multiple_lanes_before_submitting_orchestrator(tmp_path: Path) -> None:
+    process_path = tmp_path / "multi-lane.process.md"
+    process_path.write_text(
+        textwrap.dedent("""\
+            ---
+            process:
+              name: multi-lane
+              lane_matrix:
+                profiles: [claude-opus, codex-cli]
+              steps:
+                - id: prepare
+                  mode: code
+                  command: "true"
+            ---
+            """),
+        encoding="utf-8",
+    )
+    with (
+        patch("metaproc.engine.preflight.run_cloud_preflight_warnings", return_value=[]),
+        patch("metaproc.engine.preflight.run_cloud_preflight", return_value=[]) as preflight,
+        patch("metaproc.cloud.gcp.orchestrator_dispatch.dispatch_orchestrator") as dispatch,
+    ):
+        result = CliRunner().invoke(
+            app,
+            [
+                "run-process",
+                str(process_path),
+                "--var",
+                f"RUNS_DIR={tmp_path / 'runs'}",
+                "--var",
+                "RUN_ID=multi-lane",
+                "--backend",
+                "gcp-worker",
+                "--cloud",
+            ],
+        )
+
+    assert result.exit_code != 0
+    assert "lane_matrix with multiple lanes (2: claude-opus, codex-cli)" in str(result.exception)
+    preflight.assert_not_called()
+    dispatch.assert_not_called()
 
 
 def test_adapter_preflight_checks_each_active_agent_adapter_once() -> None:
@@ -3646,6 +3720,135 @@ class TestCLIDryRun:
 
 
 class TestCloudAuthDispatch:
+    def test_repeated_cloud_profile_keeps_its_last_precedence(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("METAPROC_REPO_URL", raising=False)
+        first = tmp_path / "team.yml"
+        second = tmp_path / "development.yml"
+        first.write_text("profiles: {}\n", encoding="utf-8")
+        second.write_text("# defaults\nprofiles: {}\n", encoding="utf-8")
+        digests = _cloud_profile_digests(tmp_path, [first, second, first])
+        assert list(digests.items()) == [
+            (second.name, file_sha256(second)),
+            (first.name, file_sha256(first)),
+        ]
+
+    def test_cloud_carries_step_profiles_and_workspace_relative_profile_files(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.chdir(_REPO_ROOT)
+        monkeypatch.delenv("METAPROC_REPO_URL", raising=False)
+        profile_rel = "src/metaproc/data/execution-profiles.default.yaml"
+        profile_file = _REPO_ROOT / profile_rel
+        external = tmp_path / "local-only.yaml"
+        external.write_bytes(profile_file.read_bytes())
+        dispatch = AsyncMock(return_value=MagicMock(job_id="test-job", state="OK", exit_code=0))
+        args = [
+            "run-process",
+            _SYNTHETIC_PROCESS,
+            "--backend",
+            "gcp-worker",
+            "--cloud",
+            "--var",
+            f"RUNS_DIR={tmp_path.resolve()}",
+            "--var",
+            "RUN_ID=cloud-step-profiles",
+            "--artifact-namespace",
+            "run-namespace",
+            "--step-variant",
+            "s1=claude-opus",
+        ]
+        with (
+            patch("metaproc.engine.preflight.run_cloud_preflight_warnings", return_value=[]),
+            patch("metaproc.engine.preflight.run_cloud_preflight", return_value=[]),
+            patch("metaproc.cloud.gcp.worker_dispatch.build_gcp_config_from_env"),
+            patch("metaproc.cloud.gcp.orchestrator_dispatch.dispatch_orchestrator", dispatch),
+        ):
+            runner = CliRunner()
+            refused = runner.invoke(app, [*args, "--profile-file", str(external)])
+            assert refused.exit_code != 0
+            assert "must be inside the repository checkout" in str(refused.exception)
+            dispatch.assert_not_awaited()
+
+            with monkeypatch.context() as checkout:
+                checkout.setenv("METAPROC_REPO_URL", "https://example.invalid/repo")
+                checkout.setenv("METAPROC_RUN_BRANCH", "main")
+                checkout.setenv("METAPROC_REPO_SPARSE_PATHS", "tests/fixtures")
+                checkout.delenv("METAPROC_WORKSPACE_GCS", raising=False)
+                excluded = runner.invoke(app, [*args, "--profile-file", profile_rel])
+            assert excluded.exit_code != 0
+            assert "outside the sparse checkout" in str(excluded.exception)
+            dispatch.assert_not_awaited()
+
+            launched = runner.invoke(
+                app, [*args, "--variant-file", profile_rel, "--profile-file", str(profile_file)]
+            )
+
+        assert launched.exit_code == 0, launched.output
+        assert dispatch.await_args is not None
+        config = dispatch.await_args.args[0]
+        assert config.step_variants == {"s1": "claude-opus"}
+        assert config.profile_files == {profile_rel: file_sha256(profile_file)}
+        assert config.artifact_namespace == "run-namespace"
+
+    @pytest.mark.parametrize(
+        ("variant", "adapter_model", "namespace", "namespace_vars"),
+        [
+            ("codex-cli", "gpt-5.5", "", {}),
+            ("codex-cli", "gpt-5.5", "explicit-namespace", {"VARIANT": "legacy-variable"}),
+            ("gemini-flash", None, "", {}),
+        ],
+    )
+    def test_cloud_dispatch_leaves_namespace_planning_to_the_remote_run_record(
+        self,
+        tmp_path: Path,
+        variant: str,
+        adapter_model: str | None,
+        namespace: str,
+        namespace_vars: dict[str, str],
+    ) -> None:
+        dispatch_result = MagicMock(job_id="test-job", state="SUCCEEDED", exit_code=0)
+        dispatch_orchestrator = AsyncMock(return_value=dispatch_result)
+        variables = {"RUNS_DIR": str(tmp_path.resolve()), "RUN_ID": "remote-run", **namespace_vars}
+        args = ["run-process", _SYNTHETIC_PROCESS, "--backend", "gcp-worker", "--cloud"]
+        for key, value in variables.items():
+            args.extend(["--var", f"{key}={value}"])
+        args.extend(["--variant", variant])
+        if adapter_model is not None:
+            args.extend(["--adapter-config", f"model={adapter_model}"])
+        if namespace:
+            args.extend(["--artifact-namespace", namespace])
+
+        with (
+            patch("metaproc.engine.preflight.run_cloud_preflight_warnings", return_value=[]),
+            patch("metaproc.engine.preflight.run_cloud_preflight", return_value=[]),
+            patch(
+                "metaproc.cloud.gcp.worker_dispatch.build_gcp_config_from_env",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "metaproc.cloud.gcp.orchestrator_dispatch.dispatch_orchestrator",
+                dispatch_orchestrator,
+            ),
+        ):
+            runner = CliRunner()
+            refused = runner.invoke(app, [*args, "--skip", "nonexistent-step"])
+            assert refused.exit_code != 0
+            assert "not found" in str(refused.exception)
+            dispatch_orchestrator.assert_not_awaited()
+
+            result = runner.invoke(app, args)
+
+        assert result.exit_code == 0, result.output
+        await_args = dispatch_orchestrator.await_args
+        assert await_args is not None
+        config = await_args.args[0]
+        assert config.variables == variables
+        assert config.variant == variant
+        assert config.artifact_namespace == namespace
+        assert config.adapter_config == ({"model": adapter_model} if adapter_model else None)
+
     def test_cli_carries_complete_auth_cohort_to_orchestrator(self) -> None:
         dispatch_result = MagicMock(job_id="test-job", state="SUCCEEDED", exit_code=0)
         dispatch_orchestrator = AsyncMock(return_value=dispatch_result)

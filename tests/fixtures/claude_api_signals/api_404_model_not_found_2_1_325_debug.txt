@@ -1,0 +1,9 @@
+2026-11-18T02:33:51.243Z [DEBUG] [API:timing] dispatching to firstParty model=nonexistent-x
+2026-11-18T02:33:51.249Z [DEBUG] [API REQUEST] /v1/messages x-client-request-id=00000000-0000-4000-8000-000000000008 source=sdk
+2026-11-18T02:33:51.322Z [ERROR] API error (attempt 1/11): 404 404 {"type":"error","error":{"type":"not_found_error","message":"model: nonexistent-x"},"request_id":"req_fixture006"}
+2026-11-18T02:33:51.326Z [WARN] Streaming endpoint returned 404, falling back to non-streaming mode
+2026-11-18T02:33:51.330Z [DEBUG] [API REQUEST] /v1/messages x-client-request-id=00000000-0000-4000-8000-000000000009 source=sdk
+2026-11-18T02:33:51.402Z [ERROR] API error (attempt 1/10): 404 404 {"type":"error","error":{"type":"not_found_error","message":"model: nonexistent-x"},"request_id":"req_fixture007"}
+2026-11-18T02:33:51.403Z [ERROR] Non-streaming fallback also failed: 404 {"type":"error","error":{"type":"not_found_error","message":"model: nonexistent-x"},"request_id":"req_fixture007"}
+2026-11-18T02:33:51.404Z [ERROR] API error x-client-request-id=00000000-0000-4000-8000-000000000008 (give this to the API team for server-log lookup)
+2026-11-18T02:33:51.404Z [ERROR] API model not found: model: nonexistent-x

@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-11-12) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-11-21) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -1008,13 +1008,13 @@ runs/local/example-workflow/doc-sync-demo/
     runpool/steps/generate-record/events.jsonl
     tasks/generate-record/AAPL-2025Q2/generate-record_AAPL_2026-04-17T17-54-42.jsonl
     derived/trace.jsonl
-  mine/pi-deepseek-v3.2/
+  mine/pi-glm52/
     AAPL-2025Q2/
       record.md
 ```
 
 The harness contract is the `.state/` and `.logs/` branches at the run-dir root.
-The artifact tree (here, `mine/pi-deepseek-v3.2/<item>/`) is whatever the spec’s output
+The artifact tree (here, `mine/pi-glm52/<item>/`) is whatever the spec’s output
 templates produce; the engine writes no bookkeeping into it.
 Per-task state is keyed by the explicit `for_each.key` template, not inferred from the
 output path, so two non-fan-out steps that share an output parent dir keep separate
@@ -2067,13 +2067,21 @@ Registered adapters (in `ADAPTER_REGISTRY`):
   `-c key=value` passthrough with JSON-encoded values).
   Grammar-aware flag placement is load-bearing: `-a/--ask-for-approval` and `--search`
   are top-level-only and must precede `exec` or codex rejects them with
-  `unexpected argument`. Two auth modes, resolved in this order:
-  1. `OPENAI_API_KEY` (Vehicle A; pay-per-token; primary path for laptops, CI, and GCP
-     Batch workers).
-  2. ChatGPT-plan OAuth blob at `~/.codex/auth.json` with `tokens.auth_mode=chatgpt`
-     (Vehicle B; subscription-billed, free-per-request).
-     Headless push requires `cli_auth_credentials_store = "file"` on the seeding laptop
-     (see `research-2026-04-23-codex-cli-auth.md` §F10).
+  `unexpected argument`. Two auth modes.
+  Codex 0.166.0 uses, in order, `CODEX_API_KEY`, then `CODEX_ACCESS_TOKEN`, then the
+  stored login; `codex exec` never reads `OPENAI_API_KEY`:
+  1. ChatGPT-plan OAuth blob at `$CODEX_HOME/auth.json` (default `~/.codex/auth.json`)
+     with top-level `auth_mode: "chatgpt"` (Vehicle B; subscription-billed,
+     free-per-request). Headless push requires `cli_auth_credentials_store = "file"` on
+     the seeding laptop (see `research-2026-04-23-codex-cli-auth.md` §F10).
+  2. `OPENAI_API_KEY` (Vehicle A; pay-per-token; primary path for laptops, CI, and GCP
+     Batch workers). The adapter passes it to Codex as `CODEX_API_KEY` only when nothing
+     else can log in: `CODEX_API_KEY` and `CODEX_ACCESS_TOKEN` are unset or blank, the
+     effective `CODEX_HOME` has no `auth.json`, and every config layer Codex reads
+     (system, user, project, legacy managed, `config_overrides`) selects the `file`
+     credential store. When it cannot tell, it does not pass the key and logs why.
+     The decision is made against the child environment after the step’s `env` is
+     applied, so a step that names its own `CODEX_HOME` keeps that home’s login.
   3. GCP Batch Vehicle B via Secret Manager: `metaproc codex-auth push` pushes
      `~/.codex/auth.json` to Secret Manager; dispatch binds
      `METAPROC_GCP_SECRET_CODEX_CREDS` → `CODEX_CREDS_JSON` as a Batch container-side
@@ -2081,11 +2089,12 @@ Registered adapters (in `ADAPTER_REGISTRY`):
      `{home}/.codex/auth.json` (mode 0600, parent 0700), pops the env var to prevent
      child-process leaks, and rejects `apikey` blobs (API-key auth should arrive as
      `OPENAI_API_KEY` directly).
-     Event parsing uses codex-cli 0.124.0’s flat top-level `type` envelope: terminal
-     events are `turn.completed` (success; carries
-     `usage.{input_tokens, cached_input_tokens, output_tokens}` inline) and
-     `turn.failed` (failure; `error.message`). Intermediate `error` events are
-     codex-internal reconnect retries and not terminal.
+     Event parsing uses the flat top-level `type` envelope codex-cli has emitted from
+     0.124.0 through the pinned 0.166.0: terminal events are `turn.completed` (success;
+     carries `usage` inline: `input_tokens`, `cached_input_tokens`, `output_tokens`,
+     and, where the release reports it, `cache_write_input_tokens`) and `turn.failed`
+     (failure; `error.message`). Intermediate `error` events are codex-internal
+     reconnect retries and not terminal.
      Log compaction strips `item.started` / `item.updated` / intermediate `error`; keeps
      `item.completed` (agent_message / reasoning / command_execution / file_change /
      mcp_tool_call / web_search / todo_list) and both terminal events.
@@ -2123,30 +2132,46 @@ providers without changing process definitions.
 The adapter maps the framework’s `provider` and `model` config fields to Pi’s
 `--provider` and `--model` CLI flags.
 
-Valid models span built-in provider families and custom providers:
+Valid models span Pi’s built-in provider families and the custom providers in the
+packaged `pi-models.default.json`. The authoritative list is
+`known_model_ids("pi-cli")`, which combines the reviewed Pi built-in IDs in
+`src/metaproc/config/model_catalog.py` with the packaged catalog:
 
-- **Anthropic**: sonnet, opus, haiku (and full model IDs)
-- **OpenAI**: gpt-4.1, o3, o4-mini
-- **Google**: gemini-3.1-pro-preview, gemini-3-flash-preview,
-  gemini-3.1-flash-lite-preview
-- **Vertex AI MaaS** (custom provider): zai-org/glm-5-maas,
-  moonshotai/kimi-k2-thinking-maas
+- **Anthropic**: fable, opus, sonnet, haiku, and full IDs such as claude-fable-5-2 and
+  claude-opus-5-5
+- **OpenAI**: gpt-6.1-sol, gpt-6.1-terra, gpt-6-astra, gpt-5.5, and the packaged
+  gpt-6.2-astra and gpt-6.2-sol
+- **Google (`google-vertex`)**: gemini-4-argon, gemini-3.8-flash, gemini-3.7-flash,
+  gemini-3.6-flash, gemini-3.5-flash, gemini-3.5-flash-lite, gemini-3.1-flash-lite,
+  gemini-3-flash-preview, gemini-3.1-pro-preview, and the packaged gemini-4-carbon,
+  gemini-4-hydrogen, and gemini-4-neon.
+  Gemini 3.6 Flash remains available to active projects until 2027-01-28. Vertex
+  restricted access for new and inactive projects on 2026-11-19.
+  [Gemini 3.6 Flash availability](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-6-flash).
+- **DeepSeek**: deepseek-flash, deepseek-v4-pro
+- **Moonshot** (packaged custom provider): kimi-k3.1-pro, kimi-k3, kimi-k2.6
+- **Vertex AI MaaS** (packaged custom provider): zai-org/glm-5.2-maas,
+  deepseek-ai/deepseek-v4.1-flash-maas, deepseek-ai/deepseek-v4.1-flash-1017-maas
 
-Built-in providers: anthropic (default), openai, google, vertex, azure, bedrock.
-Custom providers (defined in `~/.pi/agent/models.json`): any OpenAI-compatible endpoint.
+Accepted providers are the entries of the registry in `src/metaproc/config/providers.py`
+(anthropic, the default, plus openai, google, google-vertex, deepseek, moonshot, and
+vertex-maas) and Pi’s built-in azure and amazon-bedrock.
+A custom provider defined in `~/.pi/agent/models.json` can serve any OpenAI-compatible
+endpoint once it has a registry entry.
 
 #### Vertex AI MaaS custom provider
 
 **Design rationale (authoritative mechanism in
 [arch-cloud-execution.md §3.12](arch-cloud-execution.md) and
 [arch-authentication.md](arch-authentication.md), UC-5 / UC-6):** third-party models in
-Vertex AI Model Garden (GLM-5, Kimi K2) expose an OpenAI-compatible endpoint that Pi
-connects to via a custom `vertex-maas` provider in `~/.pi/agent/models.json`. The
-`apiKey` field is a placeholder; Metaproc injects a fresh `google.auth` access token per
-batch (**not per item**) and Pi sends it as `Authorization: Bearer <token>`. This is why
-the framework treats `vertex`-prefixed providers specially in the adapter: it resolves
-the token once via `resolve_gcp_token()` and writes it into each item’s
-`runtime_config`, instead of leaving the operator to refresh tokens manually.
+Vertex AI Model Garden (GLM-5.2, DeepSeek V4.1 Flash) expose an OpenAI-compatible
+endpoint that Pi connects to via a custom `vertex-maas` provider in `models.json`. The
+packaged `apiKey` is a shell command that prints the token Metaproc supplies; Metaproc
+injects a fresh `google.auth` access token per batch (**not per item**) and Pi sends it
+as `Authorization: Bearer <token>`. This is why the framework treats `vertex`-prefixed
+providers specially in the adapter: it resolves the token once via `resolve_gcp_token()`
+and writes it into each item’s `runtime_config`, instead of leaving the operator to
+refresh tokens manually.
 Failure raises an exception; there is no degraded fallback path.
 
 This indirection is what makes the multi-model backtest work without per-model operator

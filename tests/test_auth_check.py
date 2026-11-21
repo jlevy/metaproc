@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 import subprocess as sp
 import sys
 import types
 from collections.abc import Iterator
+from importlib import resources
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -28,6 +30,7 @@ from metaproc.commands.auth_check import (
     _pi_list_models,
     _pi_validate_registration,
     _resolve_variant_target,
+    _run_claude_secret_live_check,
     _run_live_check,
     _run_readiness_check,
 )
@@ -104,6 +107,29 @@ class TestCheckAdapter:
 
         assert any("ENOENT" in message for _, message in results)
 
+    @pytest.mark.parametrize("cli_found,auth_mode", [(False, "unknown"), (True, "none")])
+    def test_codex_live_requires_a_binary_and_possible_credentials(
+        self, cli_found: bool, auth_mode: str
+    ) -> None:
+        status = AuthStatus(
+            adapter_type="codex-cli",
+            cli_found=cli_found,
+            cli_path="/usr/local/bin/codex" if cli_found else None,
+            credentials_found=False,
+            auth_mode=auth_mode,
+            details="fixture",
+            setup_hint="",
+        )
+        with (
+            patch.object(ADAPTER_REGISTRY["codex-cli"], "check_auth", return_value=status),
+            patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
+        ):
+            results = _run_live_check("codex-cli", None, timeout_s=5)
+
+        assert not results[0][0]
+        assert "skipping live check" in results[0][1]
+        mock_run.assert_not_called()
+
 
 class TestResolveVariantTarget:
     def test_exact_adapter_name_keeps_adapter(self):
@@ -161,6 +187,49 @@ class TestAuthCheckCLI:
         assert result.exit_code in (0, 1)
         assert "Disk" in result.output
 
+    @pytest.mark.parametrize(
+        "live,process_exit,expected_exit", [(False, 0, 1), (True, 0, 0), (True, 1, 1)]
+    )
+    def test_codex_alternate_store_is_unverified_until_live_result(
+        self, live: bool, process_exit: int, expected_exit: int
+    ) -> None:
+        status = AuthStatus(
+            adapter_type="codex-cli",
+            cli_found=True,
+            cli_path="/usr/local/bin/codex",
+            credentials_found=False,
+            auth_mode="unknown",
+            details="Codex may use a keyring login",
+            setup_hint="",
+        )
+        adapter = ADAPTER_REGISTRY["codex-cli"]
+        cmd = ["codex", "exec", "Respond exactly OK"]
+        args = ["auth-check", "--adapter", "codex-cli", "--timeout", "7"]
+        if live:
+            args.append("--live")
+        with (
+            patch.object(adapter, "check_auth", return_value=status),
+            patch.object(adapter, "build_command", return_value=cmd),
+            patch.object(adapter, "prepare_env", return_value={}),
+            patch("metaproc.commands.auth_check.check_disk_space", return_value=(True, "Disk ok")),
+            patch(
+                "metaproc.commands.auth_check._check_gcloud_token", return_value=(True, "GCP ok")
+            ),
+            patch(
+                "metaproc.commands.auth_check.run_command_in_process_group",
+                return_value=sp.CompletedProcess(cmd, process_exit, "", ""),
+            ) as mock_run,
+        ):
+            result = runner.invoke(app, args)
+
+        assert result.exit_code == expected_exit, result.output
+        assert "credentials unverified" in result.output
+        assert status.details in result.output
+        if live:
+            assert mock_run.call_args.kwargs["timeout"] == 7
+        else:
+            mock_run.assert_not_called()
+
     def test_run_dir_nonexistent(self, tmp_path: Path):
         result = runner.invoke(app, ["auth-check", "--run-dir", str(tmp_path / "nope")])
         assert result.exit_code == 1
@@ -190,10 +259,10 @@ class TestAuthCheckCLI:
             ),
             patch(
                 "metaproc.commands.auth_check._check_adapter",
-                side_effect=lambda adapter_type: [(True, f"{adapter_type} ok")],
+                side_effect=lambda adapter_type, **_kwargs: [(True, f"{adapter_type} ok")],
             ) as mock_check_adapter,
         ):
-            result = runner.invoke(app, ["auth-check", "--variant", "pi-glm5"])
+            result = runner.invoke(app, ["auth-check", "--variant", "pi-glm52"])
 
         assert result.exit_code == 0
         assert mock_check_adapter.call_count == 1
@@ -223,7 +292,7 @@ class TestAuthCheckCLI:
             ),
             patch(
                 "metaproc.commands.auth_check._check_adapter",
-                side_effect=lambda at: [(True, f"{at} ok")],
+                side_effect=lambda at, **_kwargs: [(True, f"{at} ok")],
             ),
             patch(
                 "metaproc.commands.auth_check._run_claude_secret_live_check",
@@ -257,7 +326,7 @@ class TestAuthCheckCLI:
             ),
             patch(
                 "metaproc.commands.auth_check._check_adapter",
-                side_effect=lambda at: [(True, f"{at} ok")],
+                side_effect=lambda at, **_kwargs: [(True, f"{at} ok")],
             ),
             patch(
                 "metaproc.commands.auth_check._run_live_check",
@@ -286,7 +355,7 @@ class TestAuthCheckCLI:
             ),
             patch(
                 "metaproc.commands.auth_check._check_adapter",
-                side_effect=lambda at: [(True, f"{at} ok")],
+                side_effect=lambda at, **_kwargs: [(True, f"{at} ok")],
             ),
             patch(
                 "metaproc.commands.auth_check._run_live_check",
@@ -315,6 +384,73 @@ class TestAuthCheckCLI:
 
 
 # ── Phase 2: _run_live_check ──
+
+
+def test_claude_secret_probe_uses_only_the_materialized_slot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ambient = {
+        "ANTHROPIC_API_KEY": "ambient-key",
+        "ANTHROPIC_AUTH_TOKEN": "ambient-bearer",
+        "ANTHROPIC_BASE_URL": "https://proxy.invalid",
+        "ANTHROPIC_CUSTOM_HEADERS": "Authorization: ambient-bearer",
+        "ANTHROPIC_PROFILE": "ambient-profile",
+        "ANTHROPIC_FEDERATION_RULE_ID": "ambient-rule",
+        "ANTHROPIC_IDENTITY_TOKEN": "ambient-identity",
+        "CLAUDE_CODE_CREDS_JSON": "ambient-payload",
+        "CLAUDE_CODE_OAUTH_TOKEN": "ambient-oauth",
+        "CLAUDE_CODE_APIKEY_HELPER": "ambient-helper",
+        "CLAUDE_CODE_USE_VERTEX": "1",
+        "GCP_CREDENTIALS_BASE64": "ambient-gcp-json",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/unrelated/gcp.json",
+        "OPENAI_API_KEY": "ambient-openai-key",
+    }
+    for key, value in ambient.items():
+        monkeypatch.setenv(key, value)
+    for name in ("HOME", "XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR", "ANTHROPIC_CONFIG_DIR"):
+        monkeypatch.setenv(name, str(tmp_path / name))
+    monkeypatch.setenv("METAPROC_SKIP_CLAUDE_VERSION_CHECK", "1")
+
+    secret_ref = "projects/example/secrets/claude/versions/1"
+    fetch = ["gcloud", "secrets", "versions", "access", secret_ref]
+    payload = json.dumps({"claudeAiOauth": {"accessToken": "secret-manager-fixture"}})
+    observed_homes: list[Path] = []
+
+    def capture_probe(
+        cmd: list[str], *, env: dict[str, str], cwd: Path, **_kwargs: object
+    ) -> sp.CompletedProcess[str]:
+        probe_home = Path(env["HOME"])
+        observed_homes.append(probe_home)
+        slot = probe_home / ".claude"
+        creds = slot / ".credentials.json"
+        assert cwd == probe_home
+        assert probe_home != tmp_path / "HOME"
+        assert env["XDG_CONFIG_HOME"] == str(probe_home / ".config")
+        assert env["CLAUDE_CONFIG_DIR"] == str(slot)
+        assert env["ANTHROPIC_CONFIG_DIR"] == str(slot / ".anthropic")
+        assert (slot / ".anthropic").is_dir()
+        assert creds.read_text(encoding="utf-8") == payload
+        assert stat.S_IMODE(creds.stat().st_mode) == 0o600
+        assert not ambient.keys() & env.keys()
+        assert payload not in " ".join(cmd)
+        assert cmd[cmd.index("--setting-sources") + 1] == "user"
+        assert cmd[cmd.index("--tools") + 1] == ""
+        return sp.CompletedProcess(cmd, 0, "OK", "")
+
+    with (
+        patch("metaproc.adapters.claude_cli.shutil.which", return_value="/usr/local/bin/claude"),
+        patch("metaproc.commands.auth_check.subprocess.run") as mock_fetch,
+        patch(
+            "metaproc.commands.auth_check.run_command_in_process_group", side_effect=capture_probe
+        ),
+    ):
+        mock_fetch.return_value = sp.CompletedProcess(fetch, 0, payload, "")
+        results = _run_claude_secret_live_check(secret_ref, timeout_s=8)
+
+    assert mock_fetch.call_args.args[0] == fetch
+    assert results[0][0], results
+    assert len(observed_homes) == 1
+    assert not observed_homes[0].exists()
 
 
 class TestRunLiveCheck:
@@ -531,25 +667,34 @@ class TestRunLiveCheckAssertModel:
             )
 
         assert all(ok for ok, _ in results), results
+        # Codex names no served model, so the assertion reports the requested one.
         assert any(
-            "observed model" in msg and "gpt-5.4" in msg and "gpt-5" in msg for _, msg in results
+            "requested model 'gpt-5.4'" in msg and "config preamble" in msg for _, msg in results
         )
 
     def test_assert_model_substring_match(self):
-        """Provider-prefixed IDs like 'zai-org/glm-5-maas' must accept a
-        substring match like 'glm-5-maas' so the operator does not have to
+        """Provider-prefixed IDs like 'zai-org/glm-5.2-maas' must accept a
+        substring match like 'glm-5.2-maas' so the operator does not have to
         predict the provider prefix."""
         stdout_lines = (
             '{"type":"agent_start"}\n'
-            '{"type":"message_start","message":{"role":"assistant","model":"zai-org/glm-5-maas"}}\n'
+            '{"type":"message_start","message":{"role":"assistant","model":"zai-org/glm-5.2-maas"}}\n'
         )
         with (
             patch("metaproc.commands.auth_check.ADAPTER_REGISTRY") as mock_registry,
             patch(
+                "metaproc.commands.auth_check._stage_pi_gcp_probe_catalog",
+                return_value="zai-org/glm-5.2-maas",
+            ),
+            patch(
+                "metaproc.commands.auth_check._resolve_pi_gcp_probe_token",
+                return_value="test-gcp-token",
+            ),
+            patch(
                 "metaproc.commands.auth_check._pi_list_models",
                 return_value=(
                     True,
-                    "providers: vertex-maas\nmodels: glm-5-maas zai-org/glm-5-maas",
+                    "providers: vertex-maas\nmodels: zai-org/glm-5.2-maas",
                 ),
             ),
             patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
@@ -562,9 +707,9 @@ class TestRunLiveCheckAssertModel:
 
             results = _run_live_check(
                 "pi-cli",
-                "glm-5-maas",
+                "zai-org/glm-5.2-maas",
                 timeout_s=5,
-                assert_model="glm-5-maas",
+                assert_model="glm-5.2-maas",
             )
 
         assert all(ok for ok, _ in results), results
@@ -582,7 +727,7 @@ class TestRunLiveCheckAssertModel:
             ),
             patch(
                 "metaproc.commands.auth_check._check_adapter",
-                side_effect=lambda at: [(True, f"{at} ok")],
+                side_effect=lambda at, **_kwargs: [(True, f"{at} ok")],
             ),
             patch("metaproc.commands.auth_check._run_live_check") as mock_live,
         ):
@@ -608,30 +753,36 @@ class TestLiveCheckUsesTheProfileConfig:
     """`--variant <profile>` must probe with the profile's own adapter config.
 
     A run seeds each step's config from the profile, and Gemini's
-    `native_settings` decide whether it rewrites a `*flash` id. A probe that
+    `native_settings` decide whether it rewrites an explicit id. A probe that
     ignored them could pass a profile whose every run is then refused.
     """
 
-    _PROFILE = "gemini-flash-probe"
+    _PROFILE = "gemini-pro-probe"
 
     @staticmethod
     def _write_profile(tmp_path: Path, config_lines: str) -> Path:
         profile_file = tmp_path / "profiles.yaml"
         profile_file.write_text(
             "profiles:\n"
-            "  gemini-flash-probe:\n"
+            "  gemini-pro-probe:\n"
             "    adapter: gemini-cli\n"
-            "    model: gemini-3.6-flash\n"
+            "    model: gemini-3.1-pro-preview\n"
             "    config:\n"
-            "      model: gemini-3.6-flash\n" + config_lines,
+            "      model: gemini-3.1-pro-preview\n" + config_lines,
             encoding="utf-8",
         )
         return profile_file
 
     @staticmethod
     def _stub_gemini(calls: list[dict[str, object]]):
-        """Stand in for gemini-cli 0.59.0's routing: with dynamic model configuration
-        off, an id ending in `flash` is answered by `gemini-3.5-flash`.
+        """Stand in for gemini-cli 0.66.0's routing under API-key auth.
+
+        Both resolution paths send gemini-3.5-flash and gemini-3-flash as
+        gemini-3.8-flash and gemini-3.1-flash-lite as gemini-3.5-flash-lite. With
+        dynamic model configuration on, an explicit gemini-3.1-pro-preview is also
+        answered by gemini-3.1-pro-preview-customtools (observed live 2026-11-18). A
+        `modelConfigs.overrides` entry that matches the requested id and names another
+        model sends the request there.
         """
 
         def run(cmd: list[str], **kwargs: object) -> MagicMock:
@@ -648,7 +799,18 @@ class TestLiveCheckUsesTheProfileConfig:
             dynamic = settings.get("experimental", {}).get("dynamicModelConfiguration") is True
             model = cmd[cmd.index("-m") + 1]
             output_format = cmd[cmd.index("--output-format") + 1]
-            served = model if dynamic or not model.endswith("flash") else "gemini-3.5-flash"
+            rewrites = {
+                "gemini-3.5-flash": "gemini-3.8-flash",
+                "gemini-3-flash": "gemini-3.8-flash",
+                "gemini-3.1-flash-lite": "gemini-3.5-flash-lite",
+            }
+            if dynamic:
+                rewrites["gemini-3.1-pro-preview"] = "gemini-3.1-pro-preview-customtools"
+            for override in settings.get("modelConfigs", {}).get("overrides", []):
+                target = override.get("modelConfig", {}).get("model")
+                if override.get("match") == {"model": model} and target:
+                    rewrites[model] = target
+            served = rewrites.get(model, model)
             calls.append({"dynamic": dynamic, "output_format": output_format})
             proc = MagicMock()
             proc.returncode = 0
@@ -710,17 +872,19 @@ class TestLiveCheckUsesTheProfileConfig:
                     "--profile-file",
                     str(profile_file),
                     "--assert-model",
-                    "gemini-3.6-flash",
+                    "gemini-3.1-pro-preview",
                 ],
             )
 
     def test_profile_native_settings_reach_the_probe(self, tmp_path: Path) -> None:
-        """A profile that turns dynamic model configuration off fails the probe."""
+        """A profile whose native settings reroute the model fails the probe."""
         profile_file = self._write_profile(
             tmp_path,
             "      native_settings:\n"
-            "        experimental:\n"
-            "          dynamicModelConfiguration: false\n",
+            "        modelConfigs:\n"
+            "          overrides:\n"
+            "            - match: {model: gemini-3.1-pro-preview}\n"
+            "              modelConfig: {model: gemini-3.8-flash}\n",
         )
         calls: list[dict[str, object]] = []
 
@@ -729,9 +893,9 @@ class TestLiveCheckUsesTheProfileConfig:
         assert calls == [{"dynamic": False, "output_format": "stream-json"}]
         assert result.exit_code == 1, result.output
         assert (
-            "no served model matches expected 'gemini-3.6-flash' (requested "
-            "'gemini-3.6-flash') — the CLI answered with a different model; billed: "
-            "gemini-3.5-flash (10 tokens)"
+            "no served model matches expected 'gemini-3.1-pro-preview' (requested "
+            "'gemini-3.1-pro-preview') — the CLI answered with a different model; billed: "
+            "gemini-3.8-flash (10 tokens)"
         ) in result.output
 
     def test_workspace_native_settings_reach_the_probe(self, tmp_path: Path) -> None:
@@ -741,8 +905,10 @@ class TestLiveCheckUsesTheProfileConfig:
             "      native_settings_scope: workspace\n"
             f"      working_directory: {json.dumps(str(workspace))}\n"
             "      native_settings:\n"
-            "        experimental:\n"
-            "          dynamicModelConfiguration: false\n",
+            "        modelConfigs:\n"
+            "          overrides:\n"
+            "            - match: {model: gemini-3.1-pro-preview}\n"
+            "              modelConfig: {model: gemini-3.8-flash}\n",
         )
         calls: list[dict[str, object]] = []
 
@@ -756,17 +922,17 @@ class TestLiveCheckUsesTheProfileConfig:
         assert "no served model matches expected" in result.output
 
     def test_a_profile_without_the_override_keeps_metaproc_settings(self, tmp_path: Path) -> None:
-        """The control: the same stub serves the request when the flag stays on."""
+        """The control: the same stub serves the request under Metaproc's settings."""
         profile_file = self._write_profile(tmp_path, "")
         calls: list[dict[str, object]] = []
 
         result = self._invoke(profile_file, calls)
 
-        assert calls == [{"dynamic": True, "output_format": "stream-json"}]
+        assert calls == [{"dynamic": False, "output_format": "stream-json"}]
         assert result.exit_code == 0, result.output
-        assert "served model 'gemini-3.6-flash' matches expected 'gemini-3.6-flash'" in (
-            result.output
-        )
+        assert (
+            "served model 'gemini-3.1-pro-preview' matches expected 'gemini-3.1-pro-preview'"
+        ) in result.output
 
     def test_assert_model_overrides_a_profile_text_format(self, tmp_path: Path) -> None:
         """Text output carries no terminal event, so the probe forces stream-json."""
@@ -775,7 +941,7 @@ class TestLiveCheckUsesTheProfileConfig:
 
         result = self._invoke(profile_file, calls)
 
-        assert calls == [{"dynamic": True, "output_format": "stream-json"}]
+        assert calls == [{"dynamic": False, "output_format": "stream-json"}]
         assert result.exit_code == 0, result.output
 
     def test_a_refused_profile_is_reported_as_a_failed_check(self, tmp_path: Path) -> None:
@@ -790,7 +956,7 @@ class TestLiveCheckUsesTheProfileConfig:
         )
         assert calls == []
         assert result.exit_code == 1, result.output
-        assert "[-] gemini-cli (gemini-3.6-flash): invalid adapter configuration:" in (
+        assert "[-] gemini-cli (gemini-3.1-pro-preview): invalid adapter configuration:" in (
             result.output
         )
         assert "owned by root" in result.output
@@ -990,25 +1156,28 @@ class TestExtractObservedModel:
         assert _extract_observed_model("unknown-adapter", stdout) is None
 
 
-# Captured from gemini-cli 0.59.0 on Vertex AI with a trivial prompt. The `init`
-# event echoes the requested id; `result.stats.models` names the model that
-# served and billed the call.
+# Captured from gemini-cli 0.66.0 on the Gemini API (API key) on 2026-11-18, one
+# run_shell_command call each; tool events are elided. The `init` event echoes the
+# requested id; `result.stats.models` names the model that served and billed the
+# call. 0.66.0 sends an explicit gemini-3.5-flash as gemini-3.8-flash.
 _GEMINI_REWRITTEN_STDOUT = (
-    '{"type":"init","timestamp":"2026-09-22T18:49:34.286Z","session_id":"b1f2382f",'
-    '"model":"gemini-3.6-flash"}\n'
-    '{"type":"message","role":"assistant","content":"OK","delta":true}\n'
-    '{"type":"result","timestamp":"2026-09-22T18:49:38.348Z","status":"success",'
-    '"stats":{"total_tokens":12091,"tool_calls":0,'
-    '"models":{"gemini-3.5-flash":{"total_tokens":12091,"input_tokens":11679}}}}\n'
+    '{"type":"init","timestamp":"2026-11-18T02:42:31.190Z",'
+    '"session_id":"1e8de3fe-9a2d-441a-aecd-ece503000f96","model":"gemini-3.5-flash"}\n'
+    '{"type":"message","role":"assistant","content":"probe-ok","delta":true}\n'
+    '{"type":"result","timestamp":"2026-11-18T02:42:45.455Z","status":"success",'
+    '"stats":{"total_tokens":20439,"input_tokens":20050,"output_tokens":38,"tool_calls":1,'
+    '"models":{"gemini-3.8-flash":{"total_tokens":20439,"input_tokens":20050,'
+    '"output_tokens":38}}}}\n'
 )
 
 _GEMINI_HONORED_STDOUT = (
-    '{"type":"init","timestamp":"2026-09-22T18:49:55.567Z","session_id":"42df203c",'
-    '"model":"gemini-3.6-flash"}\n'
-    '{"type":"message","role":"assistant","content":"OK","delta":true}\n'
-    '{"type":"result","timestamp":"2026-09-22T18:49:58.234Z","status":"success",'
-    '"stats":{"total_tokens":11815,"tool_calls":0,'
-    '"models":{"gemini-3.6-flash":{"total_tokens":11815,"input_tokens":11678}}}}\n'
+    '{"type":"init","timestamp":"2026-11-18T02:38:44.458Z",'
+    '"session_id":"39918a2b-caf1-4303-9c4c-6f7ad83e1c12","model":"gemini-4-argon"}\n'
+    '{"type":"message","role":"assistant","content":"probe-ok","delta":true}\n'
+    '{"type":"result","timestamp":"2026-11-18T02:39:03.706Z","status":"success",'
+    '"stats":{"total_tokens":18940,"input_tokens":18716,"output_tokens":43,"tool_calls":1,'
+    '"models":{"gemini-4-argon":{"total_tokens":18940,"input_tokens":18716,'
+    '"output_tokens":43}}}}\n'
 )
 
 
@@ -1040,7 +1209,7 @@ class TestExtractServedModels:
 
     def test_gemini_result_event_yields_served_model(self):
         assert _extract_served_models("gemini-cli", _GEMINI_REWRITTEN_STDOUT) == {
-            "gemini-3.5-flash": 12091
+            "gemini-3.8-flash": 20439
         }
 
     def test_gemini_reports_every_model_that_billed(self):
@@ -1086,19 +1255,19 @@ class TestEvaluateModelAssertion:
         beside the model that billed, so the rewrite is visible in one line.
         """
         ok, msg = _evaluate_model_assertion(
-            "gemini-cli", _GEMINI_REWRITTEN_STDOUT, "gemini-3.6-flash", "gemini-cli"
+            "gemini-cli", _GEMINI_REWRITTEN_STDOUT, "gemini-3.5-flash", "gemini-cli"
         )
         assert not ok
-        assert "(requested 'gemini-3.6-flash')" in msg
-        assert "gemini-3.5-flash" in msg
+        assert "(requested 'gemini-3.5-flash')" in msg
+        assert "gemini-3.8-flash (20439 tokens)" in msg
         assert "answered with a different model" in msg
 
     def test_gemini_honored_request_passes_the_assertion(self):
         ok, msg = _evaluate_model_assertion(
-            "gemini-cli", _GEMINI_HONORED_STDOUT, "gemini-3.6-flash", "gemini-cli"
+            "gemini-cli", _GEMINI_HONORED_STDOUT, "gemini-4-argon", "gemini-cli"
         )
         assert ok
-        assert msg.startswith("gemini-cli: served model 'gemini-3.6-flash' matches")
+        assert msg.startswith("gemini-cli: served model 'gemini-4-argon' matches")
 
     def test_gemini_zero_token_requested_model_beside_a_fallback_fails(self):
         """The requested id is in `stats.models`, but only the fallback billed."""
@@ -1239,8 +1408,40 @@ class TestRunLiveCheckPiRegistrationGate:
     """_run_live_check wires the registration gate before dispatching prompts."""
 
     @pytest.fixture(autouse=True)
-    def _stub_gcp_token(self) -> Iterator[None]:
+    def _stub_gcp_token(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         """Keep registration tests independent of ambient ADC and gcloud state."""
+        monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path))
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("GCP_CREDENTIALS_BASE64", "unrelated-gcp-json")
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/unrelated/gcp.json")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "unrelated-provider-key")
+        (tmp_path / "models.json").write_text(
+            json.dumps(
+                {
+                    "providers": {
+                        "vertex-maas": {
+                            "apiKey": "$METAPROC_PI_API_KEY",
+                            "baseUrl": "https://us-central1-aiplatform.googleapis.com/v1/projects/test",
+                            "api": "openai-completions",
+                            "headers": {"Authorization": "Bearer configured-provider-token"},
+                            "models": [
+                                {
+                                    "id": "zai-org/glm-5.2-maas",
+                                    "baseUrl": "https://unsafe.invalid/override",
+                                    "headers": {"Authorization": "Bearer configured-model-token"},
+                                },
+                                {"id": "unrelated-model"},
+                            ],
+                        },
+                        "anthropic": {"apiKey": "unrelated-provider-key"},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        (tmp_path / "auth.json").write_text(
+            '{"vertex-maas":{"type":"api_key","key":"saved-pi-token"}}', encoding="utf-8"
+        )
         with patch(
             "metaproc.cloud.gcp.resolve_token.resolve_gcp_token",
             return_value="test-gcp-token",
@@ -1254,7 +1455,7 @@ class TestRunLiveCheckPiRegistrationGate:
         status.credentials_found = True
         adapter.check_auth.return_value = status
         adapter.build_command.return_value = ["pi", "--provider", "vertex-maas", "-p", "x"]
-        adapter.prepare_env.return_value = {}
+        adapter.prepare_env.side_effect = lambda env, _config: env
         return adapter
 
     def test_live_check_fails_when_provider_not_registered(self):
@@ -1268,33 +1469,118 @@ class TestRunLiveCheckPiRegistrationGate:
             patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
         ):
             mock_registry.__getitem__ = MagicMock(return_value=self._adapter())
-            results = _run_live_check("pi-cli", "glm-5-maas", timeout_s=30)
+            results = _run_live_check("pi-cli", "zai-org/glm-5.2-maas", timeout_s=30)
 
         assert len(results) == 1
         ok, msg = results[0]
         assert not ok
-        assert "vertex-maas" in msg or "glm-5-maas" in msg
+        assert "vertex-maas" in msg or "glm-5.2-maas" in msg
         assert mock_run.call_count == 0, "trivial prompt must not run when registration fails"
 
-    def test_live_check_runs_prompt_when_registration_passes(self):
+    @pytest.mark.parametrize("packaged_catalog", [False, True])
+    def test_live_check_runs_prompt_when_registration_passes(
+        self, packaged_catalog: bool, tmp_path: Path
+    ) -> None:
         """Happy path: registration gate passes, trivial prompt runs."""
+        if packaged_catalog:
+            catalog = resources.files("metaproc.data").joinpath("pi-models.default.json")
+            (tmp_path / "models.json").write_text(
+                catalog.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+
+        def verify_staged_catalog(env: dict[str, str], **_kwargs: object) -> tuple[bool, str]:
+            stage = Path(env["PI_CODING_AGENT_DIR"])
+            assert stage != tmp_path
+            assert not (stage / "auth.json").exists()
+            staged = json.loads((stage / "models.json").read_text(encoding="utf-8"))
+            assert list(staged["providers"]) == ["vertex-maas"]
+            provider = staged["providers"]["vertex-maas"]
+            assert provider["apiKey"] == "$METAPROC_PI_API_KEY"
+            assert provider["authHeader"] is True
+            assert "headers" not in provider
+            (model,) = provider["models"]
+            assert model["id"] == "zai-org/glm-5.2-maas"
+            assert "headers" not in model
+            assert "baseUrl" not in model
+            return True, "providers: vertex-maas\nmodels: zai-org/glm-5.2-maas"
+
         with (
             patch("metaproc.commands.auth_check.ADAPTER_REGISTRY") as mock_registry,
             patch(
                 "metaproc.commands.auth_check._pi_list_models",
-                return_value=(True, "providers: vertex-maas\nmodels: glm-5-maas"),
-            ),
+                side_effect=verify_staged_catalog,
+            ) as mock_list,
             patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
         ):
             mock_proc = MagicMock()
             mock_proc.returncode = 0
             mock_run.return_value = mock_proc
             mock_registry.__getitem__ = MagicMock(return_value=self._adapter())
-            results = _run_live_check("pi-cli", "glm-5-maas", timeout_s=30)
+            results = _run_live_check("pi-cli", "zai-org/glm-5.2-maas", timeout_s=30)
 
         assert len(results) == 1
         assert results[0][0]
         assert mock_run.call_count == 1
+        argv = mock_run.call_args.args[0]
+        assert "--api-key" not in argv
+        assert "--no-extensions" in argv
+        assert "test-gcp-token" not in " ".join(argv)
+        child_env = mock_run.call_args.kwargs["env"]
+        assert child_env == mock_list.call_args.args[0]
+        assert child_env["METAPROC_PI_API_KEY"] == "test-gcp-token"
+        assert child_env["HOME"] == str(tmp_path / "home")
+        assert (
+            not {"GCP_CREDENTIALS_BASE64", "GOOGLE_APPLICATION_CREDENTIALS", "ANTHROPIC_API_KEY"}
+            & child_env.keys()
+        )
+        assert mock_list.call_args.kwargs["isolated"]
+        assert mock_run.call_args.kwargs["cwd"] == Path(child_env["PI_CODING_AGENT_DIR"])
+        assert not Path(child_env["PI_CODING_AGENT_DIR"]).exists()
+
+    def test_incompatible_catalog_fails_before_launching_pi(self, tmp_path: Path) -> None:
+        models_path = tmp_path / "models.json"
+        models_path.write_text(
+            json.dumps({"providers": {"vertex-maas": {"apiKey": "unsupported-key"}}}),
+            encoding="utf-8",
+        )
+        with (
+            patch("metaproc.commands.auth_check.ADAPTER_REGISTRY", {"pi-cli": self._adapter()}),
+            patch("metaproc.commands.auth_check._pi_list_models") as mock_list,
+            patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
+        ):
+            results = _run_live_check("pi-cli", "zai-org/glm-5.2-maas", timeout_s=30)
+
+        ok, message = results[0]
+        assert not ok
+        assert str(models_path) in message
+        assert "$METAPROC_PI_API_KEY" in message
+        assert "unsupported-key" not in message
+        mock_list.assert_not_called()
+        mock_run.assert_not_called()
+
+    @pytest.mark.parametrize("oversize", [False, True])
+    def test_live_probe_rejects_unusable_catalog_without_starting_pi(
+        self, tmp_path: Path, oversize: bool
+    ) -> None:
+        models_path = tmp_path / "models.json"
+        models_path.unlink()
+        if oversize:
+            models_path.write_bytes(b" " * 65)
+            expected = "probe catalog read limit"
+        else:
+            models_path.mkdir()
+            expected = "not a regular file"
+
+        with (
+            patch("metaproc.commands.auth_check._MAX_PI_PROBE_CATALOG_BYTES", 64),
+            patch("metaproc.commands.auth_check.ADAPTER_REGISTRY", {"pi-cli": self._adapter()}),
+            patch("metaproc.commands.auth_check._pi_list_models") as mock_list,
+        ):
+            [(ok, message)] = _run_live_check("pi-cli", "zai-org/glm-5.2-maas", timeout_s=30)
+
+        assert not ok
+        assert expected in message
+        mock_list.assert_not_called()
 
     def test_explicit_provider_override_is_respected(self):
         """Operator-supplied --provider overrides naming-based inference."""
@@ -1311,7 +1597,7 @@ class TestRunLiveCheckPiRegistrationGate:
             patch("metaproc.commands.auth_check.ADAPTER_REGISTRY") as mock_registry,
             patch(
                 "metaproc.commands.auth_check._pi_list_models",
-                return_value=(True, "providers: vertex-maas\nmodels: glm-5-maas"),
+                return_value=(True, "providers: vertex-maas\nmodels: zai-org/glm-5.2-maas"),
             ),
             patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
         ):
@@ -1319,10 +1605,10 @@ class TestRunLiveCheckPiRegistrationGate:
             mock_proc.returncode = 0
             mock_run.return_value = mock_proc
             mock_registry.__getitem__ = MagicMock(return_value=adapter)
-            _run_live_check("pi-cli", "glm-5-maas", timeout_s=30, provider="vertex-maas")
+            _run_live_check("pi-cli", "zai-org/glm-5.2-maas", timeout_s=30, provider="vertex-maas")
 
         assert captured["merged_config"]["provider"] == "vertex-maas"
-        assert captured["merged_config"]["model"] == "glm-5-maas"
+        assert captured["merged_config"]["model"] == "zai-org/glm-5.2-maas"
 
 
 class TestLiveCheckLauncher:
@@ -1354,3 +1640,70 @@ class TestLiveCheckLauncher:
         assert launcher.call_args.args[0][:3] == ["fake-agent", "-p", "x"]
         assert launcher.call_args.kwargs["timeout"] == 5
         plain_run.assert_not_called()
+
+
+def _gemini_result(requested: str, served: dict[str, int]) -> str:
+    models = {name: {"total_tokens": tokens} for name, tokens in served.items()}
+    result = {"type": "result", "status": "success", "stats": {"models": models}}
+    return json.dumps({"type": "init", "model": requested}) + "\n" + json.dumps(result) + "\n"
+
+
+class TestGeminiAssertModelIsExact:
+    """`--assert-model` for gemini-cli matches served ids exactly, with alias support.
+
+    A substring match passed `gemini-3.1-pro-preview` when its `-customtools`
+    variant served, and `auto` could never match any served id.
+    """
+
+    def test_prefix_of_the_served_id_fails(self) -> None:
+        stdout = _gemini_result(
+            "gemini-3.1-pro-preview", {"gemini-3.1-pro-preview-customtools": 900}
+        )
+        ok, msg = _evaluate_model_assertion(
+            "gemini-cli", stdout, "gemini-3.1-pro-preview", "gemini-cli"
+        )
+        assert not ok
+        assert "gemini-3.1-pro-preview-customtools (900 tokens)" in msg
+
+    def test_exact_served_id_passes(self) -> None:
+        stdout = _gemini_result(
+            "gemini-3.1-pro-preview-customtools", {"gemini-3.1-pro-preview-customtools": 900}
+        )
+        ok, msg = _evaluate_model_assertion(
+            "gemini-cli", stdout, "gemini-3.1-pro-preview-customtools", "gemini-cli"
+        )
+        assert ok, msg
+
+    def test_substring_of_the_served_id_fails(self) -> None:
+        ok, _ = _evaluate_model_assertion(
+            "gemini-cli", _GEMINI_HONORED_STDOUT, "gemini-4", "gemini-cli"
+        )
+        assert not ok
+
+    @pytest.mark.parametrize(
+        ("alias", "served"),
+        [
+            ("auto", "gemini-3.8-flash"),
+            ("auto", "gemini-3.1-pro-preview-customtools"),
+            ("pro", "gemini-3.1-pro-preview"),
+            ("flash", "gemini-3.8-flash"),
+            ("flash-lite", "gemini-3.5-flash-lite"),
+        ],
+    )
+    def test_alias_passes_when_one_of_its_models_served(self, alias: str, served: str) -> None:
+        stdout = _gemini_result(alias, {served: 500})
+        ok, msg = _evaluate_model_assertion("gemini-cli", stdout, alias, "gemini-cli")
+        assert ok, msg
+        assert f"served model {served!r} matches expected {alias!r} (alias served as" in msg
+
+    def test_alias_fails_on_a_model_outside_its_targets(self) -> None:
+        # A quota fallback from `pro` to a Flash model is a substitution.
+        stdout = _gemini_result("pro", {"gemini-3.8-flash": 500})
+        ok, msg = _evaluate_model_assertion("gemini-cli", stdout, "pro", "gemini-cli")
+        assert not ok
+        assert "alias served as" in msg
+
+    def test_claude_keeps_substring_semantics(self) -> None:
+        stdout = '{"type":"system","subtype":"init","model":"claude-opus-4-7"}\n'
+        ok, msg = _evaluate_model_assertion("claude-code-cli", stdout, "opus", "claude-code-cli")
+        assert ok, msg

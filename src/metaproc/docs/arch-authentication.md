@@ -6,7 +6,7 @@ status: Draft — partial currency notice below
 ---
 # Architecture: Authentication and Credentials
 
-**Date:** 2026-04-21 (last updated 2026-10-11) **Status:** Draft — partial currency
+**Date:** 2026-04-21 (last updated 2026-11-21) **Status:** Draft — partial currency
 notice below
 
 ## Currency notice (2026-04-28)
@@ -254,8 +254,9 @@ Each adapter implements three auth-relevant methods:
   credentials are discoverable.
   Consumed by `auth-check` Phase 1.
 - `prepare_env(env, merged_config) -> dict[str, str]` — transforms the subprocess
-  environment. Typically just filters stray vars and sets perf tweaks
-  (`PI_SKIP_VERSION_CHECK=1`, removal of inherited `CLAUDECODE`).
+  environment. Typically it filters stray vars and sets perf and privacy settings
+  (`PI_SKIP_VERSION_CHECK=1` and `PI_TELEMETRY=0` for Pi, removal of inherited
+  `CLAUDECODE`).
 - `bootstrap(home: Path) -> None` — materializes per-task filesystem state such as
   credentials files. Default is no-op.
   Called once per container by `worker_entrypoint.py` / `orchestrator_entrypoint.py` /
@@ -405,13 +406,17 @@ Reference: `src/metaproc/adapters/claude_cli.py` (`bootstrap()`),
    `GEMINI_API_KEY`, `GOOGLE_CLOUD_PROJECT` (for vertex-ai).
    Reports which are found.
 3. Pi CLI subprocess reads the relevant env var itself — metaproc does not transform it.
-4. `prepare_env` sets `PI_SKIP_VERSION_CHECK=1` to avoid a startup HTTP call.
+4. `prepare_env` sets `PI_SKIP_VERSION_CHECK=1` to avoid a startup HTTP call and
+   `PI_TELEMETRY=0` to keep install telemetry off.
+   The command line includes `--no-mcp`, so Pi’s built-in MCP extension cannot add tools
+   beyond the `--tools` allowlist.
 
-**Pi valid providers** (validated by `validate_config`): anthropic, openai, google,
-vertex, azure, bedrock, plus custom providers registered in `models.json`
-(`vertex-maas`, `google-vertex`).
+**Pi valid providers** (validated by `validate_config`): the providers registered in
+`src/metaproc/config/providers.py` (`anthropic`, `openai`, `google`, `deepseek`,
+`moonshot`, `vertex-maas`, `google-vertex`), plus Pi’s built-in `azure` and
+`amazon-bedrock`, which Metaproc does not wire credentials for.
 
-#### UC-5: Laptop run with Pi CLI + Vertex MaaS (GLM-5, Kimi K2, DeepSeek, etc.)
+#### UC-5: Laptop run with Pi CLI + Vertex MaaS (GLM-5.2, DeepSeek V4.1 Flash)
 
 Vertex MaaS (Model-as-a-Service) exposes an OpenAI-compatible endpoint at
 `https://aiplatform.googleapis.com/v1/projects/<PROJECT>/locations/global/endpoints/openapi`.
@@ -420,10 +425,11 @@ It requires a **GCP access token** as the bearer credential.
 Auth flow:
 
 1. Pi CLI loads `~/.pi/agent/models.json`. Metaproc dispatch (`build_pi_models_json` at
-   `src/metaproc/cloud/gcp/batch_backend.py`) prefers operator-authored config and falls
-   back to the packaged default `src/metaproc/data/pi-models.default.json`.
+   `src/metaproc/cloud/gcp/batch_backend.py`) starts from the packaged default
+   `src/metaproc/data/pi-models.default.json` and overlays an operator-authored file.
 
-2. The `vertex-maas` provider is declared with `"apiKey": "<injected-by-metaproc>"` and
+2. The packaged `vertex-maas` provider declares an `apiKey` shell command that prints
+   `METAPROC_PI_API_KEY` when it is set and otherwise runs `gcp-access-token.sh`, with
    `"authHeader": true` → Pi sends `Authorization: Bearer <apiKey>`.
 
 3. Metaproc resolves a GCP access token **once per batch** (not per item) via
@@ -442,9 +448,11 @@ Auth flow:
    `_needs_gcloud_token` is `True` when `adapter_type == "pi-cli"` and
    `provider.startswith("vertex")` and `backend == "local"`.
 
-4. The token is injected into the adapter’s `api_key` merged config and passed to the
-   pi-cli subprocess as `--api-key <token>` (`src/metaproc/commands/auth_check.py`
-   follows the same pattern for live checks).
+4. The token is injected into the adapter’s `api_key` merged config, and `prepare_env`
+   passes it to the pi-cli subprocess as `METAPROC_PI_API_KEY`. Live checks also pass
+   the token through the child environment.
+   Configure the `vertex-maas` provider in `models.json` to read that variable with
+   `$METAPROC_PI_API_KEY` or use the packaged Vertex helper.
 
 5. Tokens auto-refresh via `google.auth` before expiry — no subprocess shell-outs, no
    TTL guessing. Failure raises; there is no degraded fallback.
@@ -461,11 +469,19 @@ Additional per-container rewrites (`src/metaproc/cloud/gcp/batch_backend.py`
 `_rewrite_pi_models_json`):
 
 - `apiKey` values beginning with `!gcloud` (a shell-command token that Pi expands) are
-  rewritten to `!gcp-access-token.sh` — a small helper installed in the container that
-  prints an ADC token.
-  Containers don’t have the `gcloud` CLI.
-- Vertex `baseUrl` project paths are normalized to the dispatch project ID so
-  operator-local models.json works verbatim across projects.
+  rewritten to a command that prints `METAPROC_PI_API_KEY` when it is set and otherwise
+  runs `gcp-access-token.sh`, a small helper installed in the container that prints an
+  ADC token. Containers don’t have the `gcloud` CLI.
+- A bare `apiKey` that names an `*_API_KEY` variable, such as `"OPENAI_API_KEY"`, is
+  rewritten to the `"$OPENAI_API_KEY"` reference, with a warning.
+  Pi sends a bare string as the literal key, so an operator file written for an older Pi
+  would otherwise get 401 responses.
+- Batch dispatch requires environment references for custom Pi headers and API keys.
+  Set each value through its `$NAME` reference and use Secret Manager for credentials.
+  Header values can also use `Bearer ${NAME}` or `Basic ${NAME}`. For Vertex ADC, use
+  the packaged helper or the native `google-vertex` credential setting.
+- Vertex `baseUrl` project paths are normalized to the dispatch project ID so the same
+  model configuration can target different projects.
 
 `GOOGLE_CLOUD_LOCATION=global` is set on every worker/orchestrator to satisfy the Gemini
 3.x preview SDK requirement.
@@ -881,11 +897,14 @@ Both paths use `PoolDispatchConfig`, `SlotCoordinator`, the adapter’s credenti
 and scrub rules, and the shared completion primitive in `pool_dispatch.py`. They scope
 the CLI to that slot through its native configuration environment variable:
 
-- Claude Code → `CLAUDE_CONFIG_DIR=<slot_dir>`, with `<slot_dir>/.credentials.json` mode
-  0600\.
+- Claude Code → `CLAUDE_CONFIG_DIR=<slot_dir>` and
+  `ANTHROPIC_CONFIG_DIR=<slot_dir>/.anthropic`, with `<slot_dir>/.credentials.json` mode
+  0600 for file-based logins.
+  The slot uses its own Anthropic profile directory.
 - Codex → `CODEX_HOME=<slot_dir>/.codex`, with `auth.json` plus a minimal `config.toml`
-  pinning `cli_auth_credentials_store = "file"` and `forced_login_method = "chatgpt"` so
-  the slot credential can’t be silently overridden by a stray `OPENAI_API_KEY`.
+  pinning `cli_auth_credentials_store = "file"` and `forced_login_method = "chatgpt"`.
+  The pool removes ambient `CODEX_API_KEY` and `CODEX_ACCESS_TOKEN` from the slot
+  environment and refuses acquisition when `OPENAI_API_KEY` is set.
 
 Scalar acquisition and teardown use the run-owned executor because local or GCP-backed
 credential storage may block.
@@ -907,10 +926,15 @@ warning, a warning log record, and an `auth_skipped` runpool event naming the st
 configured adapters rather than silently skipping the pool.
 
 Higher-precedence OAuth vars (`ANTHROPIC_AUTH_TOKEN`, `CLAUDE_CODE_OAUTH_TOKEN`,
-`CLAUDE_CODE_APIKEY_HELPER`, `CODEX_CREDS_JSON`) are scrubbed from the subprocess env.
-`ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are not scrubbed because they are explicit
-API-key mode; if either would override the selected pooled OAuth slot, dispatch refuses
-the slot instead of silently running on the wrong account.
+`CLAUDE_CODE_APIKEY_HELPER`, `CODEX_CREDS_JSON`) are scrubbed from the subprocess env,
+as is `CODEX_API_KEY`, which Codex prefers over any stored login and which the adapter
+may have set from `OPENAI_API_KEY`. `ANTHROPIC_API_KEY` and `OPENAI_API_KEY` are not
+scrubbed because they are explicit API-key mode; when the pooled adapter’s key is
+present (`ANTHROPIC_API_KEY` for Claude Code, `OPENAI_API_KEY` for Codex), dispatch
+refuses the slot instead of risking the wrong account.
+For Codex the refusal is conservative: `codex exec` never reads `OPENAI_API_KEY`, the
+slot drops `CODEX_API_KEY`, and the slot’s `config.toml` sets
+`forced_login_method = "chatgpt"`, so the key could not take over the slot.
 
 **Concurrency is decoupled from credential count.** Many concurrent items can share the
 same pool label simultaneously — the per-label `lease_holder` mutex was specifically
@@ -1073,10 +1097,10 @@ Anthropic-supported paths over reverse-engineered ones —
 
 Slot directories are credential-bearing and must be wiped after every run.
 But the adapter writes diagnostic files into the slot during execution
-(`claude -d api --debug-file=<slot>/claude-code-debug.log`), and those files are the
-only evidence of OAuth-refresh attempts, per-attempt API errors, and `AxiosError`
-payloads. Without them, post-mortem on a wave of identical failures is impossible — the
-operator only sees `auth_outcome: classification=unknown, reason=exit-code-1`.
+(`claude --debug-file <slot>/claude-code-debug.log`), and those files are the only
+evidence of OAuth-refresh attempts, per-attempt API errors, and `AxiosError` payloads.
+Without them, post-mortem on a wave of identical failures is impossible — the operator
+only sees `auth_outcome: classification=unknown, reason=exit-code-1`.
 
 **Pattern.** The adapter declares which filenames in the slot are diagnostic (vs.
 credential-bearing) via an explicit Protocol method:
@@ -1089,9 +1113,9 @@ class AuthCapableCliAdapter(Adapter, Protocol):
 ```
 
 `ClaudeCodeCliAdapter` returns `("claude-code-debug.log",)`. `CodexCliAdapter` and
-others currently return `()` until they grow equivalents to `claude -d api`. Filenames
-are adapter-namespaced so multiple adapters’ diagnostics coexist in the run’s `.logs/`
-tree without collision.
+others currently return `()` until they grow an equivalent of Claude Code’s
+`--debug-file` log. Filenames are adapter-namespaced so multiple adapters’ diagnostics
+coexist in the run’s `.logs/` tree without collision.
 
 The orchestrator (`run_parallel._teardown_pool_slot`) calls
 `SlotCoordinator.preserve_diagnostics(lease, session_log_path)` on **every** teardown
@@ -1232,9 +1256,15 @@ on its `EntryState`. Slot bootstrap branches on `vehicle`:
   omits `CLAUDE_CODE_OAUTH_TOKEN` (it IS the credential) but scrubs every other
   higher-precedence var (`ANTHROPIC_AUTH_TOKEN`, `apiKeyHelper`, cloud-provider mode
   flags, the provisioning-only `CLAUDE_CODE_OAUTH_REFRESH_TOKEN` /
-  `CLAUDE_CODE_OAUTH_SCOPES`). Defense-in-depth: materialize_credential asserts no stray
-  `.credentials.json` or `settings.json` exists in the slot — a leaked `apiKeyHelper`
-  would otherwise silently outvote the static token in the precedence chain.
+  `CLAUDE_CODE_OAUTH_SCOPES`, and the Anthropic profile and Workload Identity Federation
+  variables `ANTHROPIC_PROFILE`, `ANTHROPIC_FEDERATION_RULE_ID`,
+  `ANTHROPIC_ORGANIZATION_ID`, `ANTHROPIC_IDENTITY_TOKEN[_FILE]`,
+  `ANTHROPIC_SERVICE_ACCOUNT_ID` and `ANTHROPIC_WORKSPACE_ID`, which Claude Code ranks
+  above stored `/login` credentials; an active `oidc_federation` profile file in the
+  Anthropic configuration directory is not covered).
+  Defense-in-depth: materialize_credential asserts no stray `.credentials.json` or
+  `settings.json` exists in the slot — a leaked `apiKeyHelper` would otherwise silently
+  outvote the static token in the precedence chain.
 - **Vehicle B (`LOGIN_CREDENTIALS`, legacy / fallback)** — the existing
   `.credentials.json` snapshot path described throughout §N.1-§N.13. Preserved for
   accounts where Vehicle A isn’t usable on the pinned CLI version, but new deployments

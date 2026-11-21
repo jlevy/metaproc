@@ -28,6 +28,10 @@ def _selected_model(command: list[str], flag: str) -> str:
 @pytest.mark.parametrize(
     ("model", "flag"),
     [
+        ("claude-fable-5-2", "--model"),
+        ("claude-opus-5-5", "--model"),
+        ("claude-sonnet-5-5", "--model"),
+        ("claude-haiku-5-5", "--model"),
         ("claude-fable-5-1", "--model"),
         ("claude-opus-5", "--model"),
         ("claude-sonnet-5", "--model"),
@@ -56,12 +60,18 @@ def test_claude_preserves_accepted_explicit_models(
 @pytest.mark.parametrize(
     "model",
     [
+        "gpt-6.2-astra",
+        "gpt-6.2-sol",
+        "gpt-6.1-sol",
+        "gpt-6.1-terra",
         "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
         "gpt-5.6",
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
-        "gpt-5.3-codex-spark",
+        "gpt-5.5",
     ],
 )
 def test_codex_preserves_accepted_explicit_models(
@@ -97,7 +107,20 @@ def test_codex_accepts_pinned_cli_effort_syntax(
     assert f"model_reasoning_effort={effort}" in adapter.build_command(prompt, config, {})
 
 
-@pytest.mark.parametrize("model", ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.5-flash-lite"])
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-4-carbon",
+        "gemini-4-argon",
+        "gemini-4-hydrogen",
+        "gemini-4-neon",
+        "gemini-3.8-flash",
+        "gemini-3.6-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.1-pro-preview",
+        "gemini-3.1-pro-preview-customtools",
+    ],
+)
 def test_gemini_preserves_accepted_explicit_models(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -107,7 +130,10 @@ def test_gemini_preserves_accepted_explicit_models(
     prompt = tmp_path / "prompt.md"
     prompt.write_text("Select the requested model.", encoding="utf-8")
 
-    command = GeminiCliAdapter().build_command(prompt, {"model": model}, {})
+    adapter = GeminiCliAdapter()
+    config: dict[str, object] = {"model": model}
+    assert adapter.validate_config(config) == []
+    command = adapter.build_command(prompt, config, {})
 
     assert _selected_model(command, "-m") == model
 
@@ -116,20 +142,29 @@ def test_gemini_preserves_accepted_explicit_models(
     ("provider", "model"),
     [
         ("anthropic", "opus"),
-        ("anthropic", "claude-fable-5"),
+        ("anthropic", "sonnet"),
+        ("anthropic", "claude-fable-5-2"),
+        ("anthropic", "claude-fable-5-1"),
+        ("anthropic", "claude-opus-5-5"),
+        ("anthropic", "claude-sonnet-5-5"),
+        ("anthropic", "claude-haiku-5-5"),
         ("anthropic", "claude-opus-5"),
         ("anthropic", "claude-sonnet-5"),
-        ("anthropic", "claude-opus-4-8"),
-        ("openai", "gpt-5.5"),
+        ("openai", "gpt-6.1-sol"),
         ("openai", "gpt-6-astra"),
         ("openai", "gpt-5.6-sol"),
-        ("openai", "gpt-5.6-terra"),
-        ("openai", "gpt-5.6-luna"),
-        ("google-vertex", "gemini-3.5-flash"),
+        ("google-vertex", "gemini-4-argon"),
+        ("google-vertex", "gemini-4-neon"),
+        ("google-vertex", "gemini-4-carbon"),
+        ("google-vertex", "gemini-4-hydrogen"),
         ("google-vertex", "gemini-3.8-flash"),
         ("google-vertex", "gemini-3.7-flash"),
         ("google-vertex", "gemini-3.6-flash"),
+        ("google-vertex", "gemini-3.5-flash"),
         ("google-vertex", "gemini-3.5-flash-lite"),
+        ("google-vertex", "gemini-3.1-flash-lite"),
+        ("google-vertex", "gemini-3-flash-preview"),
+        ("google-vertex", "gemini-3.1-pro-preview-customtools"),
     ],
 )
 def test_pi_preserves_accepted_explicit_models(
@@ -143,19 +178,76 @@ def test_pi_preserves_accepted_explicit_models(
     prompt = tmp_path / "prompt.md"
     prompt.write_text("Select the requested model.", encoding="utf-8")
 
-    command = PiCliAdapter().build_command(
-        prompt,
-        {"provider": provider, "model": model},
-        {},
-    )
+    adapter = PiCliAdapter()
+    config: dict[str, object] = {"provider": provider, "model": model}
+    assert adapter.validate_config(config) == []
+    command = adapter.build_command(prompt, config, {})
 
+    assert _selected_model(command, "--provider") == provider
     assert _selected_model(command, "--model") == model
 
 
-def test_pi_rejects_model_missing_from_pinned_native_catalog() -> None:
-    rejections = PiCliAdapter().validate_config(
-        {"provider": "anthropic", "model": "claude-fable-5-1"}
-    )
+@pytest.mark.parametrize(
+    ("provider", "model"),
+    [
+        ("vertex-maas", "zai-org/glm-5-maas"),
+        ("vertex-maas", "glm-5-maas"),
+        ("openai", "gpt-5.4-mini"),
+    ],
+)
+def test_pi_rejects_retired_models(provider: str, model: str) -> None:
+    rejections = PiCliAdapter().validate_config({"provider": provider, "model": model})
+    assert any(rejection.key == "model" for rejection in rejections)
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini-3.7-flash",
+        "gemini-3.5-flash",
+        "gemini-3.1-flash-lite",
+        "gemini-3-flash-preview",
+        "gemini-4-neon",
+    ],
+)
+def test_pi_requires_the_vertex_route_for_provider_specific_models(
+    model: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("metaproc.adapters.pi_cli._pi_version_drift", lambda: None)
+    adapter = PiCliAdapter()
+    for provider in ("google", None):
+        config: dict[str, object] = {"model": model}
+        if provider:
+            config["provider"] = provider
+        rejections = adapter.validate_config(config)
+        assert len(rejections) == 1
+        assert rejections[0].key == "model"
+        assert "google-vertex" in rejections[0].reason
+        with pytest.raises(ValueError, match="requires provider 'google-vertex'"):
+            adapter.build_command(tmp_path / "prompt.md", config, {})
+
+
+@pytest.mark.parametrize(
+    ("adapter", "model"),
+    [
+        (CodexCliAdapter(), "gpt-5.4"),
+        (CodexCliAdapter(), "gpt-5.4-mini"),
+        (CodexCliAdapter(), "gpt-5.3-codex-spark"),
+        (GeminiCliAdapter(), "gemini-3.5-flash"),
+        (GeminiCliAdapter(), "gemini-3.7-flash"),
+        (GeminiCliAdapter(), "gemini-3.1-flash-lite"),
+        (GeminiCliAdapter(), "gemini-3-flash-preview"),
+        (GeminiCliAdapter(), "gemini-3-pro-preview"),
+        (GeminiCliAdapter(), "auto-gemini-3"),
+    ],
+)
+def test_removed_models_are_rejected(
+    adapter: CodexCliAdapter | GeminiCliAdapter, model: str
+) -> None:
+    config: dict[str, object] = {"permission_mode": "default", "model": model}
+    if isinstance(adapter, GeminiCliAdapter):
+        config = {"model": model}
+    rejections = adapter.validate_config(config)
     assert any(rejection.key == "model" for rejection in rejections)
 
 
@@ -235,3 +327,26 @@ def test_unknown_explicit_model_raises(
 
     with pytest.raises(ValueError, match=rf"unknown {adapter_name} model"):
         builder(prompt, config | {"model": unknown_model}, {})
+
+
+@pytest.mark.parametrize(
+    ("adapter", "config", "replacement"),
+    [
+        (GeminiCliAdapter(), {"model": "gemini-3.5-flash"}, "gemini-4-hydrogen"),
+        (
+            CodexCliAdapter(),
+            {"permission_mode": "default", "model": "gpt-5.4"},
+            "gpt-6.1-sol",
+        ),
+        (PiCliAdapter(), {"provider": "vertex-maas", "model": "glm-5-maas"}, "glm-5.2-maas"),
+    ],
+)
+def test_removed_model_rejection_names_the_replacement(
+    adapter: CodexCliAdapter | GeminiCliAdapter | PiCliAdapter,
+    config: dict[str, object],
+    replacement: str,
+) -> None:
+    reasons = [r.reason for r in adapter.validate_config(config) if r.key == "model"]
+    assert reasons
+    assert "removed from Metaproc's model catalog" in reasons[0]
+    assert replacement in reasons[0]

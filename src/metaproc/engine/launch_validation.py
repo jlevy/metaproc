@@ -23,6 +23,7 @@ from metaproc.engine.input_validation import (
 )
 from metaproc.engine.placeholders import validate_spec_placeholders
 from metaproc.models.authored import ProcessSpec
+from metaproc.models.execution_profile import ExecutionProfile
 
 PLACEHOLDER_GROUP = "unresolved placeholders in process spec (pass via --var or set env var)"
 PARAM_GROUP = "unresolved operator parameters (pass via --var KEY=VALUE)"
@@ -40,13 +41,15 @@ def collect_launch_errors(
     adapter_override: str | None = None,
     step_profile_overrides: Mapping[str, str] | None = None,
     validate_inputs: bool = True,
+    recorded_profiles: Mapping[str, ExecutionProfile] | None = None,
 ) -> list[tuple[str, list[str]]]:
     """Return ``(group header, messages)`` for every class that has a defect.
 
     Groups come back in the order an operator meets them: what the templates
     could not resolve, what the command line did not supply, what the filesystem
     did not hold, and what the profile registry did not know. Classes with
-    nothing to report are omitted.
+    nothing to report are omitted. A resume passes the removed profiles its run
+    recorded as *recorded_profiles* (``build_plan``).
     """
     groups: list[tuple[str, list[str]]] = []
 
@@ -69,6 +72,7 @@ def collect_launch_errors(
         profile_files=profile_files,
         adapter_override=adapter_override,
         step_profile_overrides=step_profile_overrides,
+        recorded_profiles=recorded_profiles,
     )
     if profile_errors:
         groups.append((PROFILE_GROUP, profile_errors))

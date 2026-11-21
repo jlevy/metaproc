@@ -7,6 +7,7 @@ that reports a list cost, which is what the spend ledger reads from a real agent
 from __future__ import annotations
 
 import gzip
+import json
 import textwrap
 from pathlib import Path
 from typing import Any, cast
@@ -422,6 +423,29 @@ def test_ledger_counts_each_log_once_across_rescans_and_compaction(tmp_path: Pat
     compacted.write_bytes(gzip.compress(log.read_bytes()))
     log.unlink()
     assert ledger.observe(tmp_path) == pytest.approx(0.25)
+
+
+def test_ledger_estimates_legacy_pi_maas_snapshot_zero(tmp_path: Path) -> None:
+    log_dir = tmp_path / ".logs" / "tasks" / "a"
+    log_dir.mkdir(parents=True)
+    log = log_dir / "a_x_2026-01-01T00-00-00.jsonl"
+    agent_end = {
+        "type": "agent_end",
+        "messages": [
+            {
+                "role": "assistant",
+                "model": "deepseek-ai/deepseek-v4.1-flash-1017-maas",
+                "provider": "vertex-maas",
+                "usage": {"input": 100, "output": 20, "cost": {"total": 0.0}},
+            },
+        ],
+    }
+    log.write_text('{"type":"agent_start"}\n' + json.dumps(agent_end) + "\n", encoding="utf-8")
+
+    ledger = SpendLedger.open(tmp_path, cap_usd=1.0)
+
+    assert ledger.measured_usd == pytest.approx(0.000054)
+    assert ledger.unpriced_logs == 0
 
 
 def test_price_and_breaker_do_not_change_the_step_fingerprint() -> None:

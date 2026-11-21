@@ -45,7 +45,7 @@ BASE='https://aiplatform.googleapis.com/v1/projects/exampletool/locations/global
 # Pre-fix: 400 "missing thought_signature" on Gemini 3 previews.
 curl -sS -X POST "$BASE/chat/completions" \
   -H "Authorization: Bearer $ACCESS_TOKEN" -H "Content-Type: application/json" \
-  -d '{"model":"google/gemini-3-flash-preview","messages":[
+  -d '{"model":"google/gemini-3.1-pro-preview","messages":[
     {"role":"user","content":"Look up ACME data"},
     {"role":"assistant","content":null,"tool_calls":[
        {"id":"c1","type":"function","function":{"name":"get_data","arguments":"{\"item\":\"ACME\"}"}}]},
@@ -104,15 +104,19 @@ Helper for verifying a single step’s resolution:
 from metaproc.adapters.registry import derive_variant
 # claude-code-cli + opus       → "claude-cli"
 # claude-code-cli + sonnet     → "claude-cli-sonnet"
-# pi-cli          + glm-5-maas → "pi-cli-glm-5-maas"
+# pi-cli          + glm-5.2-maas → "pi-cli-glm-5.2-maas"
 ```
 
 ## 5. Provider configuration shape
 
 `src/metaproc/data/pi-models.default.json` is the source of truth for which API each
-model uses. The `google-vertex` provider block must use the native API path, with naked
-model IDs (no `google/` prefix — the publisher path is baked into the `@google/genai`
-SDK):
+custom model uses. The `google-vertex` provider block must use the native API path, with
+naked model IDs (no `google/` prefix — the publisher path is baked into the
+`@google/genai` SDK). It lists only the Gemini models Pi does not ship; a `models[]`
+entry with a built-in ID would replace Pi’s definition wholesale.
+Pi 1.5.2 ships `gemini-4-argon`, `gemini-3.8-flash`, `gemini-3.6-flash`,
+`gemini-3.5-flash-lite`, `gemini-3.1-pro-preview`, and
+`gemini-3.1-pro-preview-customtools` on `google-vertex`:
 
 ```jsonc
 "google-vertex": {
@@ -120,29 +124,27 @@ SDK):
   "api": "google-vertex",
   "apiKey": "gcp-vertex-credentials",  // sentinel; ADC drives actual auth
   "models": [
-    { "id": "gemini-3.5-flash", ... },
-    { "id": "gemini-3.1-flash-lite", ... },
-    { "id": "gemini-3-flash-preview", ... },
-    { "id": "gemini-3.1-pro-preview", ... },
-    { "id": "gemini-3.1-pro-preview-customtools", ... }
+    { "id": "gemini-4-carbon", ... },
+    { "id": "gemini-4-hydrogen", ... }
   ]
 }
 ```
 
-Allowlist (`src/metaproc/settings.py:PI_VALID_MODELS`) must list the same naked model
-IDs. The `test_pi_valid_models_catalog.py` regression test enforces parity.
+The allowlist (`src/metaproc/settings.py:PI_VALID_MODELS`) is derived from
+`known_model_ids("pi-cli")`, which combines the IDs in this file with the reviewed Pi
+built-in IDs in `src/metaproc/config/model_catalog.py`. The
+`test_pi_valid_models_catalog.py` regression test enforces parity.
 
-`vertex-maas` (GLM-5, DeepSeek, Qwen, GLM 4.7, Kimi) stays on `openai-completions` —
-those are MaaS-hosted OpenAI-compat models that don’t go through Vertex’s native Gemini
-API.
+`vertex-maas` (GLM-5.2, DeepSeek V4.1 Flash) stays on `openai-completions` — those are
+MaaS-hosted OpenAI-compat models that don’t go through Vertex’s native Gemini API.
 
 ## 6. Tool-use attribution (post-hoc, from emitted data)
 
 The `derive_variant` cascade (§4) and the provider-configuration shape (§5) together
 describe which adapter-path a variant **should** route through at dispatch time.
 Runbook gap: pre-dispatch inspection is easy, but post-hoc confirmation ("did W1
-actually hit Vertex MaaS GLM-5 or did it fall back to the OpenAI-compat surface?") used
-to require log archaeology.
+actually hit Vertex MaaS GLM-5.2 or did it fall back to the OpenAI-compat surface?")
+used to require log archaeology.
 
 `ProviderRateLimitStats` closes that gap.
 The pi-cli log parser writes a `rate_limit_event` record whenever the adapter receives a
@@ -154,7 +156,7 @@ provider rate-limit response; the metaproc aggregator bins those events by
 rate_limit_stats:
   - provider: vertex-maas
     adapter: pi-cli
-    variant: pi-cli-glm-5-maas
+    variant: pi-cli-glm-5.2-maas
     count: 42
 ```
 
@@ -182,12 +184,12 @@ Probed against `gemini-3-flash-preview` on 2026-04-18:
 
 ## 8. Gemini smoke matrix (laptop coverage)
 
-Nine-cell matrix proves both harnesses can dispatch every registered Gemini model
-end-to-end with tool use intact.
-Lives at
-[`process/self-test/smoke-gemini-matrix.process.md`](../../process/self-test/smoke-gemini-matrix.process.md).
+The [Gemini smoke matrix](../../process/self-test/smoke-gemini-matrix.process.md) lists
+the model and harness combinations it checks for end-to-end tool use.
 Independent of the openai-completions blast radius covered above — this is the
 regression guard that catches it.
+
+The 2026-05-25 run covered the model and harness combinations below:
 
 | Harness | gemini-3.5-flash | gemini-3.1-pro-preview | gemini-3.1-flash-lite | gemini-3-flash-preview | gemini-3-pro-preview |
 | --- | --- | --- | --- | --- | --- |
@@ -207,16 +209,24 @@ uv run metaproc run-process process/self-test/smoke-gemini-matrix.process.md \
   --var RUNS_DIR=/tmp/metaproc-runs --var RUN_ID=gemini-matrix-$(date +%Y%m%dT%H%M%S)
 ```
 
-Last verified: 2026-05-25 — all 9 cells PASS (full matrix wall clock: 2m).
+All nine cells passed on Vertex on 2026-05-25 (full matrix wall clock: 2m). The
+[November refresh evidence](../project/research/research-2026-11-18-model-and-harness-refresh.md)
+records later checks by model, harness, and credential route.
 
 ## 9. Execution-profile workflow smoke (operator-facing readiness)
 
-Cross-harness “deep” smoke that exercises every shipped execution profile via
+Cross-harness smoke that exercises selected shipped execution profiles via
 `metaproc probe-tool-use --execution-profile <name>`. Proves operator
 `--execution-profiles <name>` invocations from large workflow dispatch (or ad-hoc
 `metaproc run-process`) actually work end-to-end including tool use.
 Lives at
-[`process/self-test/smoke-execution-profiles.process.md`](../../process/self-test/smoke-execution-profiles.process.md).
+[`process/self-test/smoke-execution-profiles.process.md`](../../process/self-test/smoke-execution-profiles.process.md),
+which lists the covered profiles and links to the separate Gemini profile comparison.
+
+The 2026-05-25 run covered the profiles shipped then.
+Use `pi-glm52` after Vertex’s retirement of the model in `pi-glm5`, and
+`gemini-hydrogen` for new Flash-class Gemini CLI runs.
+The `pi-gemini-flash` profile still selects the exact 3.5 Flash model on Vertex.
 
 | Profile | Adapter | Model | Status |
 | --- | --- | --- | --- |
@@ -235,7 +245,8 @@ uv run metaproc run-process process/self-test/smoke-execution-profiles.process.m
   --var RUNS_DIR=/tmp/metaproc-runs --var RUN_ID=exec-profiles-$(date +%Y%m%dT%H%M%S)
 ```
 
-Last verified: 2026-05-25 — all 7 cells PASS (wall clock: 48s).
+Last verified: 2026-05-25, with the profiles of that time — all 7 cells PASS (wall
+clock: 48s).
 
 The probe phrases its prompt as a declarative user question
 (`"What is the first line of file X? Read it..."`) rather than an imperative instruction

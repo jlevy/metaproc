@@ -154,6 +154,11 @@ class MetaprocEnv(EnvEnum):
     METAPROC_VARIANT = optional(
         "Variant label passed through to worker / orchestrator entrypoints."
     )
+    METAPROC_ARTIFACT_NAMESPACE = optional("Explicit artifact namespace for a Batch orchestrator.")
+    METAPROC_STEP_VARIANTS = optional("Serialized JSON step-to-profile overrides for Batch.")
+    METAPROC_PROFILE_FILES = optional(
+        "JSON mapping of Batch workspace profile paths to SHA-256 digests."
+    )
     METAPROC_ADAPTER_CONFIG = optional(
         "Serialized JSON adapter configuration passed to worker entrypoints."
     )
@@ -182,6 +187,9 @@ class MetaprocEnv(EnvEnum):
     METAPROC_ITEM_CONTEXTS_FILE = optional(
         "Path to a file containing item contexts (alternative to inline JSON)."
     )
+    METAPROC_WORKER_STEP_FILE = optional(
+        "Path to the orchestrator-resolved step on shared worker storage."
+    )
 
     # ── Secrets (.env-backed or Secret Manager) ──
     GCP_CREDENTIALS_BASE64 = secret(
@@ -203,11 +211,23 @@ class MetaprocEnv(EnvEnum):
         "OpenAI API key used by the PI CLI adapter and the codex-cli adapter "
         "(Vehicle A, API-key mode)."
     )
+    CODEX_API_KEY = secret(
+        "OpenAI API key `codex exec` reads from the environment; it ignores OPENAI_API_KEY. "
+        "Normally keep this placeholder or delete the line: the codex-cli adapter ignores "
+        "the placeholder and copies OPENAI_API_KEY here for a run with no stored Codex "
+        "login. A real value outranks every stored Codex login, ChatGPT sign-in included."
+    )
+    CODEX_ACCESS_TOKEN = secret(
+        "Codex personal access token or agent identity token. It outranks stored logins "
+        "for direct Codex launches and is removed from pooled slot environments. Leave empty "
+        "when using a stored login.",
+        '""',
+    )
     DEEPSEEK_API_KEY = secret(
         "DeepSeek API key for the pi-cli `deepseek` provider (DeepSeek V4 family, direct API)."
     )
     MOONSHOT_API_KEY = secret(
-        "Moonshot API key for the pi-cli `moonshot` provider (Kimi K2.6, direct API)."
+        "Moonshot API key for the pi-cli `moonshot` provider (Kimi family, direct API)."
     )
     GEMINI_API_KEY = secret("Gemini API key for direct (non-Vertex) Gemini adapter use.")
     GOOGLE_API_KEY = secret("Google API key for direct Gemini adapter fallback.")
@@ -246,7 +266,7 @@ class MetaprocEnv(EnvEnum):
     )
     METAPROC_GCP_SECRET_MOONSHOT_API_KEY = optional(
         "GCP Secret Manager ref that provides MOONSHOT_API_KEY to Batch workers "
-        "(pi-cli moonshot provider, Kimi K2.6 direct API)."
+        "(pi-cli moonshot provider, Kimi direct API)."
     )
     CLAUDE_CODE_CREDS_JSON = secret(
         "Claude Code OAuth credential blob injected into Batch workers from Secret Manager."
@@ -427,6 +447,8 @@ SECRET_VARS: frozenset[MetaprocEnv] = frozenset(
         MetaprocEnv.PERPLEXITY_API_KEY,
         MetaprocEnv.ANTHROPIC_API_KEY,
         MetaprocEnv.OPENAI_API_KEY,
+        MetaprocEnv.CODEX_API_KEY,
+        MetaprocEnv.CODEX_ACCESS_TOKEN,
         MetaprocEnv.DEEPSEEK_API_KEY,
         MetaprocEnv.MOONSHOT_API_KEY,
         MetaprocEnv.GEMINI_API_KEY,

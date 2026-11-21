@@ -98,7 +98,7 @@ class ProviderRateLimitStats(BaseModel):
     """Count of rate-limit events binned by (provider, adapter, variant).
 
     Populated by the pi-cli log parser when it sees ``rate_limit_event`` records.
-    Lets operators say "X% of W1's failures were Vertex MaaS GLM-5 rate-limits,
+    Lets operators say "X% of W1's failures were Vertex MaaS GLM-5.2 rate-limits,
     not worker-local defects" from emitted data, not narrative.
     """
 

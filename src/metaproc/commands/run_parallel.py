@@ -21,6 +21,7 @@ from typing import Any, cast
 
 import typer
 from prettyfmt import fmt_timedelta
+from pydantic import ValidationError as PydanticValidationError
 from strif import atomic_write_text
 
 from metaproc.cloud.gcp.resolve_token import resolve_gcp_token
@@ -86,6 +87,7 @@ from metaproc.commands.helpers import (
     validate_gcp_worker_topology,
 )
 from metaproc.config.env_vars import MetaprocEnv
+from metaproc.dispatch.worker_payload import WorkerStepPayload
 from metaproc.engine.build_plan import build_plan, merge_defaults
 from metaproc.engine.code_handler import resolve_code_handler
 from metaproc.engine.command_diagnostics import (
@@ -153,6 +155,7 @@ from metaproc.models.authored import (
     RetryPolicy,
     StepContext,
 )
+from metaproc.models.plan import ResolvedStep
 from metaproc.models.runtime import (
     AttemptDisposition,
     AttemptRecord,
@@ -470,6 +473,60 @@ def _resolve_retry_policy(
     return policy
 
 
+def _read_worker_step(run_dir: Path, step: str, payload_path: Path) -> WorkerStepPayload:
+    expected_dir = paths_mod.step_state_dir(run_dir, step) / "worker_payloads"
+    try:
+        if payload_path.resolve().parent != expected_dir.resolve():
+            raise CLIError(f"Worker step payload is outside {expected_dir}: {payload_path}")
+        payload = WorkerStepPayload.model_validate_json(payload_path.read_bytes())
+    except OSError as exc:
+        raise CLIError(f"Could not read worker step payload {payload_path}") from exc
+    except PydanticValidationError:
+        # The payload may contain sensitive adapter configuration or step environment.
+        raise CLIError(f"Invalid worker step payload {payload_path}") from None
+    if payload.target.step_id != step or payload.target.mode != "agent":
+        raise CLIError(f"Worker step payload {payload_path} does not describe agent step {step!r}")
+    return payload
+
+
+def _build_parallel_target(
+    spec: ProcessSpec,
+    variables: dict[str, str],
+    *,
+    process_path: Path,
+    step: str,
+    adapter: str | None,
+    variant_flag: str | None,
+    config_overrides: dict[str, str],
+) -> ResolvedStep:
+    # Treat --variant as an adapter override only if it names a known adapter slot.
+    # A synthetic variant derived from adapter and model is just a directory label.
+    if adapter:
+        effective_adapter_override: str | None = adapter
+    elif variant_flag and (
+        variant_flag in spec.defaults.adapters or variant_flag in ADAPTER_REGISTRY
+    ):
+        effective_adapter_override = variant_flag
+    else:
+        effective_adapter_override = None
+    try:
+        resolved = build_plan(
+            spec,
+            variables,
+            process_path=process_path,
+            adapter_override=effective_adapter_override,
+            config_overrides=config_overrides or None,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ValidationError(str(exc)) from exc
+
+    target = next((s for s in resolved.steps if s.step_id == step), None)
+    if target is None:
+        available = [s.step_id for s in resolved.steps]
+        raise CLIError(f"step '{step}' not found. Available: {', '.join(available)}")
+    return target
+
+
 @app.command("run-parallel")
 def run_parallel(
     process_spec: Path = typer.Argument(..., help="Path to .process.md spec file"),
@@ -625,41 +682,26 @@ def run_parallel(
 
     variables = expand_process_vars(spec, variables, process_dir=process_dir)
     require_runtime_runs_dir(variables, command="run-parallel")
+    run_dir = compute_run_dir(spec, variables)
 
-    # `--variant` may name an entry in `spec.defaults.adapters` (e.g.
-    # `claude-code-cli`) OR be a synthetic composite the engine derives at
-    # fan-out time from adapter+model (e.g. `pi-cli-managed-model` for an
-    # extract-items step whose spec declares `adapter.type: pi-cli` with
-    # config_by_variant.pi-cli.{provider,model}). Mirror run-process: when no
-    # explicit `--adapter` is passed and the variant DOES name a known
-    # adapter slot, let the variant drive adapter resolution. Otherwise the
-    # variant is just a run-dir label and the step's own spec drives adapter
-    # selection. Without this branch, a worker invoked with
-    # `--variant pi-cli-managed-model` (the cloud worker leg of extract-items) was
-    # rejected by build_plan as `unknown adapter override`.
-    if adapter:
-        effective_adapter_override: str | None = adapter
-    elif variant_flag and (
-        variant_flag in spec.defaults.adapters or variant_flag in ADAPTER_REGISTRY
-    ):
-        effective_adapter_override = variant_flag
+    worker_step_path = MetaprocEnv.METAPROC_WORKER_STEP_FILE.read_str(default="")
+    worker_step = (
+        _read_worker_step(run_dir, step, Path(worker_step_path)) if worker_step_path else None
+    )
+    if worker_step is not None:
+        # Run-process has already applied the run record's profile and namespace rules,
+        # including resolutions made solely for this scope. The worker executes its target.
+        target = worker_step.target
     else:
-        effective_adapter_override = None
-    try:
-        resolved = build_plan(
+        target = _build_parallel_target(
             spec,
             variables,
             process_path=process_path,
-            adapter_override=effective_adapter_override,
-            config_overrides=config_overrides or None,
+            step=step,
+            adapter=adapter,
+            variant_flag=variant_flag,
+            config_overrides=config_overrides,
         )
-    except (TypeError, ValueError) as exc:
-        raise ValidationError(str(exc)) from exc
-
-    target = next((s for s in resolved.steps if s.step_id == step), None)
-    if target is None:
-        available = [s.step_id for s in resolved.steps]
-        raise CLIError(f"step '{step}' not found. Available: {', '.join(available)}")
 
     step_def = find_step_def(spec, step)
     merged = merge_defaults(step_def, spec.defaults)
@@ -678,7 +720,8 @@ def run_parallel(
     runtime_config = cast("dict[str, object]", resolve_runtime_config(merged_config, variables))
 
     derived_variant = derive_variant(adapter_type, runtime_config)
-    effective_execution_profile = target.execution_profile or adapter or derived_variant
+    profile_override = variables.get("EXECUTION_PROFILE") if worker_step is not None else adapter
+    effective_execution_profile = target.execution_profile or profile_override or derived_variant
     effective_variant = (
         target.artifact_namespace
         or step_def.artifact_namespace
@@ -704,9 +747,8 @@ def run_parallel(
     # If a previous pool was killed, items it marked "running" would be
     # skipped by discovery forever.  Reset them to "failed" so they're
     # retried.
-    run_dir = compute_run_dir(spec, variables)
     run_context = variables.get("RUN_ID", variables.get("DATE", variables.get("SCOPE", "")))
-    run_id = f"{spec.name}/{run_context}"
+    run_id = worker_step.scope_run_id if worker_step is not None else f"{spec.name}/{run_context}"
     # The scope may bind inputs (`on_change: new_run`); hold this launch to them before
     # the reconciliation below, the first write into the scope's task state.
     refuse_changed_input_bindings(run_dir, spec, variables, launch="run-parallel")
@@ -1176,8 +1218,6 @@ def run_parallel(
     except KeyError as exc:
         raise CLIError(str(exc)) from exc
 
-    run_dir = compute_run_dir(spec, variables)
-
     # Scope pool state per worker when running on cloud VMs.
     # Without this, multiple workers clobber shared runpool-status.yaml on NFS.
     worker_id = MetaprocEnv.METAPROC_WORKER_ID.read_str(default=None)
@@ -1260,6 +1300,7 @@ def run_parallel(
             step=step,
             each=each,
             variables=variables,
+            scope_run_id=run_id,
             item_contexts=item_contexts,
             adapter_type=adapter_type,
             merged_config=merged_config,
@@ -1487,9 +1528,11 @@ def _build_prepare_launch(  # noqa: PLR0913
         # steps that USE that adapter (process-item, retrieve-precedent).
         # Steps that use a DIFFERENT adapter — e.g. extract-items with
         # pi-cli + a managed model — must NOT lease a claude slot: the slot
-        # path appends adapter-specific debug flags (``claude -d api``) to
-        # the cmd, which pi-cli rejects with ``Unknown option: -d`` and
-        # exits 1 in <10s; the runpool then classifies this as a crash
+        # path appends adapter-specific debug flags (for Claude Code,
+        # ``--debug-file <slot>/claude-code-debug.log``) to the cmd. Another
+        # adapter's CLI fails on them: pi-cli exited 1 in <10s with
+        # ``Unknown option: -d`` when the flags were ``-d api``. The
+        # runpool then classifies this as a crash
         # and cools the underlying Claude credential, eventually
         # exhausting the pool. Skipping the pool path for non-matching
         # adapter types keeps extract-items on the legacy single-credential

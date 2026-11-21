@@ -9,6 +9,7 @@ resolved :class:`Plan`, extract the markdown body, and recurse into composites.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,10 +18,25 @@ from metaproc.engine.build_plan import build_plan
 from metaproc.engine.process_scope import expand_process_vars
 from metaproc.engine.run_status import scan_step_progress
 from metaproc.io import fmf_read, read_yaml_file
+from metaproc.models.authored import ProcessSpec
+from metaproc.models.execution_profile import ExecutionProfile
 from metaproc.models.node_ids import child_subgraph_key, step_node_id
+from metaproc.models.plan import Plan
 from metaproc.models.viz import NodeProgress, ProgressSnapshot
 from metaproc.paths import run_config_file
 from metaproc.viz.project import PlanBundle
+
+
+@dataclass(frozen=True, slots=True)
+class PlanBundleLaunch:
+    """Launch profile settings for recursive resource snapshot planning."""
+
+    adapter_override: str | None = None
+    profile_files: tuple[Path, ...] = ()
+    recorded_profiles: Mapping[str, ExecutionProfile] | None = None
+    profile_model_overrides: Mapping[str, str] | None = None
+    namespace_default_models: Mapping[str, str] | None = None
+    artifact_namespace: str | None = None
 
 
 def load_plan_bundle(
@@ -28,6 +44,8 @@ def load_plan_bundle(
     params: dict[str, str] | None = None,
     *,
     validate_spec: bool = True,
+    resolved_root: tuple[ProcessSpec, Plan] | None = None,
+    launch: PlanBundleLaunch | None = None,
 ) -> PlanBundle:
     """Load ``process_path`` recursively and return a :class:`PlanBundle`.
 
@@ -39,9 +57,19 @@ def load_plan_bundle(
     framework template names, scope collisions, agent write boundaries) is
     skipped so viewers can render structurally-valid-but-semantically-invalid
     specs. See :func:`metaproc.engine.build_plan.build_plan`.
+
+    Pass *resolved_root* when the caller has already planned the root with
+    launch settings. The bundle uses that plan's composite paths. Pass *launch*
+    to resolve children with the same profile sources and inherited override as execution.
     """
     resolved_path = resolve_process_path(process_path)
-    return _load_bundle(resolved_path, dict(params or {}), validate_spec=validate_spec)
+    return _load_bundle(
+        resolved_path,
+        dict(params or {}),
+        validate_spec=validate_spec,
+        resolved_root=resolved_root,
+        launch=launch,
+    )
 
 
 def load_plan_bundle_from_run(run_dir: Path) -> PlanBundle | None:
@@ -76,24 +104,47 @@ def _load_bundle(
     params: dict[str, str],
     *,
     validate_spec: bool,
+    resolved_root: tuple[ProcessSpec, Plan] | None = None,
+    launch: PlanBundleLaunch | None = None,
 ) -> PlanBundle:
-    spec = load_process_spec(process_path)
-    expanded = expand_process_vars(spec, params, process_dir=process_path.parent)
-    plan = build_plan(
-        spec,
-        expanded,
-        process_path=process_path,
-        validate_required_inputs=False,
-        validate_spec=validate_spec,
-    )
+    if resolved_root is None:
+        spec = load_process_spec(process_path)
+        expanded = expand_process_vars(spec, params, process_dir=process_path.parent)
+        plan = build_plan(
+            spec,
+            expanded,
+            process_path=process_path,
+            validate_required_inputs=False,
+            validate_spec=validate_spec,
+            adapter_override=launch.adapter_override if launch else None,
+            artifact_namespace=launch.artifact_namespace if launch else None,
+            profile_files=launch.profile_files if launch else (),
+            recorded_profiles=launch.recorded_profiles if launch else None,
+            profile_model_overrides=launch.profile_model_overrides if launch else None,
+            namespace_default_models=launch.namespace_default_models if launch else None,
+        )
+    else:
+        spec, plan = resolved_root
     body = _extract_body_markdown(process_path)
     children: dict[str, PlanBundle] = {}
+    authored_steps = {step.id: step for step in spec.steps}
     for step in plan.steps:
         if step.mode == "composite" and step.uses_path:
             child_path = _resolve_child_path(process_path, step.uses_path)
             if child_path.exists():
+                child_launch = None
+                if launch is not None:
+                    pinned = authored_steps[step.step_id].execution_profile
+                    child_profile = (
+                        (step.execution_profile or pinned) if pinned else launch.adapter_override
+                    )
+                    child_launch = replace(
+                        launch,
+                        adapter_override=child_profile,
+                        artifact_namespace=step.artifact_namespace,
+                    )
                 children[step.step_id] = _load_bundle(
-                    child_path, dict(step.with_), validate_spec=validate_spec
+                    child_path, dict(step.with_), validate_spec=validate_spec, launch=child_launch
                 )
     return PlanBundle(
         plan=plan,
