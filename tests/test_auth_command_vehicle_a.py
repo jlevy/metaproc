@@ -27,6 +27,7 @@ from pathlib import Path
 
 import pytest
 import typer
+from click import unstyle
 from typer.testing import CliRunner
 
 import metaproc.commands.auth as auth_mod
@@ -383,7 +384,7 @@ class TestPushVehicleA:
         )
 
         assert result.exit_code == 2
-        assert "codex-cli requires --vehicle login-credentials" in result.output
+        assert "codex-cli requires --vehicle login-credentials" in unstyle(result.output)
         assert not fake_pool.entries
 
 
