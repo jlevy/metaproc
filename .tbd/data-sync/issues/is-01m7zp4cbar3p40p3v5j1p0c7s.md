@@ -3,9 +3,9 @@ type: is
 id: is-01m7zp4cbar3p40p3v5j1p0c7s
 title: Consolidate and review the November model catalog pull requests
 kind: task
-status: in_progress
+status: closed
 priority: 1
-version: 35
+version: 36
 spec_path: docs/project/specs/active/plan-2026-09-10-model-catalog-followups.md
 delegate: codex@spud10
 labels: []
@@ -48,7 +48,11 @@ child_order_hints:
 hold: null
 hold_until: null
 created_at: 2026-11-21T18:33:07.687Z
-updated_at: 2026-11-21T18:57:32.832Z
+updated_at: 2026-11-21T20:02:15.683Z
 started_at: 2026-11-21T18:35:31.176Z
+closed_at: 2026-11-21T20:02:15.681Z
+close_reason: "Consolidated #127 and #128 into #126 at 452d219, posted pinned reviews and dispositions, passed make verify and all four CI checks in GitHub Actions run 44943700525, and closed both superseded PRs. #126 remains open for the merge decision."
+resolution: null
+duplicate_of: null
 ---
 Integrate the unique contributions from GitHub PRs 127 and 128 into PR 126. Publish pinned tbd reviews and dispositions, verify the combined head, and close the superseded PRs.
