@@ -367,7 +367,10 @@ class TestClaudeCodeCliAdapterAuthCapable:
 
     def test_credential_scope_env(self, tmp_path):
         env = self.adapter.credential_scope_env(tmp_path)
-        assert env == {"CLAUDE_CONFIG_DIR": str(tmp_path)}
+        assert env == {
+            "CLAUDE_CONFIG_DIR": str(tmp_path),
+            "ANTHROPIC_CONFIG_DIR": str(tmp_path / ".anthropic"),
+        }
 
     def test_debug_capture_args_under_slot(self, tmp_path):
         # Workers launch with `claude --debug-file <slot>/claude-code-debug.log`

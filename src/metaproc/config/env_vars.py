@@ -154,6 +154,7 @@ class MetaprocEnv(EnvEnum):
     METAPROC_VARIANT = optional(
         "Variant label passed through to worker / orchestrator entrypoints."
     )
+    METAPROC_ARTIFACT_NAMESPACE = optional("Explicit artifact namespace for a Batch orchestrator.")
     METAPROC_ADAPTER_CONFIG = optional(
         "Serialized JSON adapter configuration passed to worker entrypoints."
     )
@@ -208,6 +209,12 @@ class MetaprocEnv(EnvEnum):
         "Normally keep this placeholder or delete the line: the codex-cli adapter ignores "
         "the placeholder and copies OPENAI_API_KEY here for a run with no stored Codex "
         "login. A real value outranks every stored Codex login, ChatGPT sign-in included."
+    )
+    CODEX_ACCESS_TOKEN = secret(
+        "Codex personal access token or agent identity token. It outranks stored logins "
+        "for direct Codex launches and is removed from pooled slot environments. Leave empty "
+        "when using a stored login.",
+        '""',
     )
     DEEPSEEK_API_KEY = secret(
         "DeepSeek API key for the pi-cli `deepseek` provider (DeepSeek V4 family, direct API)."
@@ -434,6 +441,7 @@ SECRET_VARS: frozenset[MetaprocEnv] = frozenset(
         MetaprocEnv.ANTHROPIC_API_KEY,
         MetaprocEnv.OPENAI_API_KEY,
         MetaprocEnv.CODEX_API_KEY,
+        MetaprocEnv.CODEX_ACCESS_TOKEN,
         MetaprocEnv.DEEPSEEK_API_KEY,
         MetaprocEnv.MOONSHOT_API_KEY,
         MetaprocEnv.GEMINI_API_KEY,

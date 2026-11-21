@@ -21,15 +21,13 @@ yielding no file to push. The pre-push preflight enforces this.
 from __future__ import annotations
 
 import getpass
-import json
 import subprocess
 import tomllib
 from pathlib import Path
-from typing import Any, cast
 
 import typer
 
-from metaproc.adapters.codex_cli import codex_auth_json_mode, resolve_codex_home
+from metaproc.adapters.codex_cli import resolve_codex_home, validate_codex_oauth_blob
 from metaproc.cli import app, get_output
 from metaproc.config.env_vars import MetaprocEnv
 
@@ -146,31 +144,11 @@ def _read_auth_json_blob() -> str:
 
 
 def _validate_codex_payload(payload: str) -> None:
-    """Raise if payload is not a JSON object with a ChatGPT-OAuth tokens block."""
+    """Validate the upload with the same rules as slot and bootstrap credentials."""
     try:
-        parsed: Any = json.loads(payload)
-    except json.JSONDecodeError as exc:
-        msg = f"{_auth_json_path()} is not valid JSON: {exc}"
-        raise RuntimeError(msg) from exc
-    if not isinstance(parsed, dict):
-        msg = f"{_auth_json_path()} payload must be a JSON object"
-        raise RuntimeError(msg)
-    payload_dict = cast("dict[str, Any]", parsed)
-    tokens = payload_dict.get("tokens")
-    if not isinstance(tokens, dict):
-        msg = (
-            f"{_auth_json_path()} is missing the required top-level 'tokens' block. "
-            "codex-auth push only accepts ChatGPT-OAuth sessions (use `codex login`)."
-        )
-        raise RuntimeError(msg)
-    auth_mode = codex_auth_json_mode(payload_dict)
-    if auth_mode != "chatgpt":
-        msg = (
-            f"{_auth_json_path()} has auth_mode={auth_mode!r}. "
-            "codex-auth push only supports ChatGPT-OAuth sessions (auth_mode=chatgpt). "
-            "API-key auth should be exported as OPENAI_API_KEY directly."
-        )
-        raise RuntimeError(msg)
+        validate_codex_oauth_blob(payload)
+    except RuntimeError as exc:
+        raise RuntimeError(f"{_auth_json_path()}: {exc}. Run `codex login` to refresh it.") from exc
 
 
 # ── gcloud + Secret Manager helpers (monkey-patchable for tests) ─

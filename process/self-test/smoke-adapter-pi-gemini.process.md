@@ -26,7 +26,7 @@ process:
     - id: auth-check-dry
       mode: code
       command: >-
-        bash -lc "cd ../../.. && uv run metaproc auth-check --variant pi-cli"
+        bash -lc "cd ../.. && uv run metaproc auth-check --variant pi-cli"
       description: >-
         Dry survey — binary path + credential source (`~/.pi/auth.json`)
         + GCP ADC for google-vertex.
@@ -35,7 +35,7 @@ process:
     - id: live-probe
       mode: code
       command: >-
-        bash -lc "cd ../../.. && SMOKE_MODEL=\"${PI_GEMINI_SMOKE_MODEL:-gemini-3.1-pro-preview}\" && SMOKE_ASSERT=\"${PI_GEMINI_SMOKE_ASSERT_MODEL:-$SMOKE_MODEL}\" && uv run metaproc auth-check --live --adapter pi-cli --model \"$SMOKE_MODEL\" --provider google-vertex --assert-model \"$SMOKE_ASSERT\""
+        bash -lc "cd ../.. && SMOKE_MODEL=\"${PI_GEMINI_SMOKE_MODEL:-gemini-3.1-pro-preview}\" && SMOKE_ASSERT=\"${PI_GEMINI_SMOKE_ASSERT_MODEL:-$SMOKE_MODEL}\" && uv run metaproc auth-check --live --adapter pi-cli --model \"$SMOKE_MODEL\" --provider google-vertex --assert-model \"$SMOKE_ASSERT\""
       description: >-
         Trivial "Respond with exactly: OK" prompt through pi-cli with
         `--provider google-vertex` and the requested Gemini model.
@@ -48,7 +48,7 @@ process:
     - id: tool-probe
       mode: code
       command: >-
-        bash -lc "cd ../../.. && SMOKE_MODEL=\"${PI_GEMINI_SMOKE_MODEL:-gemini-3.1-pro-preview}\" && uv run metaproc probe-tool-use --harness pi-cli --provider google-vertex --model \"$SMOKE_MODEL\""
+        bash -lc "cd ../.. && SMOKE_MODEL=\"${PI_GEMINI_SMOKE_MODEL:-gemini-3.1-pro-preview}\" && uv run metaproc probe-tool-use --harness pi-cli --provider google-vertex --model \"$SMOKE_MODEL\""
       description: >-
         Round-trip a single file-read tool call. Verifies both that pi
         emits a `toolcall_end` event AND that the model echoes the

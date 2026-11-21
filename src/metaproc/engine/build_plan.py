@@ -15,7 +15,7 @@ from metaproc.config.model_catalog import known_model_ids, removed_model_note
 from metaproc.engine.discovery import discover_items_from_source
 from metaproc.engine.graph import validate_step_graph
 from metaproc.engine.lane_expand import materialize_execution_lanes
-from metaproc.engine.placeholders import resolve_templates
+from metaproc.engine.placeholders import extract_placeholders, resolve_templates
 from metaproc.engine.process_scope import (
     is_dep_ref,
     parse_dep_ref,
@@ -126,6 +126,18 @@ def derive_run_artifact_namespace(
         key: _coerce_config_value(key, value) for key, value in (config_overrides or {}).items()
     }
     return derive_variant(adapter_override, raw_adapter_config, default_models=default_models)
+
+
+def recorded_profile_model_overrides(config: Mapping[object, object]) -> dict[str, str]:
+    """Read the profile-specific replacement models recorded by the last launch."""
+    raw = config.get("profile_model_overrides")
+    if not isinstance(raw, Mapping):
+        return {}
+    return {
+        profile: model
+        for profile, model in cast("Mapping[object, object]", raw).items()
+        if isinstance(profile, str) and isinstance(model, str) and model
+    }
 
 
 def _recorded_profile_model_error(
@@ -377,6 +389,7 @@ def _apply_adapter_validation(
     adapter_type: str,
     authored_adapter_type: str,
     merged_config: dict[str, object],
+    defer_model_validation: bool,
 ) -> dict[str, object]:
     """Validate merged config against the resolved adapter and drop or raise on rejects."""
     adapter = get_adapter(adapter_type)
@@ -385,6 +398,8 @@ def _apply_adapter_validation(
         return merged_config
 
     rejections = validate_config(merged_config)
+    if defer_model_validation:
+        rejections = [rejection for rejection in rejections if rejection.key != "model"]
     if not rejections:
         return merged_config
 
@@ -894,6 +909,7 @@ def build_plan(
     profile_files: Sequence[Path] = (),
     step_profile_overrides: dict[str, str] | None = None,
     config_overrides: dict[str, str] | None = None,
+    profile_model_overrides: Mapping[str, str] | None = None,
     validate_required_inputs: bool = True,
     validate_spec: bool = True,
     recorded_profiles: Mapping[str, ExecutionProfile] | None = None,
@@ -908,7 +924,8 @@ def build_plan(
     *namespace_default_models*, the adapter defaults a raw adapter ``--variant`` derives
     its artifact namespace against (``derive_run_artifact_namespace``). A recorded
     profile whose model the catalog no longer accepts is refused, naming its successor,
-    unless *config_overrides* select another model.
+    unless a model override selects another model. *profile_model_overrides* apply
+    only to steps that select the named profile.
 
     When *validate_spec* is False, the four spec-level validators (fan-out
     contracts, framework template names, scope collisions, agent write
@@ -1137,34 +1154,46 @@ def build_plan(
         if config_overrides:
             for key, value in config_overrides.items():
                 merged_config[key] = _coerce_config_value(key, value)
+        if step_profile is not None and profile_model_overrides is not None:
+            if override_model := profile_model_overrides.get(step_profile.name):
+                merged_config["model"] = override_model
 
-        recorded_model = merged_config.get("model")
-        unserved_recorded_model = (
+        configured_model = merged_config.get("model")
+        model = str(configured_model) if configured_model is not None else None
+        template_model = isinstance(configured_model, str) and bool(
+            extract_placeholders(configured_model)
+        )
+        retirement = removed_model_note(adapter_type, model) if model is not None else None
+        if (
             step_profile is not None
             and step_profile.source.kind == "recorded"
-            and recorded_model is not None
+            and model is not None
+            and not template_model
             and adapter_type in ADAPTER_REGISTRY
-            and str(recorded_model) not in known_model_ids(adapter_type)
-        )
-        if unserved_recorded_model and validate_spec:
-            # Planning would otherwise drop the model as a same-family reject and run
-            # the adapter default, which is not the run the profile describes.
-            raise ValueError(
-                _recorded_profile_model_error(
-                    cast("ResolvedExecutionProfile", step_profile),
-                    adapter_type=adapter_type,
-                    model=str(recorded_model),
-                    registry=profile_registry,
-                    selected_by=profile_selected_by,
+            and model not in known_model_ids(adapter_type)
+        ):
+            if validate_spec:
+                raise ValueError(
+                    _recorded_profile_model_error(
+                        step_profile,
+                        adapter_type=adapter_type,
+                        model=model,
+                        registry=profile_registry,
+                        selected_by=profile_selected_by,
+                    )
                 )
+        elif retirement is not None and validate_spec and step.mode == "agent":
+            raise ValueError(
+                f"step {step.id!r}: unknown {adapter_type} model {model!r}; {retirement}."
             )
-        if not unserved_recorded_model:
-            # A plan built only to be read (``validate_spec=False``, as ``metaproc
-            # status`` builds it) keeps such a step as the run recorded it.
+        else:
+            # Read-only plans keep historical IDs. Templates resolve at execution time.
             merged_config = _apply_adapter_validation(
                 adapter_type=adapter_type,
                 authored_adapter_type=authored_adapter_type,
                 merged_config=merged_config,
+                defer_model_validation=template_model
+                or (retirement is not None and not validate_spec and step.mode == "agent"),
             )
 
         for transform in get_plugin_registry().adapter_config_transforms:

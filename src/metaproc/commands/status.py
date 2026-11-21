@@ -79,6 +79,7 @@ def _load_plan_from_run(run_dir: Path) -> Plan | None:
         )
         from metaproc.engine.build_plan import (  # noqa: PLC0415 -- guarded import (optional dep / circular)
             build_plan,
+            recorded_profile_model_overrides,
         )
         from metaproc.engine.process_scope import (  # noqa: PLC0415 -- guarded import (optional dep / circular)
             expand_process_vars,
@@ -97,6 +98,7 @@ def _load_plan_from_run(run_dir: Path) -> Plan | None:
             adapter_override=_optional_config_string(config, "execution_profile"),
             artifact_namespace=_optional_config_string(config, "artifact_namespace"),
             step_profile_overrides=recorded_step_variants(config),
+            profile_model_overrides=recorded_profile_model_overrides(config),
             validate_required_inputs=False,
             validate_spec=False,
             recorded_profiles=recorded_execution_profiles(config),

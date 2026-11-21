@@ -113,6 +113,7 @@ def test_codex_accepts_pinned_cli_effort_syntax(
         "gemini-4-carbon",
         "gemini-4-argon",
         "gemini-4-hydrogen",
+        "gemini-4-neon",
         "gemini-3.8-flash",
         "gemini-3.6-flash",
         "gemini-3.5-flash-lite",
@@ -129,7 +130,10 @@ def test_gemini_preserves_accepted_explicit_models(
     prompt = tmp_path / "prompt.md"
     prompt.write_text("Select the requested model.", encoding="utf-8")
 
-    command = GeminiCliAdapter().build_command(prompt, {"model": model}, {})
+    adapter = GeminiCliAdapter()
+    config: dict[str, object] = {"model": model}
+    assert adapter.validate_config(config) == []
+    command = adapter.build_command(prompt, config, {})
 
     assert _selected_model(command, "-m") == model
 

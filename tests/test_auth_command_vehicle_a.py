@@ -361,6 +361,31 @@ class TestPushVehicleA:
         combined = result.stderr + result.stdout
         assert "oauth-token" in combined or "vehicle" in combined.lower()
 
+    def test_codex_push_rejects_token_vehicle_before_sourcing_a_bearer(
+        self, runner: CliRunner, fake_pool: _InMemoryBackend, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def fail_if_called(_path: Path | None) -> str:
+            pytest.fail("Codex pool push must not source a Claude OAuth token")
+
+        monkeypatch.setattr(auth_mod, "_source_oauth_token", fail_if_called)
+        result = runner.invoke(
+            app,
+            [
+                "auth",
+                "push",
+                "--adapter",
+                "codex-cli",
+                "--label",
+                "codex",
+                "--vehicle",
+                "oauth-token",
+            ],
+        )
+
+        assert result.exit_code == 2
+        assert "codex-cli requires --vehicle login-credentials" in result.output
+        assert not fake_pool.entries
+
 
 # ── push --vehicle login-credentials (Vehicle B) ─────────────────
 

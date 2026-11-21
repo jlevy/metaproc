@@ -20,68 +20,68 @@ process:
     - id: gemini-cli-4-carbon
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter gemini-cli --model gemini-4-carbon --assert-model gemini-4-carbon && uv run metaproc probe-tool-use --harness gemini-cli --model gemini-4-carbon --timeout 180"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter gemini-cli --model gemini-4-carbon --assert-model gemini-4-carbon && uv run metaproc probe-tool-use --harness gemini-cli --model gemini-4-carbon --timeout 180"
       description: gemini-cli + gemini-4-carbon (GA 2026-11-10). Strongest Gemini 4 model.
 
     - id: gemini-cli-4-argon
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter gemini-cli --model gemini-4-argon --assert-model gemini-4-argon && uv run metaproc probe-tool-use --harness gemini-cli --model gemini-4-argon --timeout 180"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter gemini-cli --model gemini-4-argon --assert-model gemini-4-argon && uv run metaproc probe-tool-use --harness gemini-cli --model gemini-4-argon --timeout 180"
       description: gemini-cli + gemini-4-argon (GA 2026-10-13). Vertex availability until at least 2027-10-13.
 
     - id: gemini-cli-4-hydrogen
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter gemini-cli --model gemini-4-hydrogen --assert-model gemini-4-hydrogen && uv run metaproc probe-tool-use --harness gemini-cli --model gemini-4-hydrogen --timeout 120"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter gemini-cli --model gemini-4-hydrogen --assert-model gemini-4-hydrogen && uv run metaproc probe-tool-use --harness gemini-cli --model gemini-4-hydrogen --timeout 120"
       description: gemini-cli + gemini-4-hydrogen (GA 2026-11-12). Google's recommended 3.8 Flash successor.
 
     - id: gemini-cli-3.8-flash
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter gemini-cli --model gemini-3.8-flash --assert-model gemini-3.8-flash && uv run metaproc probe-tool-use --harness gemini-cli --model gemini-3.8-flash --timeout 120"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter gemini-cli --model gemini-3.8-flash --assert-model gemini-3.8-flash && uv run metaproc probe-tool-use --harness gemini-cli --model gemini-3.8-flash --timeout 120"
       description: gemini-cli + gemini-3.8-flash (GA 2026-09-02). Also the target of the flash alias.
 
     - id: gemini-cli-3.5-flash-lite
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter gemini-cli --model gemini-3.5-flash-lite --assert-model gemini-3.5-flash-lite && uv run metaproc probe-tool-use --harness gemini-cli --model gemini-3.5-flash-lite --timeout 120"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter gemini-cli --model gemini-3.5-flash-lite --assert-model gemini-3.5-flash-lite && uv run metaproc probe-tool-use --harness gemini-cli --model gemini-3.5-flash-lite --timeout 120"
       description: gemini-cli + gemini-3.5-flash-lite (GA 2026-07-21). Also the target of the flash-lite alias.
 
     - id: gemini-cli-3.1-pro-preview
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter gemini-cli --model gemini-3.1-pro-preview --assert-model gemini-3.1-pro-preview && uv run metaproc probe-tool-use --harness gemini-cli --model gemini-3.1-pro-preview --timeout 180"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter gemini-cli --model gemini-3.1-pro-preview --assert-model gemini-3.1-pro-preview && uv run metaproc probe-tool-use --harness gemini-cli --model gemini-3.1-pro-preview --timeout 180"
       description: gemini-cli + gemini-3.1-pro-preview. Deeper-reasoning preview lane.
 
     - id: gemini-cli-3.1-pro-preview-customtools
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter gemini-cli --model gemini-3.1-pro-preview-customtools --assert-model gemini-3.1-pro-preview-customtools && uv run metaproc probe-tool-use --harness gemini-cli --model gemini-3.1-pro-preview-customtools --timeout 180"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter gemini-cli --model gemini-3.1-pro-preview-customtools --assert-model gemini-3.1-pro-preview-customtools && uv run metaproc probe-tool-use --harness gemini-cli --model gemini-3.1-pro-preview-customtools --timeout 180"
       description: gemini-cli + gemini-3.1-pro-preview-customtools. The gemini-cli default.
 
     # ── pi-cli (google-vertex) cells (4 models: gemini-4-hydrogen from pi-models.default.json, the rest Pi built-ins) ──
     - id: pi-cli-4-hydrogen
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter pi-cli --model gemini-4-hydrogen --provider google-vertex --assert-model gemini-4-hydrogen && uv run metaproc probe-tool-use --harness pi-cli --provider google-vertex --model gemini-4-hydrogen --timeout 120"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter pi-cli --model gemini-4-hydrogen --provider google-vertex --assert-model gemini-4-hydrogen && uv run metaproc probe-tool-use --harness pi-cli --provider google-vertex --model gemini-4-hydrogen --timeout 120"
       description: pi-cli (google-vertex) + gemini-4-hydrogen. Validates the google-vertex API path.
 
     - id: pi-cli-4-argon
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter pi-cli --model gemini-4-argon --provider google-vertex --assert-model gemini-4-argon && uv run metaproc probe-tool-use --harness pi-cli --provider google-vertex --model gemini-4-argon --timeout 180"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter pi-cli --model gemini-4-argon --provider google-vertex --assert-model gemini-4-argon && uv run metaproc probe-tool-use --harness pi-cli --provider google-vertex --model gemini-4-argon --timeout 180"
       description: pi-cli (google-vertex) + gemini-4-argon.
 
     - id: pi-cli-3.8-flash
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter pi-cli --model gemini-3.8-flash --provider google-vertex --assert-model gemini-3.8-flash && uv run metaproc probe-tool-use --harness pi-cli --provider google-vertex --model gemini-3.8-flash --timeout 120"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter pi-cli --model gemini-3.8-flash --provider google-vertex --assert-model gemini-3.8-flash && uv run metaproc probe-tool-use --harness pi-cli --provider google-vertex --model gemini-3.8-flash --timeout 120"
       description: pi-cli (google-vertex) + gemini-3.8-flash.
 
     - id: pi-cli-3.1-pro-preview
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter pi-cli --model gemini-3.1-pro-preview --provider google-vertex --assert-model gemini-3.1-pro-preview && uv run metaproc probe-tool-use --harness pi-cli --provider google-vertex --model gemini-3.1-pro-preview --timeout 180"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check --live --adapter pi-cli --model gemini-3.1-pro-preview --provider google-vertex --assert-model gemini-3.1-pro-preview && uv run metaproc probe-tool-use --harness pi-cli --provider google-vertex --model gemini-3.1-pro-preview --timeout 180"
       description: pi-cli (google-vertex) + gemini-3.1-pro-preview.
 ---
 # smoke-gemini-matrix — full Gemini coverage matrix across both harnesses

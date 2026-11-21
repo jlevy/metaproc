@@ -1,5 +1,5 @@
 ---
-last_updated: '2026-11-18'
+last_updated: '2026-11-21'
 
 providers:
   openai:
@@ -290,7 +290,7 @@ providers:
         cost_source: self-reported
         source_url: 'https://platform.claude.com/docs/en/about-claude/pricing'
         last_reviewed: '2026-11-18'
-        notes: "Reviewed 2026-11-18 against Anthropic's pricing page. TIERED: stored rates are for requests whose prompt (input plus cache reads and writes) is up to 100,000 tokens. A request over 100,000 prompt tokens bills $0.50 input, $0.625 5-minute cache write, $0.05 cache read, and $2.50 output, 5x these rates. The schema has one rate card per model, so computed costs for long-prompt work are a lower bound; Claude CLI's self-reported cost remains the actual_cost when present. 1-hour cache writes are $0.20 (or $1.00 over 100K)."
+        notes: "Reviewed 2026-11-18 against Anthropic's pricing page. TIERED: stored rates are for requests whose prompt (input plus cache reads and writes) is up to 100,000 tokens. A request over 100,000 prompt tokens bills $0.50 input, $0.625 5-minute cache write, $0.05 cache read, and $2.50 output, 5x these rates. The schema has one rate card per model, so computed costs for long-prompt work are a lower bound. Claude CLI's reported cost takes precedence as the list-cost estimate. 1-hour cache writes are $0.20 (or $1.00 over 100K)."
       claude-haiku-4-5:
         actual_price:
           input_per_1m: 1.00
@@ -351,6 +351,15 @@ providers:
         source_url: 'https://aistudio.google.com/docs/pricing'
         last_reviewed: '2026-11-18'
         notes: "Reviewed 2026-11-18 against Google's Gemini API pricing page and cross-checked against the Vertex AI pricing page. GA 2026-11-12; a free tier is also available. Standard paid tier with no context-length tier; output includes thinking tokens. Implicit caching only (cache read is 0.05x input). Vertex publishes a $1.875 cache-write rate effective 2027-01-12, which is not stored yet; its non-global regions charge 10% more."
+      gemini-4-neon:
+        actual_price:
+          input_per_1m: 3.00
+          output_per_1m: 15.00
+          cache_read_per_1m: 0.15
+        cost_source: computed
+        source_url: 'https://aistudio.google.com/docs/pricing#gemini-4-neon'
+        last_reviewed: '2026-11-21'
+        notes: "Gemini API Standard paid pricing for Gemini CLI estimates. Output includes thinking tokens. Caching is implicit."
       gemini-3.8-flash:
         actual_price:
           input_per_1m: 0.75
@@ -507,7 +516,7 @@ providers:
         cost_source: computed
         source_url: 'https://platform.kimi.ai/docs/pricing/chat'
         last_reviewed: '2026-11-18'
-        notes: "Reviewed 2026-11-18 against Kimi's model inference pricing page (platform.moonshot.ai now redirects to platform.kimi.ai). Current K3-series flagship; 1,048,576-token context; flat pricing with no context-length tier. cache_write_per_1m is the 5-minute TTL write rate ($4.00 for 1-hour writes); cache hits bill only the cached-input rate. Not yet in the model catalog."
+        notes: "Reviewed 2026-11-18 against Kimi's model inference pricing page (platform.moonshot.ai now redirects to platform.kimi.ai). Current K3-series flagship; 1,048,576-token context; flat pricing with no context-length tier. cache_write_per_1m is the 5-minute TTL write rate ($4.00 for 1-hour writes); cache hits bill only the cached-input rate. Packaged for Pi's moonshot provider."
       kimi-k3:
         actual_price:
           input_per_1m: 3.00
@@ -517,7 +526,7 @@ providers:
         cost_source: computed
         source_url: 'https://platform.kimi.ai/docs/pricing/chat'
         last_reviewed: '2026-11-18'
-        notes: "Reviewed 2026-11-18 against Kimi's model inference pricing page. K3-series model; 1,048,576-token context; flat pricing with no context-length tier. cache_write_per_1m is the 5-minute TTL write rate ($6.00 for 1-hour writes). Not yet in the model catalog."
+        notes: "Reviewed 2026-11-18 against Kimi's model inference pricing page. K3-series model; 1,048,576-token context; flat pricing with no context-length tier. cache_write_per_1m is the 5-minute TTL write rate ($6.00 for 1-hour writes). Packaged for Pi's moonshot provider."
       kimi-k2.6:
         actual_price:
           input_per_1m: 0.95
@@ -622,11 +631,9 @@ providers:
 ---
 # Model Pricing Reference
 
-All prices are **per 1M tokens in USD**. Used by metaproc to compute costs when a CLI
-adapter does not self-report cost (for example Gemini CLI, or Pi CLI runs against Vertex
-AI MaaS models).
-For adapters that self-report cost (for example Claude CLI via Anthropic
-API), the self-reported value still takes precedence for `actual_cost`.
+All prices are **per 1M tokens in USD**. Metaproc uses these rates as a fallback to
+estimate list cost from logged token counts.
+CLI-reported costs take precedence as list-cost estimates.
 
 Rows for models that the model catalog no longer accepts are kept, with a “Historical”
 note, because earlier run logs still need prices.
@@ -669,6 +676,7 @@ alias (same as `gpt-5.6-sol`), and the dated `claude-haiku-4-5-20251001` ID (sam
 | gpt-5.4 | OpenAI | $2.50 | 8.93x | $15.00 | $0.25 | -- | [openai](https://developers.openai.com/api/docs/pricing) |
 | claude-sonnet-4-6 | Anthropic | $3.00 | 10.71x | $15.00 | $0.30 | $3.75 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
 | claude-sonnet-4-5 | Anthropic | $3.00 | 10.71x | $15.00 | $0.30 | $3.75 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
+| gemini-4-neon | Google | $3.00 | 10.71x | $15.00 | $0.15 | -- | [google](https://aistudio.google.com/docs/pricing#gemini-4-neon) |
 | kimi-k3 | Moonshot | $3.00 | 10.71x | $15.00 | $0.30 | $3.00 | [moonshot](https://platform.kimi.ai/docs/pricing/chat) |
 | gpt-5.6-terra | OpenAI | $2.00 | 7.14x | $12.00 | $0.20 | $2.50 | [openai](https://developers.openai.com/api/docs/pricing) |
 | gemini-3.1-pro-preview | Google | $2.00 | 7.14x | $12.00 | $0.20 | -- | [google](https://aistudio.google.com/docs/pricing) |
@@ -776,9 +784,8 @@ have a separate `list_price` block.
   has its own row with the `claude-haiku-4-5` rate card.
 - `claude-sonnet-4-5` is a historical row; Anthropic lists it as deprecated.
 
-Cost source: `self-reported` for Claude CLI actual cost.
-`list_cost` falls back to the same public API rate card because Anthropic models in this
-file do not have a separate `list_price` block.
+Claude CLI reports a list-cost estimate.
+The fallback uses the public API rates in `actual_price`.
 
 ### Google AI (Gemini)
 
@@ -801,6 +808,13 @@ Rows record the Standard paid tier.
   context-length tier.
   Vertex publishes a Hydrogen cache-write rate effective 2027-01-12, which is not stored
   yet.
+- `gemini-4-neon` was verified on 2026-11-21. Gemini CLI estimates use the Gemini API
+  Standard paid rate of $3.00 per million input tokens, $15.00 per million output
+  tokens, and $0.15 per million cached input tokens.
+  Vertex Standard rates match on the global endpoint, with a 10% surcharge in non-global
+  regions. Vertex cache-write pricing starts on 2027-01-12.
+  [Gemini API pricing](https://aistudio.google.com/docs/pricing#gemini-4-neon),
+  [Vertex AI pricing](https://cloud.google.com/model-garden/pricing).
 - `gemini-3.6-flash` corrected: Google charges the same introductory rate as
   `gemini-3.8-flash` ($0.75 / $3.75 / $0.075 through 2026-12-31, then $1.50 / $7.50 /
   $0.15). The row previously stored the standard rate as `actual_price`; it now holds
@@ -853,7 +867,7 @@ As of 2026-11-18, Google’s pricing page shows no free tier for `gemini-4-argon
 - `deepseek-v4-pro` is served by DeepSeek-V4-Pro-0813. The May 2026 promotional
   `actual_price` and the $1.74 / $3.48 `list_price` are superseded and were removed.
 
-Cost source: `computed` (no adapter in metaproc self-reports DeepSeek direct cost).
+The direct API rows provide peak-rate estimates when the CLI supplies no cost.
 The `deepseek-v3.2-maas` Vertex MaaS row keeps the V4-Flash direct rate from the
 2026-05-23 review ($0.14 / $0.28 / $0.0028) as its frozen `list_price`, the comparison
 point while that model served.
@@ -868,7 +882,8 @@ point while that model served.
   the current K3-series models, with flat pricing across the 1,048,576-token context.
   `cache_write_per_1m` stores the 5-minute TTL write rate; Kimi also publishes a 1-hour
   rate, noted per row.
-  Neither model is in the model catalog yet.
+  Both models ship under Pi’s `moonshot` provider in
+  [`pi-models.default.json`](pi-models.default.json).
 - `kimi-k2.6` is unchanged at $0.95 / $4.00 / $0.16. Kimi closed K2-series models to
   newly registered users on 2026-10-31 and plans to retire them by the end of December
   2026\.
@@ -934,31 +949,27 @@ This file uses Alibaba Cloud Model Studio’s **Global deployment mode** pricing
 
 ## How Pricing Flows into Usage Reports
 
-The `metaproc write-usage` command produces `usage.md` files with two cost columns:
+The `metaproc write-usage` command produces `usage.md` files with two cost columns.
 
-- **actual_cost**: What was actually paid, or the best available computed estimate when
-  the adapter does not report a cost.
-- **list_cost**: What the same usage would cost at the vendor’s public rate card stored
-  in this file.
+- **Actual cost** requires provider billing evidence.
+  It is unavailable in reports generated from agent logs alone.
+- **List cost** uses the cost reported by the agent CLI when available.
+  The fallback multiplies logged token counts by `list_price` or, if absent,
+  `actual_price`.
 
-### How each column is computed
+### List-Cost Sources by Provider
 
-| Provider | actual_cost | list_cost |
-| --- | --- | --- |
-| OpenAI | Computed from `actual_price` (no adapter self-reports OpenAI cost today) | Same as actual because OpenAI models in this file do not have a separate `list_price` block |
-| Anthropic (Claude CLI, Pi CLI) | Uses self-reported `cost_usd` from the API response when present; otherwise computes from `actual_price` | Falls back to `actual_price` because Anthropic models in this file do not have a separate `list_price` block |
-| Google (Gemini CLI) | Computed from `actual_price` because Gemini CLI does not report cost | Computed from `list_price` when present (the standard rate after an introductory period), otherwise falls back to `actual_price` |
-| DeepSeek (direct API) | Computed from `actual_price` (peak rate) | Same as actual |
-| Moonshot (Kimi API) | Computed from `actual_price` | Same as actual |
-| Vertex MaaS (Pi CLI) | Computed from Vertex AI’s published `actual_price` when the adapter reports no cost | Computed from `list_price` when present, otherwise falls back to `actual_price` |
+| Provider | List-cost basis |
+| --- | --- |
+| OpenAI (Codex CLI) | API rates in `actual_price` |
+| Anthropic (Claude CLI, Pi CLI) | CLI estimate if available, with public API rates in `actual_price` as a fallback |
+| Google (Gemini CLI) | Public API rates in `list_price` when present, otherwise `actual_price` |
+| DeepSeek (direct API) | CLI estimate if available, with peak API rates in `actual_price` as a fallback |
+| Moonshot (Kimi API) | CLI estimate if available, with public API rates in `actual_price` as a fallback |
+| Vertex MaaS (Pi CLI) | CLI estimate if available, with rates in `list_price` or `actual_price` as a fallback |
 
 ### Key logic in usage.py
 
-- `cost_source: self-reported` means the CLI adapter reports `cost_usd` and that value
-  is trusted for `actual_cost`. The pricing table is still used for `list_cost`.
-- `cost_source: computed` means cost is always calculated from the pricing table rates.
-- For `list_cost`, the code always computes from the table: it uses `list_price` if
-  present, otherwise it falls back to `actual_price`.
 - Prices are looked up by the model ID the usage record carries, which is the served ID
   where the adapter reports one (Claude `modelUsage`, Gemini `stats.models`, Pi
   messages) and the requested ID otherwise (codex-cli).
@@ -969,17 +980,10 @@ The `metaproc write-usage` command produces `usage.md` files with two cost colum
 
 ## Known Issues and Uncertainties
 
-### ISSUE: actual_cost > list_cost for Anthropic models
+### Claude CLI Estimates and Rate Cards
 
-**Status**: Under investigation.
-
-**Symptom**: In usage.md reports, `actual_cost` for Claude CLI sessions can exceed
-`list_cost` for the same token counts.
-
-**Root cause**: `actual_cost` uses the self-reported `cost_usd` from Claude CLI, while
-`list_cost` is computed from this pricing table.
-The self-reported value is sometimes higher than what the table produces for the same
-token counts.
+Claude CLI’s list-cost estimate can exceed the estimate computed from this rate card for
+the same logged token counts.
 
 **Possible explanations**:
 

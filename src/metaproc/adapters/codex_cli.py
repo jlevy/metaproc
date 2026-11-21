@@ -7,12 +7,15 @@ import json
 import logging
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Generator, Iterator, Mapping
+from contextlib import contextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, BinaryIO, Protocol, cast
 
 from strif import atomic_output_file
 
@@ -167,16 +170,8 @@ def codex_auth_json_mode(payload: dict[str, Any]) -> str | None:
     return None
 
 
-def _validate_codex_creds_blob(blob: str) -> None:
-    """Raise if *blob* is not a ChatGPT-OAuth ``auth.json`` payload.
-
-    The login mode is read as Codex reads it (:func:`codex_auth_json_mode`).
-    API-key blobs (``auth_mode == "apikey"``) are explicitly
-    rejected: API keys are stateless, don't need pooling, and should
-    arrive as ``OPENAI_API_KEY`` through container-side secret hydration rather than a
-    pool label. This matches ``CodexCliAdapter.bootstrap``'s existing
-    guard — the pool's push path shares the same invariant.
-    """
+def validate_codex_oauth_blob(blob: str) -> None:
+    """Require a ChatGPT login before publishing or materializing ``auth.json``."""
     try:
         parsed: Any = json.loads(blob)
     except json.JSONDecodeError as exc:
@@ -195,13 +190,35 @@ def _validate_codex_creds_blob(blob: str) -> None:
         raise RuntimeError(msg)
     auth_mode = codex_auth_json_mode(payload)
     if auth_mode != "chatgpt":
-        msg = (
-            f"Codex credentials blob has auth_mode={auth_mode!r}; the pool "
-            "only accepts ChatGPT-OAuth payloads. API-key auth is stateless and "
-            "should arrive as OPENAI_API_KEY through cloud secret hydration, "
-            "not a pool label."
+        mode = " (auth_mode='apikey')" if auth_mode == "apikey" else ""
+        raise RuntimeError(f"Codex credentials must use auth_mode=chatgpt{mode}")
+    other_fields = sorted(
+        field
+        for field in (
+            "OPENAI_API_KEY",
+            "personal_access_token",
+            "bedrock_api_key",
+            "bedrock_access_keys",
         )
-        raise RuntimeError(msg)
+        if payload.get(field)
+    )
+    if other_fields:
+        fields = ", ".join(other_fields)
+        raise RuntimeError(f"Codex ChatGPT credentials include other credential fields: {fields}")
+    token_data = cast("dict[str, Any]", tokens)
+    access_token = token_data.get("access_token")
+    if not isinstance(access_token, str) or not access_token.strip():
+        raise RuntimeError("Codex ChatGPT credentials require a nonempty tokens.access_token")
+    identity = payload.get("agent_identity")
+    if identity:
+        account = token_data.get("account_id")
+        if (
+            not isinstance(identity, dict)
+            or not isinstance(account, str)
+            or not account
+            or cast("dict[str, Any]", identity).get("account_id") != account
+        ):
+            raise RuntimeError("Codex agent_identity must belong to the ChatGPT token account")
 
 
 def resolve_codex_home(env: Mapping[str, str] | None = None) -> Path:
@@ -234,9 +251,12 @@ _CODEX_API_KEY_PLACEHOLDER = f"REPLACE_WITH_{MetaprocEnv.CODEX_API_KEY.name}"
 # A personal access token or agent-identity JWT. Codex 0.166.0 uses it ahead of
 # any stored login, and only CODEX_API_KEY outranks it (`load_auth` in
 # codex-rs/login/src/auth/manager.rs).
-_CODEX_ACCESS_TOKEN_ENV = "CODEX_ACCESS_TOKEN"
+_CODEX_ACCESS_TOKEN_ENV = MetaprocEnv.CODEX_ACCESS_TOKEN.name
 
 _CREDENTIAL_STORE_KEY = "cli_auth_credentials_store"
+_MAX_CODEX_CONFIG_BYTES = 1024 * 1024
+_MAX_ROLLOUT_SCAN_BYTES = 16 * 1024 * 1024
+_MAX_ROLLOUT_LINE_BYTES = 2 * 1024 * 1024
 
 # Where Codex reads its system config, requirements and legacy managed config on Unix.
 _CODEX_UNIX_SYSTEM_DIR = Path("/etc/codex")
@@ -300,10 +320,23 @@ def _credential_store_files(codex_home: Path, cwd: Path) -> list[Path]:
     return files
 
 
+@contextmanager
+def _open_codex_regular_file(path: Path) -> Generator[BinaryIO]:
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+    with os.fdopen(os.open(path, flags), "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise OSError("not a regular file")
+        yield stream
+
+
 def _file_store_blocker(path: Path) -> str | None:
     """Return why *path* may select a store other than `file`, or None when it does not."""
     try:
-        text = path.read_text(encoding="utf-8")
+        with _open_codex_regular_file(path) as stream:
+            data = stream.read(_MAX_CODEX_CONFIG_BYTES + 1)
+        if len(data) > _MAX_CODEX_CONFIG_BYTES:
+            return f"{path} exceeds the Codex configuration read limit"
+        text = data.decode("utf-8")
     except FileNotFoundError, NotADirectoryError:
         return None
     except OSError, UnicodeDecodeError:
@@ -313,7 +346,10 @@ def _file_store_blocker(path: Path) -> str | None:
     except tomllib.TOMLDecodeError:
         return f"{path} could not be parsed"
     value = doc.get(_CREDENTIAL_STORE_KEY, "file")
-    return None if value == "file" else f"{path} sets {_CREDENTIAL_STORE_KEY}={value!r}"
+    if value == "file":
+        return None
+    store = value if value in ("keyring", "auto", "ephemeral") else "an unknown store"
+    return f"{path} sets {_CREDENTIAL_STORE_KEY} to {store}"
 
 
 def _credential_store_blocker(
@@ -391,6 +427,12 @@ def _bridged_codex_api_key(
         )
         return None
     codex_home = resolve_codex_home(env)
+    if not codex_home.is_absolute():
+        log.info(
+            "codex-cli: not passing OPENAI_API_KEY to Codex with a relative CODEX_HOME. "
+            "Use an absolute path to verify that it has no stored login."
+        )
+        return None
     if (codex_home / "auth.json").is_file():
         return None
     blocker = _credential_store_blocker(codex_home, merged_config)
@@ -876,6 +918,32 @@ class CodexCliAdapter:
                 setup_hint="",
             )
 
+        if not auth_json.is_absolute():
+            return AuthStatus(
+                adapter_type=self.adapter_type,
+                cli_found=True,
+                cli_path=cli_path,
+                credentials_found=False,
+                auth_mode="unknown",
+                details="CODEX_HOME is relative to the CLI working directory",
+                setup_hint="Use an absolute CODEX_HOME to check its stored credentials",
+            )
+
+        blocker = _credential_store_blocker(auth_json.parent, {})
+        if blocker is not None:
+            details = f"A Codex login may be stored outside auth.json ({blocker})"
+            if api_key:
+                details += "; runs do not pass OPENAI_API_KEY to Codex in this case"
+            return AuthStatus(
+                adapter_type=self.adapter_type,
+                cli_found=True,
+                cli_path=cli_path,
+                credentials_found=False,
+                auth_mode="unknown",
+                details=details,
+                setup_hint="",
+            )
+
         if auth_json.is_file():
             auth_mode_str, details = _inspect_auth_json(auth_json)
             if api_key:
@@ -884,27 +952,13 @@ class CodexCliAdapter:
                 adapter_type=self.adapter_type,
                 cli_found=True,
                 cli_path=cli_path,
-                credentials_found=True,
+                credentials_found=auth_mode_str != "unknown",
                 auth_mode=auth_mode_str,
                 details=details,
                 setup_hint="",
             )
 
         if api_key:
-            blocker = _credential_store_blocker(auth_json.parent, {})
-            if blocker is not None:
-                return AuthStatus(
-                    adapter_type=self.adapter_type,
-                    cli_found=True,
-                    cli_path=cli_path,
-                    credentials_found=True,
-                    auth_mode="unknown",
-                    details=(
-                        f"OPENAI_API_KEY is set, but a Codex login may be stored outside "
-                        f"auth.json ({blocker}), so runs do not pass the key to Codex"
-                    ),
-                    setup_hint="",
-                )
             return AuthStatus(
                 adapter_type=self.adapter_type,
                 cli_found=True,
@@ -955,7 +1009,7 @@ class CodexCliAdapter:
         if not creds_json:
             return
 
-        _validate_codex_creds_blob(creds_json)
+        validate_codex_oauth_blob(creds_json)
 
         # Honor $CODEX_HOME via the shared helper; fall back to <home>/.codex
         # when CODEX_HOME is unset. The bootstrap contract is per-task: the
@@ -1047,6 +1101,7 @@ class CodexCliAdapter:
         return {
             CODEX_CREDS_ENV_VAR: "",
             MetaprocEnv.CODEX_API_KEY.name: "",
+            _CODEX_ACCESS_TOKEN_ENV: "",
         }
 
     def materialize_credential(
@@ -1070,7 +1125,7 @@ class CodexCliAdapter:
         today and uses the file-materialization path unconditionally.
         """
         del vehicle  # Protocol parity; unused for codex.
-        _validate_codex_creds_blob(blob)
+        validate_codex_oauth_blob(blob)
         codex_dir = slot_dir / ".codex"
         codex_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         codex_dir.chmod(0o700)
@@ -1103,7 +1158,7 @@ class CodexCliAdapter:
         except OSError as exc:
             msg = f"Failed to read Codex credentials at {auth_file}: {exc}"
             raise RuntimeError(msg) from exc
-        _validate_codex_creds_blob(blob)
+        validate_codex_oauth_blob(blob)
         return blob
 
     def classify_failure(
@@ -1251,20 +1306,57 @@ def codex_thread_id(stdout: str) -> str | None:
     return None
 
 
-def _read_rollout_text(rollout: Path) -> str | None:
-    """Return a rollout's text, decompressing a ``.jsonl.zst`` one; None when unreadable."""
-    if rollout.suffix != ".zst":
-        return rollout.read_text(encoding="utf-8")
-    try:
-        from compression import zstd  # noqa: PLC0415 -- CPython may be built without libzstd
-    except ImportError:
-        log.debug("codex-cli: cannot read %s; this Python has no compression.zstd", rollout)
-        return None
-    try:
-        with zstd.open(rollout, "rt", encoding="utf-8") as stream:
-            return stream.read()
-    except zstd.ZstdError, EOFError:
-        return None
+class _BinaryLineReader(Protocol):
+    def readline(self, size: int, /) -> bytes: ...
+
+
+def _first_rollout_model(stream: _BinaryLineReader) -> str | None:
+    remaining = _MAX_ROLLOUT_SCAN_BYTES
+    while remaining:
+        limit = min(remaining, _MAX_ROLLOUT_LINE_BYTES)
+        line = stream.readline(limit + 1)
+        if not line or len(line) > limit:
+            return None
+        remaining -= len(line)
+        record = parse_jsonl_event(line.decode("utf-8"), "turn_context")
+        if record is None:
+            continue
+        payload = record.get("payload")
+        model = cast("dict[str, Any]", payload).get("model") if isinstance(payload, dict) else None
+        if isinstance(model, str) and model:
+            return model
+    return None
+
+
+def _read_rollout_model(rollout: Path) -> str | None:
+    with _open_codex_regular_file(rollout) as stream:
+        if rollout.suffix != ".zst":
+            return _first_rollout_model(stream)
+        try:
+            from compression import zstd  # noqa: PLC0415 -- CPython may be built without libzstd
+        except ImportError:
+            log.debug("codex-cli: cannot read %s; this Python has no compression.zstd", rollout)
+            return None
+        try:
+            with zstd.open(stream, "rb") as decoded:
+                return _first_rollout_model(decoded)
+        except zstd.ZstdError, EOFError:
+            return None
+
+
+def _codex_rollouts(sessions: Path, thread_id: str) -> Iterator[Path]:
+    """Check recent date directories first for the thread a probe just created."""
+    plain = f"-{thread_id}.jsonl"
+    endings = (plain, f"{plain}.zst")
+    pattern = f"rollout-*{plain}*"
+    now = datetime.now(UTC)
+    days = dict.fromkeys((now.date(), now.astimezone().date(), (now - timedelta(days=1)).date()))
+    recent = [sessions / day.strftime("%Y/%m/%d") for day in days]
+    for directory in recent:
+        yield from (path for path in sorted(directory.glob(pattern)) if path.name.endswith(endings))
+    for path in sessions.rglob(pattern):
+        if path.parent not in recent and path.name.endswith(endings):
+            yield path
 
 
 def codex_rollout_model(codex_home: Path, thread_id: str) -> str | None:
@@ -1284,24 +1376,11 @@ def codex_rollout_model(codex_home: Path, thread_id: str) -> str | None:
         return None
     if not sessions.is_dir():
         return None
-    rollouts = sorted(
-        path
-        for pattern in (f"rollout-*-{thread_id}.jsonl", f"rollout-*-{thread_id}.jsonl.zst")
-        for path in sessions.rglob(pattern)
-    )
-    for rollout in rollouts:
+    for rollout in _codex_rollouts(sessions, thread_id):
         try:
-            text = _read_rollout_text(rollout)
-        except OSError, UnicodeDecodeError:
+            model = _read_rollout_model(rollout)
+        except OSError, UnicodeDecodeError, RecursionError:
             continue
-        for line in (text or "").splitlines():
-            record = parse_jsonl_event(line, "turn_context")
-            if record is None:
-                continue
-            payload = record.get("payload")
-            model = (
-                cast("dict[str, Any]", payload).get("model") if isinstance(payload, dict) else None
-            )
-            if isinstance(model, str) and model:
-                return model
+        if model is not None:
+            return model
     return None

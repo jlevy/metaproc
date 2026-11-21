@@ -6,7 +6,7 @@ Codex emits a different stream-json schema from claude-code-cli:
 - ``type=turn.started``           — turn boundary
 - ``type=turn.completed``         — terminal usage event:
    ``{type, usage:{input_tokens, output_tokens, cached_input_tokens,
-     reasoning_output_tokens}}``
+     cache_write_input_tokens, reasoning_output_tokens}}``
 - ``type=item.completed``         — per-tool event, with an embedded ``item``:
     - ``item.type=command_execution``: ``item.command``, ``item.aggregated_output``,
       ``item.exit_code`` (sometimes), ``item.status``
@@ -124,6 +124,7 @@ class CodexAgentExtractor:
                 attempt_attrs["attempt.tokens_input"] = usage.input_tokens
                 attempt_attrs["attempt.tokens_output"] = usage.output_tokens
                 attempt_attrs["attempt.tokens_cached"] = usage.cache_read_tokens
+                attempt_attrs["attempt.tokens_cache_write"] = usage.cache_write_tokens
 
         _apply_sidecar_attrs(invocation, attempt_attrs)
 
@@ -144,6 +145,7 @@ class CodexAgentExtractor:
                 output_tokens=attempt_attrs.get("attempt.tokens_output"),
                 cached_tokens=attempt_attrs.get("attempt.tokens_cached"),
                 self_reported_cost=None,
+                cache_write_tokens=attempt_attrs.get("attempt.tokens_cache_write"),
             )
         )
 

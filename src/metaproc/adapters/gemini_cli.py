@@ -22,7 +22,7 @@ from metaproc.adapters.cli_version import (
     check_cli_version,
 )
 from metaproc.config.env_vars import MetaprocEnv
-from metaproc.config.model_catalog import removed_model_note, resolve_model
+from metaproc.config.model_catalog import REMOVED_MODELS, removed_model_note, resolve_model
 from metaproc.io import temp_output_dir, write_secret_text
 from metaproc.io.mkdir_lock import mkdir_lock
 from metaproc.settings import (
@@ -30,6 +30,7 @@ from metaproc.settings import (
     GEMINI_DEFAULT_NATIVE_SETTINGS,
     GEMINI_DYNAMIC_MODEL_SETTINGS,
     GEMINI_SESSION_RETENTION_SETTINGS,
+    GEMINI_THINKING_OVERRIDES,
     GEMINI_UNRECORDED_DEFAULT_NATIVE_SETTINGS,
     GEMINI_VALID_MODELS,
 )
@@ -236,6 +237,7 @@ def _materialize_temp_file(*, prefix: str, suffix: str, content: str) -> Path:
 # Metaproc set is recognized as Metaproc's even after today's default moves on.
 _WORKSPACE_RECORD_NAME = ".metaproc-settings.json"
 _WORKSPACE_RECORD_KEY = "metaproc_default_native_settings"
+_MAX_WORKSPACE_RECORD_BYTES = 64 * 1024
 
 _ABSENT = object()
 
@@ -247,17 +249,6 @@ def _same_json(left: object, right: object) -> bool:
     return json.dumps(left, sort_keys=True) == json.dumps(right, sort_keys=True)
 
 
-def _leaf_paths(settings: dict[str, object], path: tuple[str, ...] = ()) -> set[tuple[str, ...]]:
-    """Return the path of every non-object value, and every empty object, in ``settings``."""
-    paths: set[tuple[str, ...]] = set()
-    for key, value in settings.items():
-        if isinstance(value, dict) and value:
-            paths |= _leaf_paths(cast("dict[str, object]", value), (*path, key))
-        else:
-            paths.add((*path, key))
-    return paths
-
-
 def _value_at(settings: dict[str, object], path: tuple[str, ...]) -> object:
     value: object = settings
     for key in path:
@@ -265,23 +256,6 @@ def _value_at(settings: dict[str, object], path: tuple[str, ...]) -> object:
             return _ABSENT
         value = value[key]
     return value
-
-
-def _without_paths(
-    settings: dict[str, object], paths: set[tuple[str, ...]], path: tuple[str, ...] = ()
-) -> dict[str, object]:
-    """Return ``settings`` without ``paths``, dropping objects that are left empty."""
-    kept: dict[str, object] = {}
-    for key, value in settings.items():
-        child = (*path, key)
-        if child in paths:
-            continue
-        if isinstance(value, dict):
-            value = _without_paths(cast("dict[str, object]", value), paths, child)
-            if not value:
-                continue
-        kept[key] = value
-    return kept
 
 
 def _differing_paths(
@@ -292,10 +266,10 @@ def _differing_paths(
     for key in sorted(old.keys() | new.keys()):
         child = (*path, key)
         before, after = old.get(key, _ABSENT), new.get(key, _ABSENT)
-        # An object one side lacks is reported by the keys inside it.
-        if isinstance(before, dict) and after is _ABSENT:
+        # A missing object is reported by its leaves, including empty objects.
+        if isinstance(before, dict) and before and after is _ABSENT:
             after = {}
-        elif before is _ABSENT and isinstance(after, dict):
+        elif before is _ABSENT and isinstance(after, dict) and after:
             before = {}
         if isinstance(before, dict) and isinstance(after, dict):
             differing.extend(
@@ -308,70 +282,91 @@ def _differing_paths(
     return differing
 
 
-def _classify_workspace_changes(
-    existing: dict[str, object],
-    resolved: dict[str, object],
-    defaults: dict[str, object],
-    written_defaults: tuple[dict[str, object], ...],
-) -> tuple[list[str], list[str]]:
-    """Split how ``existing`` differs from ``resolved`` into Metaproc's keys and others.
+def _valid_workspace_defaults(recorded: dict[str, object], defaults: dict[str, object]) -> bool:
+    """Allow known defaults and the generated thinking overrides of earlier catalogs."""
+    known_defaults = (defaults, *GEMINI_UNRECORDED_DEFAULT_NATIVE_SETTINGS)
+    if any(_same_json(recorded, known) for known in known_defaults):
+        return True
 
-    A key is Metaproc's to replace when ``existing`` holds a default Metaproc wrote
-    there (``written_defaults``) and ``resolved`` holds today's default, so only
-    Metaproc's own defaults moved. Any other difference, at a key Metaproc sets or not,
-    came from an operator, another step's ``native_settings`` or a step config change.
-    """
-    owned_paths = _leaf_paths(defaults).union(*(_leaf_paths(row) for row in written_defaults))
-    owned: list[str] = []
-    other: list[str] = []
-    for path in sorted(owned_paths):
-        before, after = _value_at(existing, path), _value_at(resolved, path)
-        if _same_json(before, after):
-            continue
-        dotted = ".".join(path)
-        if _same_json(after, _value_at(defaults, path)) and any(
-            _same_json(before, _value_at(row, path)) for row in written_defaults
+    overrides = _value_at(recorded, ("modelConfigs", "overrides"))
+    if not isinstance(overrides, list) or not overrides:
+        return False
+    expected_shape = _deep_merge_settings(defaults, {"modelConfigs": {"overrides": overrides}})
+    if not _same_json(recorded, expected_shape):
+        return False
+    base_override = GEMINI_THINKING_OVERRIDES[0]
+    base, *concrete = cast("list[object]", overrides)
+    if not _same_json(base, base_override):
+        return False
+    models: list[str] = []
+    for row in concrete:
+        if not isinstance(row, dict):
+            return False
+        model = _value_at(cast("dict[str, object]", row), ("match", "model"))
+        if not isinstance(model, str) or not model.startswith("gemini-"):
+            return False
+        removed = REMOVED_MODELS.get(model)
+        if model not in GEMINI_VALID_MODELS and (
+            removed is None or "gemini-cli" not in removed.adapters
         ):
-            owned.append(dotted)
-        else:
-            other.append(dotted)
-    other.extend(
-        _differing_paths(
-            _without_paths(existing, owned_paths), _without_paths(resolved, owned_paths)
-        )
-    )
-    return owned, sorted(other)
+            return False
+        if not _same_json(row, {**base_override, "match": {"model": model}}):
+            return False
+        models.append(model)
+    return models == sorted(set(models))
 
 
-def _written_defaults(record_path: Path) -> tuple[dict[str, object], ...]:
-    """Return the defaults Metaproc recorded writing beside workspace settings.
-
-    A file from a release that kept no record is checked against the defaults those
-    releases wrote. An unreadable record proves nothing, so it is treated the same way.
-    """
-    if record_path.is_symlink():
-        log.warning("Ignoring the Metaproc settings record %s, a symlink", record_path)
-        return GEMINI_UNRECORDED_DEFAULT_NATIVE_SETTINGS
+def _read_workspace_record(record_path: Path) -> str:
+    expected = record_path.lstat()
+    if not stat.S_ISREG(expected.st_mode):
+        raise OSError("not a regular file")
+    # A workspace writer can swap in a FIFO or symlink between lstat and open.
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(record_path, flags | getattr(os, "O_BINARY", 0))
     try:
-        text = record_path.read_text(encoding="utf-8")
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (
+            expected.st_dev,
+            expected.st_ino,
+        ):
+            raise OSError("changed while opening")
+        if opened.st_size > _MAX_WORKSPACE_RECORD_BYTES:
+            raise OSError("exceeds the workspace record read limit")
+        with os.fdopen(fd, "rb", closefd=False) as stream:
+            data = stream.read(_MAX_WORKSPACE_RECORD_BYTES + 1)
+    finally:
+        os.close(fd)
+    if len(data) > _MAX_WORKSPACE_RECORD_BYTES:
+        raise OSError("exceeds the workspace record read limit")
+    return data.decode("utf-8")
+
+
+def _written_defaults(
+    record_path: Path, defaults: dict[str, object]
+) -> tuple[dict[str, object], ...]:
+    """Read recognized defaults, using pre-record releases only when the record is absent."""
+    try:
+        text = _read_workspace_record(record_path)
     except FileNotFoundError:
         return GEMINI_UNRECORDED_DEFAULT_NATIVE_SETTINGS
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
         log.warning("Ignoring the unreadable Metaproc settings record %s: %s", record_path, exc)
-        return GEMINI_UNRECORDED_DEFAULT_NATIVE_SETTINGS
+        return ()
     try:
         record: object = json.loads(text)
-    except json.JSONDecodeError:
-        record = None
-    defaults = (
-        cast("dict[str, object]", record).get(_WORKSPACE_RECORD_KEY)
-        if isinstance(record, dict)
-        else None
-    )
-    if isinstance(defaults, dict):
-        return (cast("dict[str, object]", defaults),)
-    log.warning("Ignoring the malformed Metaproc settings record %s", record_path)
-    return GEMINI_UNRECORDED_DEFAULT_NATIVE_SETTINGS
+        recorded = (
+            cast("dict[str, object]", record).get(_WORKSPACE_RECORD_KEY)
+            if isinstance(record, dict)
+            else None
+        )
+        if isinstance(recorded, dict) and _valid_workspace_defaults(
+            cast("dict[str, object]", recorded), defaults
+        ):
+            return (cast("dict[str, object]", recorded),)
+    except json.JSONDecodeError, RecursionError:
+        pass
+    log.warning("Ignoring unrecognized defaults in the Metaproc settings record %s", record_path)
+    return ()
 
 
 def _workspace_settings_refusal(settings_path: Path, detail: str) -> ValueError:
@@ -384,7 +379,10 @@ def _workspace_settings_refusal(settings_path: Path, detail: str) -> ValueError:
 
 
 def _materialize_workspace_settings(
-    directory: Path, content: str, defaults: dict[str, object]
+    directory: Path,
+    native_settings: dict[str, object],
+    defaults: dict[str, object],
+    overrides: dict[str, object],
 ) -> None:
     """Publish native settings without overwriting operator-authored configuration.
 
@@ -398,6 +396,7 @@ def _materialize_workspace_settings(
     settings_dir = directory / ".gemini"
     settings_path = settings_dir / "settings.json"
     record_path = settings_dir / _WORKSPACE_RECORD_NAME
+    content = json.dumps(native_settings, sort_keys=True, separators=(",", ":"))
     record = json.dumps({_WORKSPACE_RECORD_KEY: defaults}, sort_keys=True, separators=(",", ":"))
     if settings_dir.is_symlink():
         raise ValueError("Gemini workspace settings directory must not be a symlink")
@@ -417,35 +416,40 @@ def _materialize_workspace_settings(
                 raise _workspace_settings_refusal(
                     settings_path, "is not a JSON object, so Metaproc did not write it"
                 )
-            resolved = cast("dict[str, object]", json.loads(content))
             existing_settings = cast("dict[str, object]", existing)
-            if not _same_json(existing_settings, resolved):
-                owned, other = _classify_workspace_changes(
-                    existing_settings, resolved, defaults, _written_defaults(record_path)
+            changes = _differing_paths(existing_settings, native_settings)
+            if changes:
+                # Require a complete match to a prior defaults-and-overrides combination.
+                # A record copied from another workspace can contain valid defaults.
+                conflicts = min(
+                    (
+                        _differing_paths(
+                            existing_settings, _deep_merge_settings(previous, overrides)
+                        )
+                        for previous in _written_defaults(record_path, defaults)
+                    ),
+                    key=len,
+                    default=changes,
                 )
-                if other:
+                if conflicts:
                     raise _workspace_settings_refusal(
                         settings_path,
-                        f"differs from this step's native settings at {', '.join(other)}",
+                        f"differs from this step's native settings at {', '.join(conflicts)}",
                     )
-                if owned:
-                    # Narrow the window in which a writer that ignores the lock edits
-                    # the file between the comparison and the replacement.
-                    if (
-                        settings_path.is_symlink()
-                        or settings_path.read_text(encoding="utf-8") != text
-                    ):
-                        raise _workspace_settings_refusal(
-                            settings_path, "changed while Metaproc was comparing it"
-                        )
-                    log.warning(
-                        "Replacing Metaproc defaults in Gemini workspace settings %s: %s "
-                        "still held the value Metaproc wrote before its defaults changed; "
-                        "the file's other keys are kept",
-                        settings_path,
-                        ", ".join(owned),
+                # Narrow the window in which a writer that ignores the lock edits
+                # the file between the comparison and the replacement.
+                if settings_path.is_symlink() or settings_path.read_text(encoding="utf-8") != text:
+                    raise _workspace_settings_refusal(
+                        settings_path, "changed while Metaproc was comparing it"
                     )
-                    write_secret_text(settings_path, content)
+                log.warning(
+                    "Replacing Metaproc defaults in Gemini workspace settings %s: %s "
+                    "still held the value Metaproc wrote before its defaults changed; "
+                    "the file's other keys are kept",
+                    settings_path,
+                    ", ".join(changes),
+                )
+                write_secret_text(settings_path, content)
             _record_workspace_defaults(record_path, record)
             return
         with temp_output_dir(
@@ -471,13 +475,18 @@ def _record_workspace_defaults(record_path: Path, record: str) -> None:
     the recognition of these defaults after a later change, and the launch goes on.
     """
     try:
-        if not record_path.is_symlink() and record_path.read_text(encoding="utf-8") == record:
+        if _read_workspace_record(record_path) == record:
             return
-    except FileNotFoundError:
+    except OSError, UnicodeError:
         pass
-    except OSError as exc:
-        log.warning("Cannot read the Metaproc settings record %s: %s", record_path, exc)
     try:
+        try:
+            mode = record_path.lstat().st_mode
+        except FileNotFoundError:
+            pass
+        else:
+            if not stat.S_ISREG(mode):
+                raise OSError("not a regular file")
         write_secret_text(record_path, record)
     except OSError as exc:
         log.warning(
@@ -969,6 +978,7 @@ class GeminiCliAdapter:
         # the defaults so it survives even a caller that passes an empty or
         # partial `general` block.
         override = merged_config.get("native_settings")
+        overrides = cast("dict[str, object]", override) if isinstance(override, dict) else {}
         defaults = _deep_merge_settings(
             _deep_merge_settings(
                 GEMINI_SESSION_RETENTION_SETTINGS,
@@ -976,22 +986,13 @@ class GeminiCliAdapter:
             ),
             GEMINI_DEFAULT_NATIVE_SETTINGS,
         )
-        native_settings: dict[str, object] = defaults
-        if isinstance(override, dict):
-            native_settings = _deep_merge_settings(
-                native_settings,
-                cast("dict[str, object]", override),
-            )
+        native_settings = _deep_merge_settings(defaults, overrides)
         scope = native_settings_scope(merged_config)
         if scope == "workspace":
             directory = self.working_directory(merged_config)
             if directory is None:
                 raise ValueError("native_settings_scope 'workspace' requires working_directory")
-            _materialize_workspace_settings(
-                directory,
-                json.dumps(native_settings, sort_keys=True, separators=(",", ":")),
-                defaults,
-            )
+            _materialize_workspace_settings(directory, native_settings, defaults, overrides)
         elif scope == "user":
             # Popen with no cwd inherits this process's working directory.
             workspace = _checked_workspace_settings(

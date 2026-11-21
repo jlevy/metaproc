@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import re
+import stat
 import subprocess as sp
 import sys
 import types
 from collections.abc import Iterator
+from importlib import resources
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -28,6 +30,7 @@ from metaproc.commands.auth_check import (
     _pi_list_models,
     _pi_validate_registration,
     _resolve_variant_target,
+    _run_claude_secret_live_check,
     _run_live_check,
     _run_readiness_check,
 )
@@ -104,6 +107,29 @@ class TestCheckAdapter:
 
         assert any("ENOENT" in message for _, message in results)
 
+    @pytest.mark.parametrize("cli_found,auth_mode", [(False, "unknown"), (True, "none")])
+    def test_codex_live_requires_a_binary_and_possible_credentials(
+        self, cli_found: bool, auth_mode: str
+    ) -> None:
+        status = AuthStatus(
+            adapter_type="codex-cli",
+            cli_found=cli_found,
+            cli_path="/usr/local/bin/codex" if cli_found else None,
+            credentials_found=False,
+            auth_mode=auth_mode,
+            details="fixture",
+            setup_hint="",
+        )
+        with (
+            patch.object(ADAPTER_REGISTRY["codex-cli"], "check_auth", return_value=status),
+            patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
+        ):
+            results = _run_live_check("codex-cli", None, timeout_s=5)
+
+        assert not results[0][0]
+        assert "skipping live check" in results[0][1]
+        mock_run.assert_not_called()
+
 
 class TestResolveVariantTarget:
     def test_exact_adapter_name_keeps_adapter(self):
@@ -161,6 +187,49 @@ class TestAuthCheckCLI:
         assert result.exit_code in (0, 1)
         assert "Disk" in result.output
 
+    @pytest.mark.parametrize(
+        "live,process_exit,expected_exit", [(False, 0, 1), (True, 0, 0), (True, 1, 1)]
+    )
+    def test_codex_alternate_store_is_unverified_until_live_result(
+        self, live: bool, process_exit: int, expected_exit: int
+    ) -> None:
+        status = AuthStatus(
+            adapter_type="codex-cli",
+            cli_found=True,
+            cli_path="/usr/local/bin/codex",
+            credentials_found=False,
+            auth_mode="unknown",
+            details="Codex may use a keyring login",
+            setup_hint="",
+        )
+        adapter = ADAPTER_REGISTRY["codex-cli"]
+        cmd = ["codex", "exec", "Respond exactly OK"]
+        args = ["auth-check", "--adapter", "codex-cli", "--timeout", "7"]
+        if live:
+            args.append("--live")
+        with (
+            patch.object(adapter, "check_auth", return_value=status),
+            patch.object(adapter, "build_command", return_value=cmd),
+            patch.object(adapter, "prepare_env", return_value={}),
+            patch("metaproc.commands.auth_check.check_disk_space", return_value=(True, "Disk ok")),
+            patch(
+                "metaproc.commands.auth_check._check_gcloud_token", return_value=(True, "GCP ok")
+            ),
+            patch(
+                "metaproc.commands.auth_check.run_command_in_process_group",
+                return_value=sp.CompletedProcess(cmd, process_exit, "", ""),
+            ) as mock_run,
+        ):
+            result = runner.invoke(app, args)
+
+        assert result.exit_code == expected_exit, result.output
+        assert "credentials unverified" in result.output
+        assert status.details in result.output
+        if live:
+            assert mock_run.call_args.kwargs["timeout"] == 7
+        else:
+            mock_run.assert_not_called()
+
     def test_run_dir_nonexistent(self, tmp_path: Path):
         result = runner.invoke(app, ["auth-check", "--run-dir", str(tmp_path / "nope")])
         assert result.exit_code == 1
@@ -190,7 +259,7 @@ class TestAuthCheckCLI:
             ),
             patch(
                 "metaproc.commands.auth_check._check_adapter",
-                side_effect=lambda adapter_type: [(True, f"{adapter_type} ok")],
+                side_effect=lambda adapter_type, **_kwargs: [(True, f"{adapter_type} ok")],
             ) as mock_check_adapter,
         ):
             result = runner.invoke(app, ["auth-check", "--variant", "pi-glm52"])
@@ -223,7 +292,7 @@ class TestAuthCheckCLI:
             ),
             patch(
                 "metaproc.commands.auth_check._check_adapter",
-                side_effect=lambda at: [(True, f"{at} ok")],
+                side_effect=lambda at, **_kwargs: [(True, f"{at} ok")],
             ),
             patch(
                 "metaproc.commands.auth_check._run_claude_secret_live_check",
@@ -257,7 +326,7 @@ class TestAuthCheckCLI:
             ),
             patch(
                 "metaproc.commands.auth_check._check_adapter",
-                side_effect=lambda at: [(True, f"{at} ok")],
+                side_effect=lambda at, **_kwargs: [(True, f"{at} ok")],
             ),
             patch(
                 "metaproc.commands.auth_check._run_live_check",
@@ -286,7 +355,7 @@ class TestAuthCheckCLI:
             ),
             patch(
                 "metaproc.commands.auth_check._check_adapter",
-                side_effect=lambda at: [(True, f"{at} ok")],
+                side_effect=lambda at, **_kwargs: [(True, f"{at} ok")],
             ),
             patch(
                 "metaproc.commands.auth_check._run_live_check",
@@ -315,6 +384,73 @@ class TestAuthCheckCLI:
 
 
 # ── Phase 2: _run_live_check ──
+
+
+def test_claude_secret_probe_uses_only_the_materialized_slot(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ambient = {
+        "ANTHROPIC_API_KEY": "ambient-key",
+        "ANTHROPIC_AUTH_TOKEN": "ambient-bearer",
+        "ANTHROPIC_BASE_URL": "https://proxy.invalid",
+        "ANTHROPIC_CUSTOM_HEADERS": "Authorization: ambient-bearer",
+        "ANTHROPIC_PROFILE": "ambient-profile",
+        "ANTHROPIC_FEDERATION_RULE_ID": "ambient-rule",
+        "ANTHROPIC_IDENTITY_TOKEN": "ambient-identity",
+        "CLAUDE_CODE_CREDS_JSON": "ambient-payload",
+        "CLAUDE_CODE_OAUTH_TOKEN": "ambient-oauth",
+        "CLAUDE_CODE_APIKEY_HELPER": "ambient-helper",
+        "CLAUDE_CODE_USE_VERTEX": "1",
+        "GCP_CREDENTIALS_BASE64": "ambient-gcp-json",
+        "GOOGLE_APPLICATION_CREDENTIALS": "/unrelated/gcp.json",
+        "OPENAI_API_KEY": "ambient-openai-key",
+    }
+    for key, value in ambient.items():
+        monkeypatch.setenv(key, value)
+    for name in ("HOME", "XDG_CONFIG_HOME", "CLAUDE_CONFIG_DIR", "ANTHROPIC_CONFIG_DIR"):
+        monkeypatch.setenv(name, str(tmp_path / name))
+    monkeypatch.setenv("METAPROC_SKIP_CLAUDE_VERSION_CHECK", "1")
+
+    secret_ref = "projects/example/secrets/claude/versions/1"
+    fetch = ["gcloud", "secrets", "versions", "access", secret_ref]
+    payload = json.dumps({"claudeAiOauth": {"accessToken": "secret-manager-fixture"}})
+    observed_homes: list[Path] = []
+
+    def capture_probe(
+        cmd: list[str], *, env: dict[str, str], cwd: Path, **_kwargs: object
+    ) -> sp.CompletedProcess[str]:
+        probe_home = Path(env["HOME"])
+        observed_homes.append(probe_home)
+        slot = probe_home / ".claude"
+        creds = slot / ".credentials.json"
+        assert cwd == probe_home
+        assert probe_home != tmp_path / "HOME"
+        assert env["XDG_CONFIG_HOME"] == str(probe_home / ".config")
+        assert env["CLAUDE_CONFIG_DIR"] == str(slot)
+        assert env["ANTHROPIC_CONFIG_DIR"] == str(slot / ".anthropic")
+        assert (slot / ".anthropic").is_dir()
+        assert creds.read_text(encoding="utf-8") == payload
+        assert stat.S_IMODE(creds.stat().st_mode) == 0o600
+        assert not ambient.keys() & env.keys()
+        assert payload not in " ".join(cmd)
+        assert cmd[cmd.index("--setting-sources") + 1] == "user"
+        assert cmd[cmd.index("--tools") + 1] == ""
+        return sp.CompletedProcess(cmd, 0, "OK", "")
+
+    with (
+        patch("metaproc.adapters.claude_cli.shutil.which", return_value="/usr/local/bin/claude"),
+        patch("metaproc.commands.auth_check.subprocess.run") as mock_fetch,
+        patch(
+            "metaproc.commands.auth_check.run_command_in_process_group", side_effect=capture_probe
+        ),
+    ):
+        mock_fetch.return_value = sp.CompletedProcess(fetch, 0, payload, "")
+        results = _run_claude_secret_live_check(secret_ref, timeout_s=8)
+
+    assert mock_fetch.call_args.args[0] == fetch
+    assert results[0][0], results
+    assert len(observed_homes) == 1
+    assert not observed_homes[0].exists()
 
 
 class TestRunLiveCheck:
@@ -537,20 +673,28 @@ class TestRunLiveCheckAssertModel:
         )
 
     def test_assert_model_substring_match(self):
-        """Provider-prefixed IDs like 'zai-org/glm-5-maas' must accept a
-        substring match like 'glm-5-maas' so the operator does not have to
+        """Provider-prefixed IDs like 'zai-org/glm-5.2-maas' must accept a
+        substring match like 'glm-5.2-maas' so the operator does not have to
         predict the provider prefix."""
         stdout_lines = (
             '{"type":"agent_start"}\n'
-            '{"type":"message_start","message":{"role":"assistant","model":"zai-org/glm-5-maas"}}\n'
+            '{"type":"message_start","message":{"role":"assistant","model":"zai-org/glm-5.2-maas"}}\n'
         )
         with (
             patch("metaproc.commands.auth_check.ADAPTER_REGISTRY") as mock_registry,
             patch(
+                "metaproc.commands.auth_check._stage_pi_gcp_probe_catalog",
+                return_value="zai-org/glm-5.2-maas",
+            ),
+            patch(
+                "metaproc.commands.auth_check._resolve_pi_gcp_probe_token",
+                return_value="test-gcp-token",
+            ),
+            patch(
                 "metaproc.commands.auth_check._pi_list_models",
                 return_value=(
                     True,
-                    "providers: vertex-maas\nmodels: glm-5-maas zai-org/glm-5-maas",
+                    "providers: vertex-maas\nmodels: zai-org/glm-5.2-maas",
                 ),
             ),
             patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
@@ -563,9 +707,9 @@ class TestRunLiveCheckAssertModel:
 
             results = _run_live_check(
                 "pi-cli",
-                "glm-5-maas",
+                "zai-org/glm-5.2-maas",
                 timeout_s=5,
-                assert_model="glm-5-maas",
+                assert_model="glm-5.2-maas",
             )
 
         assert all(ok for ok, _ in results), results
@@ -583,7 +727,7 @@ class TestRunLiveCheckAssertModel:
             ),
             patch(
                 "metaproc.commands.auth_check._check_adapter",
-                side_effect=lambda at: [(True, f"{at} ok")],
+                side_effect=lambda at, **_kwargs: [(True, f"{at} ok")],
             ),
             patch("metaproc.commands.auth_check._run_live_check") as mock_live,
         ):
@@ -1264,8 +1408,40 @@ class TestRunLiveCheckPiRegistrationGate:
     """_run_live_check wires the registration gate before dispatching prompts."""
 
     @pytest.fixture(autouse=True)
-    def _stub_gcp_token(self) -> Iterator[None]:
+    def _stub_gcp_token(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         """Keep registration tests independent of ambient ADC and gcloud state."""
+        monkeypatch.setenv("PI_CODING_AGENT_DIR", str(tmp_path))
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("GCP_CREDENTIALS_BASE64", "unrelated-gcp-json")
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/unrelated/gcp.json")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "unrelated-provider-key")
+        (tmp_path / "models.json").write_text(
+            json.dumps(
+                {
+                    "providers": {
+                        "vertex-maas": {
+                            "apiKey": "$METAPROC_PI_API_KEY",
+                            "baseUrl": "https://us-central1-aiplatform.googleapis.com/v1/projects/test",
+                            "api": "openai-completions",
+                            "headers": {"Authorization": "Bearer configured-provider-token"},
+                            "models": [
+                                {
+                                    "id": "zai-org/glm-5.2-maas",
+                                    "baseUrl": "https://unsafe.invalid/override",
+                                    "headers": {"Authorization": "Bearer configured-model-token"},
+                                },
+                                {"id": "unrelated-model"},
+                            ],
+                        },
+                        "anthropic": {"apiKey": "unrelated-provider-key"},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        (tmp_path / "auth.json").write_text(
+            '{"vertex-maas":{"type":"api_key","key":"saved-pi-token"}}', encoding="utf-8"
+        )
         with patch(
             "metaproc.cloud.gcp.resolve_token.resolve_gcp_token",
             return_value="test-gcp-token",
@@ -1279,7 +1455,7 @@ class TestRunLiveCheckPiRegistrationGate:
         status.credentials_found = True
         adapter.check_auth.return_value = status
         adapter.build_command.return_value = ["pi", "--provider", "vertex-maas", "-p", "x"]
-        adapter.prepare_env.return_value = {}
+        adapter.prepare_env.side_effect = lambda env, _config: env
         return adapter
 
     def test_live_check_fails_when_provider_not_registered(self):
@@ -1293,33 +1469,94 @@ class TestRunLiveCheckPiRegistrationGate:
             patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
         ):
             mock_registry.__getitem__ = MagicMock(return_value=self._adapter())
-            results = _run_live_check("pi-cli", "glm-5-maas", timeout_s=30)
+            results = _run_live_check("pi-cli", "zai-org/glm-5.2-maas", timeout_s=30)
 
         assert len(results) == 1
         ok, msg = results[0]
         assert not ok
-        assert "vertex-maas" in msg or "glm-5-maas" in msg
+        assert "vertex-maas" in msg or "glm-5.2-maas" in msg
         assert mock_run.call_count == 0, "trivial prompt must not run when registration fails"
 
-    def test_live_check_runs_prompt_when_registration_passes(self):
+    @pytest.mark.parametrize("packaged_catalog", [False, True])
+    def test_live_check_runs_prompt_when_registration_passes(
+        self, packaged_catalog: bool, tmp_path: Path
+    ) -> None:
         """Happy path: registration gate passes, trivial prompt runs."""
+        if packaged_catalog:
+            catalog = resources.files("metaproc.data").joinpath("pi-models.default.json")
+            (tmp_path / "models.json").write_text(
+                catalog.read_text(encoding="utf-8"), encoding="utf-8"
+            )
+
+        def verify_staged_catalog(env: dict[str, str], **_kwargs: object) -> tuple[bool, str]:
+            stage = Path(env["PI_CODING_AGENT_DIR"])
+            assert stage != tmp_path
+            assert not (stage / "auth.json").exists()
+            staged = json.loads((stage / "models.json").read_text(encoding="utf-8"))
+            assert list(staged["providers"]) == ["vertex-maas"]
+            provider = staged["providers"]["vertex-maas"]
+            assert provider["apiKey"] == "$METAPROC_PI_API_KEY"
+            assert provider["authHeader"] is True
+            assert "headers" not in provider
+            (model,) = provider["models"]
+            assert model["id"] == "zai-org/glm-5.2-maas"
+            assert "headers" not in model
+            assert "baseUrl" not in model
+            return True, "providers: vertex-maas\nmodels: zai-org/glm-5.2-maas"
+
         with (
             patch("metaproc.commands.auth_check.ADAPTER_REGISTRY") as mock_registry,
             patch(
                 "metaproc.commands.auth_check._pi_list_models",
-                return_value=(True, "providers: vertex-maas\nmodels: glm-5-maas"),
-            ),
+                side_effect=verify_staged_catalog,
+            ) as mock_list,
             patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
         ):
             mock_proc = MagicMock()
             mock_proc.returncode = 0
             mock_run.return_value = mock_proc
             mock_registry.__getitem__ = MagicMock(return_value=self._adapter())
-            results = _run_live_check("pi-cli", "glm-5-maas", timeout_s=30)
+            results = _run_live_check("pi-cli", "zai-org/glm-5.2-maas", timeout_s=30)
 
         assert len(results) == 1
         assert results[0][0]
         assert mock_run.call_count == 1
+        argv = mock_run.call_args.args[0]
+        assert "--api-key" not in argv
+        assert "--no-extensions" in argv
+        assert "test-gcp-token" not in " ".join(argv)
+        child_env = mock_run.call_args.kwargs["env"]
+        assert child_env == mock_list.call_args.args[0]
+        assert child_env["METAPROC_PI_API_KEY"] == "test-gcp-token"
+        assert child_env["HOME"] == str(tmp_path / "home")
+        assert (
+            not {"GCP_CREDENTIALS_BASE64", "GOOGLE_APPLICATION_CREDENTIALS", "ANTHROPIC_API_KEY"}
+            & child_env.keys()
+        )
+        assert mock_list.call_args.kwargs["isolated"]
+        assert mock_run.call_args.kwargs["cwd"] == Path(child_env["PI_CODING_AGENT_DIR"])
+        assert not Path(child_env["PI_CODING_AGENT_DIR"]).exists()
+
+    def test_incompatible_catalog_fails_before_launching_pi(self, tmp_path: Path) -> None:
+        models_path = tmp_path / "models.json"
+        models_path.write_text(
+            json.dumps({"providers": {"vertex-maas": {"apiKey": "unsupported-key"}}}),
+            encoding="utf-8",
+        )
+        with (
+            patch("metaproc.commands.auth_check.ADAPTER_REGISTRY", {"pi-cli": self._adapter()}),
+            patch("metaproc.commands.auth_check._pi_list_models") as mock_list,
+            patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
+        ):
+            results = _run_live_check("pi-cli", "zai-org/glm-5.2-maas", timeout_s=30)
+
+        ok, message = results[0]
+        assert not ok
+        assert str(models_path) in message
+        assert "$METAPROC_PI_API_KEY" in message
+        assert "unsupported-key" not in message
+        mock_list.assert_not_called()
+        mock_run.assert_not_called()
 
     def test_explicit_provider_override_is_respected(self):
         """Operator-supplied --provider overrides naming-based inference."""
@@ -1336,7 +1573,7 @@ class TestRunLiveCheckPiRegistrationGate:
             patch("metaproc.commands.auth_check.ADAPTER_REGISTRY") as mock_registry,
             patch(
                 "metaproc.commands.auth_check._pi_list_models",
-                return_value=(True, "providers: vertex-maas\nmodels: glm-5-maas"),
+                return_value=(True, "providers: vertex-maas\nmodels: zai-org/glm-5.2-maas"),
             ),
             patch("metaproc.commands.auth_check.run_command_in_process_group") as mock_run,
         ):
@@ -1344,10 +1581,10 @@ class TestRunLiveCheckPiRegistrationGate:
             mock_proc.returncode = 0
             mock_run.return_value = mock_proc
             mock_registry.__getitem__ = MagicMock(return_value=adapter)
-            _run_live_check("pi-cli", "glm-5-maas", timeout_s=30, provider="vertex-maas")
+            _run_live_check("pi-cli", "zai-org/glm-5.2-maas", timeout_s=30, provider="vertex-maas")
 
         assert captured["merged_config"]["provider"] == "vertex-maas"
-        assert captured["merged_config"]["model"] == "glm-5-maas"
+        assert captured["merged_config"]["model"] == "zai-org/glm-5.2-maas"
 
 
 class TestLiveCheckLauncher:

@@ -449,9 +449,10 @@ Auth flow:
    `provider.startswith("vertex")` and `backend == "local"`.
 
 4. The token is injected into the adapter’s `api_key` merged config, and `prepare_env`
-   passes it to the pi-cli subprocess as `METAPROC_PI_API_KEY`, which keeps it out of
-   the process list. Live checks in `src/metaproc/commands/auth_check.py` pass it as
-   `--api-key <token>`.
+   passes it to the pi-cli subprocess as `METAPROC_PI_API_KEY`. Live checks also pass
+   the token through the child environment.
+   Configure the `vertex-maas` provider in `models.json` to read that variable with
+   `$METAPROC_PI_API_KEY` or use the packaged Vertex helper.
 
 5. Tokens auto-refresh via `google.auth` before expiry — no subprocess shell-outs, no
    TTL guessing. Failure raises; there is no degraded fallback.
@@ -475,8 +476,12 @@ Additional per-container rewrites (`src/metaproc/cloud/gcp/batch_backend.py`
   rewritten to the `"$OPENAI_API_KEY"` reference, with a warning.
   Pi sends a bare string as the literal key, so an operator file written for an older Pi
   would otherwise get 401 responses.
-- Vertex `baseUrl` project paths are normalized to the dispatch project ID so
-  operator-local models.json works verbatim across projects.
+- Batch dispatch requires environment references for custom Pi headers and API keys.
+  Set each value through its `$NAME` reference and use Secret Manager for credentials.
+  Header values can also use `Bearer ${NAME}` or `Basic ${NAME}`. For Vertex ADC, use
+  the packaged helper or the native `google-vertex` credential setting.
+- Vertex `baseUrl` project paths are normalized to the dispatch project ID so the same
+  model configuration can target different projects.
 
 `GOOGLE_CLOUD_LOCATION=global` is set on every worker/orchestrator to satisfy the Gemini
 3.x preview SDK requirement.
@@ -892,11 +897,14 @@ Both paths use `PoolDispatchConfig`, `SlotCoordinator`, the adapter’s credenti
 and scrub rules, and the shared completion primitive in `pool_dispatch.py`. They scope
 the CLI to that slot through its native configuration environment variable:
 
-- Claude Code → `CLAUDE_CONFIG_DIR=<slot_dir>`, with `<slot_dir>/.credentials.json` mode
-  0600\.
+- Claude Code → `CLAUDE_CONFIG_DIR=<slot_dir>` and
+  `ANTHROPIC_CONFIG_DIR=<slot_dir>/.anthropic`, with `<slot_dir>/.credentials.json` mode
+  0600 for file-based logins.
+  The slot uses its own Anthropic profile directory.
 - Codex → `CODEX_HOME=<slot_dir>/.codex`, with `auth.json` plus a minimal `config.toml`
-  pinning `cli_auth_credentials_store = "file"` and `forced_login_method = "chatgpt"` so
-  the slot credential can’t be silently overridden by a stray `OPENAI_API_KEY`.
+  pinning `cli_auth_credentials_store = "file"` and `forced_login_method = "chatgpt"`.
+  The pool removes ambient `CODEX_API_KEY` and `CODEX_ACCESS_TOKEN` from the slot
+  environment and refuses acquisition when `OPENAI_API_KEY` is set.
 
 Scalar acquisition and teardown use the run-owned executor because local or GCP-backed
 credential storage may block.

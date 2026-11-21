@@ -72,6 +72,7 @@ class OrchestratorDispatchConfig:
     # Keep the auth configuration in its boundary type so adding a field cannot
     # silently desynchronize local, orchestrator, and worker dispatch.
     auth_flags: AuthPoolFlags = field(default_factory=AuthPoolFlags)
+    artifact_namespace: str = ""
 
 
 @dataclass
@@ -112,6 +113,7 @@ async def dispatch_orchestrator(
         initial_concurrency=config.initial_concurrency,
         spot=config.spot_workers,
         variant=config.variant or "",
+        artifact_namespace=config.artifact_namespace,
         adapter_config=config.adapter_config or {},
         skip_steps=tuple(config.skip_steps or ()),
         from_step=config.from_step,

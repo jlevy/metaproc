@@ -27,7 +27,7 @@ process:
     - id: claude-bogus-model-rejected
       mode: code
       command: >-
-        bash -lc "unset METAPROC_GCP_SECRET_CLAUDE_CREDS && cd ../../.. && ! uv run metaproc auth-check --live --variant claude-code-cli-bogus-xyz-nomatch --assert-model bogus-xyz-nomatch"
+        bash -lc "unset METAPROC_GCP_SECRET_CLAUDE_CREDS && cd ../.. && ! uv run metaproc auth-check --live --variant claude-code-cli-bogus-xyz-nomatch --assert-model bogus-xyz-nomatch"
       description: >-
         claude-code-cli silently rewrites unknown `--model` back to
         CLAUDE_DEFAULT_MODEL (see `_build_claude_flags`). The live
@@ -39,7 +39,7 @@ process:
     - id: gemini-bogus-model-rejected
       mode: code
       command: >-
-        bash -lc "export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && cd ../../.. && ! uv run metaproc auth-check --live --variant gemini-cli-bogus-xyz-nomatch --assert-model bogus-xyz-nomatch"
+        bash -lc "export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && cd ../.. && ! uv run metaproc auth-check --live --variant gemini-cli-bogus-xyz-nomatch --assert-model bogus-xyz-nomatch"
       description: >-
         Same shape as claude: gemini-cli silently rewrites unknown
         `--model` to GEMINI_DEFAULT_MODEL, the subprocess exits 0, and
@@ -48,7 +48,7 @@ process:
     - id: pi-bogus-model-rejected
       mode: code
       command: >-
-        bash -lc "cd ../../.. && ! uv run metaproc auth-check --live --variant pi-cli-bogus-xyz-nomatch --provider vertex-maas --assert-model bogus-xyz-nomatch"
+        bash -lc "cd ../.. && ! uv run metaproc auth-check --live --variant pi-cli-bogus-xyz-nomatch --provider vertex-maas --assert-model bogus-xyz-nomatch"
       description: >-
         pi-cli has a stronger guarantee than claude/gemini: the
         `_pi_validate_registration` pre-flight in auth-check refuses to
@@ -59,7 +59,7 @@ process:
     - id: codex-bogus-model-rejected
       mode: code
       command: >-
-        bash -lc "cd ../../.. && ! uv run metaproc auth-check --live --variant codex-cli-bogus-xyz-nomatch --assert-model bogus-xyz-nomatch"
+        bash -lc "cd ../.. && ! uv run metaproc auth-check --live --variant codex-cli-bogus-xyz-nomatch --assert-model bogus-xyz-nomatch"
       description: >-
         The metaproc codex adapter refuses an unknown `--model` before
         dispatch: `_build_codex_flag_groups` resolves it against the

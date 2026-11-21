@@ -13,33 +13,45 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import tempfile
 import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import NamedTuple
+from urllib.parse import urlsplit
 
 import typer
 from strif import temp_output_file
 
-from metaproc.adapters.base import agent_seed_env, parse_jsonl_event
+from metaproc.adapters.base import AGENT_ENV_OVERRIDES, agent_seed_env, parse_jsonl_event
 from metaproc.adapters.codex_cli import codex_rollout_model, codex_thread_id, resolve_codex_home
 from metaproc.adapters.gemini_cli import GEMINI_ALIAS_SERVED_MODELS, format_served_models
 from metaproc.adapters.gemini_cli import served_models as gemini_served_models
 from metaproc.adapters.pi_cli import resolve_pi_binary
-from metaproc.adapters.registry import ADAPTER_REGISTRY
+from metaproc.adapters.registry import ADAPTER_REGISTRY, get_auth_capable
 from metaproc.cli import app, get_output
-from metaproc.commands.claude_auth import _validate_creds_payload
 from metaproc.config.env_vars import MetaprocEnv
+from metaproc.config.model_catalog import resolve_model
 from metaproc.config.providers import infer_provider, provider_by_name
+from metaproc.dispatch.slot_coordinator import apply_slot_env
 from metaproc.engine.preflight import check_disk_space
 from metaproc.engine.resource_sampling import run_command_in_process_group
 from metaproc.errors import CLIError
-from metaproc.io import fmf_read_frontmatter
+from metaproc.io import atomic_write_text, fmf_read_frontmatter
 from metaproc.models.execution_profile import ExecutionProfileRegistry
 
 log = logging.getLogger(__name__)
+
+
+_ISOLATED_PROBE_ENV_KEYS = frozenset(
+    {"PATH", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TMP", "TEMP", *AGENT_ENV_OVERRIDES}
+)
+
+
+def _isolated_probe_env(env: Mapping[str, str], *extra_keys: str) -> dict[str, str]:
+    return {key: env[key] for key in _ISOLATED_PROBE_ENV_KEYS.union(extra_keys) if key in env}
 
 
 def _check_gcloud_token() -> tuple[bool, str]:
@@ -63,11 +75,11 @@ def _check_gcloud_token() -> tuple[bool, str]:
     return True, f"GCP token: ok via google.auth (len={len(token)}, expiry={expiry})"
 
 
-def _check_adapter(adapter_type: str) -> list[tuple[bool, str]]:
+def _check_adapter(adapter_type: str, *, live: bool = False) -> list[tuple[bool | None, str]]:
     """Run credential checks for a single adapter."""
     adapter = ADAPTER_REGISTRY[adapter_type]
     status = adapter.check_auth()
-    results: list[tuple[bool, str]] = []
+    results: list[tuple[bool | None, str]] = []
 
     # Binary check
     if status.cli_found:
@@ -81,6 +93,14 @@ def _check_adapter(adapter_type: str) -> list[tuple[bool, str]]:
     # Credentials check
     if status.credentials_found:
         results.append((True, f"{adapter_type}: credentials ok ({status.auth_mode})"))
+    elif adapter_type == "codex-cli" and status.auth_mode == "unknown":
+        next_step = "checking in the live probe" if live else "use --live to verify"
+        results.append(
+            (
+                None if live else False,
+                f"{adapter_type}: credentials unverified — {status.details}; {next_step}",
+            )
+        )
     else:
         results.append((False, f"{adapter_type}: no credentials found"))
         if status.setup_hint:
@@ -157,7 +177,9 @@ def _infer_pi_provider(model_name: str | None) -> str | None:
     return spec.name if spec else None
 
 
-def _pi_list_models(env: dict[str, str], timeout_s: int = 15) -> tuple[bool, str]:
+def _pi_list_models(
+    env: dict[str, str], timeout_s: int = 15, *, isolated: bool = False
+) -> tuple[bool, str]:
     """Capture ``pi --list-models`` output under ``env``.
 
     Returns ``(ok, combined_output)``. ``ok`` is ``False`` only when the
@@ -171,13 +193,15 @@ def _pi_list_models(env: dict[str, str], timeout_s: int = 15) -> tuple[bool, str
     except FileNotFoundError as exc:
         return False, str(exc)
 
+    flags = ["--no-mcp", "--no-extensions"] if isolated else []
     try:
         proc = subprocess.run(
-            [pi_binary, "--list-models"],
+            [pi_binary, "--list-models", *flags],
             capture_output=True,
             text=True,
             timeout=timeout_s,
             env=env,
+            cwd=env["PI_CODING_AGENT_DIR"] if isolated else None,
         )
     except subprocess.TimeoutExpired:
         return False, f"pi --list-models timed out after {timeout_s}s"
@@ -191,6 +215,8 @@ def _pi_validate_registration(
     model: str | None,
     env: dict[str, str],
     timeout_s: int = 15,
+    *,
+    isolated: bool = False,
 ) -> tuple[bool, str]:
     """Verify that ``provider`` and ``model`` are registered with pi-cli.
 
@@ -199,7 +225,7 @@ def _pi_validate_registration(
     ``auth-check --live`` from false-greening when pi-cli silently falls
     back to its default provider.
     """
-    ok, output = _pi_list_models(env, timeout_s=timeout_s)
+    ok, output = _pi_list_models(env, timeout_s=timeout_s, isolated=isolated)
     if not ok:
         return False, output
 
@@ -215,6 +241,126 @@ def _pi_validate_registration(
             + " — the live check would exercise a different model than requested"
         )
     return True, "registration validated via pi --list-models"
+
+
+_PI_GCP_TOKEN_ENV = "METAPROC_PI_API_KEY"
+_PI_GCP_TOKEN_SOURCES = frozenset(
+    {
+        "$METAPROC_PI_API_KEY",
+        "${METAPROC_PI_API_KEY}",
+        # The command in the packaged and Batch-rendered provider catalog.
+        (
+            '!sh -c \'if [ -n "$METAPROC_PI_API_KEY" ]; then '
+            'printf "%s" "$METAPROC_PI_API_KEY"; else exec gcp-access-token.sh; fi\''
+        ),
+    }
+)
+
+
+def _stage_pi_gcp_probe_catalog(
+    provider: str, requested_model: str, env: Mapping[str, str], stage_dir: Path
+) -> str:
+    """Stage one MaaS route with an explicit key source and no inherited Pi login."""
+    agent_dir = env.get("PI_CODING_AGENT_DIR")
+    home = env.get("HOME")
+    models_path = (
+        Path(agent_dir).expanduser()
+        if agent_dir
+        else (Path(home) if home else Path.home()) / ".pi" / "agent"
+    ) / "models.json"
+    try:
+        config = json.loads(models_path.read_text(encoding="utf-8-sig"))["providers"][provider]
+        api_key = config["apiKey"]
+    except OSError, ValueError, KeyError, TypeError:
+        config = {}
+        api_key = None
+    if not isinstance(api_key, str) or api_key not in _PI_GCP_TOKEN_SOURCES:
+        raise ValueError(
+            f'set providers.{provider}.apiKey in {models_path} to "${_PI_GCP_TOKEN_ENV}" '
+            "or use Metaproc's packaged provider configuration"
+        )
+
+    base_url = config.get("baseUrl", "")
+    try:
+        parsed = urlsplit(base_url if isinstance(base_url, str) else "")
+        trusted_url = (
+            parsed.scheme == "https"
+            and parsed.username is None
+            and parsed.port in (None, 443)
+            and re.fullmatch(r"(?:[a-z0-9-]+-)?aiplatform\.googleapis\.com", parsed.hostname or "")
+        )
+    except ValueError:
+        trusted_url = False
+    if not trusted_url or config.get("api") != "openai-completions":
+        raise ValueError(f"{models_path} must route {provider} to an HTTPS Vertex AI endpoint")
+
+    defs = config.get("models")
+    matching = (
+        [
+            model
+            for model in defs
+            if isinstance(model, dict)
+            and isinstance(model.get("id"), str)
+            and (
+                model["id"] == requested_model or model["id"].rsplit("/", 1)[-1] == requested_model
+            )
+        ]
+        if isinstance(defs, list)
+        else []
+    )
+    if len(matching) != 1:
+        raise ValueError(
+            f"{models_path} must define one {provider} model matching {requested_model!r}"
+        )
+
+    selected = matching[0]
+    catalog = {
+        "providers": {
+            provider: {
+                "baseUrl": base_url,
+                "api": "openai-completions",
+                "apiKey": f"${_PI_GCP_TOKEN_ENV}",
+                "authHeader": True,
+                "models": [
+                    {
+                        key: value
+                        for key, value in selected.items()
+                        if key
+                        in {
+                            "id",
+                            "name",
+                            "reasoning",
+                            "input",
+                            "contextWindow",
+                            "maxTokens",
+                            "cost",
+                        }
+                    }
+                ],
+            }
+        }
+    }
+    atomic_write_text(stage_dir / "models.json", json.dumps(catalog))
+    return selected["id"]
+
+
+def _resolve_pi_gcp_probe_token() -> str:
+    """Mint a bearer in the parent using its application default credentials."""
+    try:
+        from metaproc.cloud.gcp.resolve_token import (  # noqa: PLC0415 -- optional [gcp] dependency
+            resolve_gcp_token,
+        )
+
+        token = resolve_gcp_token()
+    except ImportError:
+        raise ValueError("install metaproc[gcp] to resolve a Vertex MaaS credential") from None
+    except Exception as exc:  # noqa: BLE001 -- report any upstream credential failure safely
+        raise ValueError(
+            f"GCP access token unavailable ({type(exc).__name__}); check Application Default Credentials"
+        ) from None
+    if not token.strip():
+        raise ValueError("GCP access token unavailable; check Application Default Credentials")
+    return token
 
 
 # Adapter-specific matchers for the identity event that carries model ID.
@@ -358,7 +504,10 @@ def _run_live_check(
 
     adapter = ADAPTER_REGISTRY[adapter_type]
     status = adapter.check_auth()
-    if not status.cli_found or not status.credentials_found:
+    can_probe_credentials = status.credentials_found or (
+        adapter_type == "codex-cli" and status.auth_mode == "unknown"
+    )
+    if not status.cli_found or not can_probe_credentials:
         return [(False, f"{adapter_type}: skipping live check (no binary or credentials)")]
 
     # Start from the profile's own adapter config, as a run seeds a step's config
@@ -413,6 +562,7 @@ def _run_live_check(
         f.write("Respond with exactly: OK")
         prompt_path = Path(f.name)
 
+    pi_stage: tempfile.TemporaryDirectory[str] | None = None
     try:
         try:
             cmd = adapter.build_command(
@@ -436,26 +586,28 @@ def _run_live_check(
         if adapter_type == "pi-cli" and "--no-tools" not in cmd:
             cmd = [*cmd, "--no-tools"]
 
-        # Inject a fresh GCP access token as `--api-key` only for providers
-        # that actually use one (e.g. vertex-maas). Doing this unconditionally
-        # for pi-cli false-greens direct-API providers: the GCP token gets
-        # passed in place of (e.g.) DEEPSEEK_API_KEY, then pi-cli reports the
-        # real auth failure as a JSONL `stopReason: error` event while still
-        # exiting 0 — caught below by the JSONL error scanner.
+        # The registration command filters by credential availability, so both
+        # Pi children need the key in their environment. Never put it in argv.
+        pi_gcp_token: str | None = None
+        registration_model = variant
         if adapter_type == "pi-cli" and effective_provider:
             spec = provider_by_name(effective_provider)
             if spec is not None and spec.requires_gcp_token:
+                pi_stage = tempfile.TemporaryDirectory(prefix="metaproc-pi-maas-check-")
                 try:
-                    from metaproc.cloud.gcp.resolve_token import (  # noqa: PLC0415 -- optional [gcp-batch] dependency
-                        resolve_gcp_token,  # noqa: PLC0415  # optional GCP extra
+                    registration_model = _stage_pi_gcp_probe_catalog(
+                        effective_provider,
+                        resolve_model("pi-cli", merged_config.get("model")),
+                        env,
+                        Path(pi_stage.name),
                     )
-
-                    token = resolve_gcp_token()
-                    cmd = [cmd[0], "--api-key", token, *cmd[1:]]
-                except ImportError:
-                    pass  # GCP extra not installed — skip token injection
-                except Exception:
-                    log.warning("Failed to inject GCP token for live check", exc_info=True)
+                    pi_gcp_token = _resolve_pi_gcp_probe_token()
+                except ValueError as exc:
+                    return [(False, f"{label}: {exc}")]
+                env = _isolated_probe_env(env, "HOME", "PI_SKIP_VERSION_CHECK", "PI_TELEMETRY")
+                env["PI_CODING_AGENT_DIR"] = pi_stage.name
+                env[_PI_GCP_TOKEN_ENV] = pi_gcp_token
+                cmd = [*cmd, "--no-extensions"]
 
         # Pre-flight: confirm pi-cli actually knows the requested provider/model
         # before we dispatch a trivial prompt. Without this gate, pi-cli
@@ -464,11 +616,14 @@ def _run_live_check(
         if adapter_type == "pi-cli" and (effective_provider or variant):
             ok, diag = _pi_validate_registration(
                 effective_provider,
-                variant,
+                registration_model,
                 env,
                 timeout_s=min(timeout_s, 15),
+                isolated=pi_stage is not None,
             )
             if not ok:
+                if pi_gcp_token:
+                    diag = diag.replace(pi_gcp_token, "[redacted]")
                 results.append((False, f"{label}: {diag}"))
                 return results
 
@@ -482,23 +637,25 @@ def _run_live_check(
                 text=True,
                 timeout=timeout_s,
                 env=env,
-                cwd=adapter.working_directory(merged_config),
+                cwd=Path(pi_stage.name) if pi_stage else adapter.working_directory(merged_config),
             )
             elapsed = time.monotonic() - t0
+            stdout, stderr = proc.stdout or "", proc.stderr or ""
+            if pi_gcp_token:
+                stdout = stdout.replace(pi_gcp_token, "[redacted]")
+                stderr = stderr.replace(pi_gcp_token, "[redacted]")
             # pi-cli reports terminal errors as JSONL events with
             # stopReason="error" while still exiting 0. Without this scan
             # the live check false-greens on missing/invalid API keys, 401s,
             # 429s, etc.
-            jsonl_error = (
-                _extract_pi_jsonl_error(proc.stdout or "") if adapter_type == "pi-cli" else None
-            )
+            jsonl_error = _extract_pi_jsonl_error(stdout) if adapter_type == "pi-cli" else None
             if proc.returncode == 0 and jsonl_error is None:
                 results.append((True, f"{label}: live check passed ({elapsed:.1f}s)"))
                 if assert_model:
                     results.append(
                         _evaluate_model_assertion(
                             adapter_type,
-                            proc.stdout or "",
+                            stdout,
                             assert_model,
                             label,
                             env=env,
@@ -519,7 +676,7 @@ def _run_live_check(
             else:
                 # Extract first useful line of stderr
                 err_line = ""
-                for line in (proc.stderr or "").splitlines():
+                for line in stderr.splitlines():
                     stripped = line.strip()
                     if stripped and not stripped.startswith("{"):
                         err_line = stripped[:120]
@@ -534,6 +691,8 @@ def _run_live_check(
             results.append((False, f"{label}: live check timed out after {timeout_s}s"))
     finally:
         prompt_path.unlink(missing_ok=True)
+        if pi_stage is not None:
+            pi_stage.cleanup()
 
     return results
 
@@ -804,10 +963,8 @@ def _run_claude_secret_live_check(
     """Validate a Secret Manager claude-code credential end-to-end.
 
     Exercises the cloud path that GCP Batch workers use: fetch the Secret
-    Manager payload, materialize it to a throwaway ``~/.claude/.credentials.json``,
-    and run ``claude -p`` against it. Catches stale/invalidated OAuth tokens
-    that the local keychain check cannot detect because the keychain blob
-    and the Secret Manager blob can drift apart.
+    Manager payload, materialize it in a temporary credential slot, and run
+    ``claude -p`` with that slot's credential and configuration paths.
 
     ``secret_ref`` must be a fully-qualified resource name:
     ``projects/PROJECT/secrets/NAME/versions/VERSION``.
@@ -833,77 +990,68 @@ def _run_claude_secret_live_check(
         first_err = next((line for line in err if line.strip()), "gcloud failed")[:160]
         return [(False, f"{label}: fetch failed — {first_err}")]
 
-    payload = proc.stdout
-    try:
-        _validate_creds_payload(payload)
-    except RuntimeError as exc:
-        return [(False, f"{label}: payload rejected — {exc}")]
-
-    adapter = ADAPTER_REGISTRY["claude-code-cli"]
-    status = adapter.check_auth()
-    if not status.cli_found:
+    adapter = get_auth_capable("claude-code-cli")
+    if adapter is None or not adapter.check_auth().cli_found:
         return [(False, f"{label}: claude binary not found on PATH")]
 
     merged_config: dict[str, object] = {
-        "permission_mode": "bypassPermissions",
+        "permission_mode": "default",
         "output_format": "text",
         "verbose": False,
         "no_session_persistence": True,
+        "strict_mcp_config": True,
+        "tools": [],
     }
 
     with tempfile.TemporaryDirectory(prefix="metaproc-claude-secret-check-") as tmp:
         tmp_home = Path(tmp)
         claude_dir = tmp_home / ".claude"
-        claude_dir.mkdir(mode=0o700)
-        creds_file = claude_dir / ".credentials.json"
-        creds_file.write_text(payload)
-        creds_file.chmod(0o600)
-
-        with tempfile.NamedTemporaryFile(
-            encoding="utf-8", mode="w", suffix=".md", delete=False
-        ) as prompt_f:
-            prompt_f.write("Respond with exactly: OK")
-            prompt_path = Path(prompt_f.name)
-
         try:
-            cmd = adapter.build_command(
-                prompt_file=prompt_path,
-                merged_config=merged_config,
-                variables={},
-            )
-            env = adapter.prepare_env(agent_seed_env(), merged_config)
-            env.pop("ANTHROPIC_API_KEY", None)
-            env["HOME"] = str(tmp_home)
+            adapter.materialize_credential(claude_dir, proc.stdout)
+        except RuntimeError as exc:
+            return [(False, f"{label}: payload rejected — {exc}")]
 
-            t0 = time.monotonic()
-            try:
-                run = subprocess.run(
-                    cmd,
-                    capture_output=True,
-                    text=True,
-                    timeout=timeout_s,
-                    env=env,
-                )
-                elapsed = time.monotonic() - t0
-                if run.returncode == 0:
-                    results.append((True, f"{label}: live check passed ({elapsed:.1f}s)"))
-                else:
-                    err_line = ""
-                    for line in (run.stderr or run.stdout or "").splitlines():
-                        stripped = line.strip()
-                        if stripped and not stripped.startswith("{"):
-                            err_line = stripped[:160]
-                            break
-                    results.append(
-                        (
-                            False,
-                            f"{label}: live check failed (exit {run.returncode}, {elapsed:.1f}s) — {err_line}",
-                        )
+        prompt_path = tmp_home / "prompt.md"
+        atomic_write_text(prompt_path, "Respond with exactly: OK")
+        cmd = adapter.build_command(
+            prompt_file=prompt_path, merged_config=merged_config, variables={}
+        )
+        cmd = [cmd[0], "--setting-sources", "user", *cmd[1:]]
+        env = apply_slot_env(
+            adapter.prepare_env(_isolated_probe_env(agent_seed_env()), merged_config),
+            scope_env=adapter.credential_scope_env(claude_dir),
+            scrub_env=adapter.credential_scrub_env(),
+            extra={"HOME": str(tmp_home), "XDG_CONFIG_HOME": str(tmp_home / ".config")},
+        )
+
+        t0 = time.monotonic()
+        try:
+            run = run_command_in_process_group(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout_s,
+                env=env,
+                cwd=tmp_home,
+            )
+            elapsed = time.monotonic() - t0
+            if run.returncode == 0:
+                results.append((True, f"{label}: live check passed ({elapsed:.1f}s)"))
+            else:
+                err_line = ""
+                for line in (run.stderr or run.stdout or "").splitlines():
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith("{"):
+                        err_line = stripped[:160]
+                        break
+                results.append(
+                    (
+                        False,
+                        f"{label}: live check failed (exit {run.returncode}, {elapsed:.1f}s) — {err_line}",
                     )
-            except subprocess.TimeoutExpired:
-                results.append((False, f"{label}: live check timed out after {timeout_s}s"))
-        finally:
-            prompt_path.unlink(missing_ok=True)
+                )
+        except subprocess.TimeoutExpired:
+            results.append((False, f"{label}: live check timed out after {timeout_s}s"))
 
     return results
 
@@ -1045,11 +1193,11 @@ def auth_check(
     out.progress("Phase 1: Environment and credential audit")
 
     # Disk space
-    all_results.append(check_disk_space())
+    environment_results: list[tuple[bool | None, str]] = [check_disk_space()]
 
     # gcloud token (informational — needed for vertex-maas adapters)
     gcloud_ok, gcloud_msg = _check_gcloud_token()
-    all_results.append((gcloud_ok, gcloud_msg))
+    environment_results.append((gcloud_ok, gcloud_msg))
 
     # --adapter is mutually exclusive with --variant. When --adapter is set we
     # bypass execution-profile resolution and probe (adapter, model) directly;
@@ -1072,10 +1220,14 @@ def auth_check(
         scoped_adapter, scoped_model = adapter, model
     adapter_types = [scoped_adapter] if scoped_adapter else list(ADAPTER_REGISTRY)
     for adapter_type in adapter_types:
-        all_results.extend(_check_adapter(adapter_type))
+        environment_results.extend(_check_adapter(adapter_type, live=live))
 
     # Print Phase 1 results
-    for ok, msg in all_results:
+    for ok, msg in environment_results:
+        if ok is None:
+            out.data(f"[!] {msg}")
+            continue
+        all_results.append((ok, msg))
         icon = "+" if ok else "-"
         out.data(f"[{icon}] {msg}")
         if not ok:

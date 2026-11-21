@@ -824,10 +824,11 @@ class ClaudeCodeCliAdapter:
     ) -> dict[str, str]:
         """Scope Claude Code CLI credential lookup to *slot_dir*.
 
-        Vehicle B (default / vehicle is None or LOGIN_CREDENTIALS):
-        scopes ``CLAUDE_CONFIG_DIR`` only. The CLI reads
-        ``<slot>/.credentials.json`` (materialized via
-        :meth:`materialize_credential`).
+        Both vehicles scope ``CLAUDE_CONFIG_DIR`` to the slot and
+        ``ANTHROPIC_CONFIG_DIR`` to its private profile directory. An active
+        profile in the host directory can otherwise outrank the slot login.
+        Vehicle B (default / LOGIN_CREDENTIALS) reads
+        ``<slot>/.credentials.json`` (written by :meth:`materialize_credential`).
 
         Vehicle A (OAUTH_TOKEN — schema_version 2): also injects
         ``CLAUDE_CODE_OAUTH_TOKEN=<blob>`` plus ``DISABLE_UPDATES=1``.
@@ -856,7 +857,10 @@ class ClaudeCodeCliAdapter:
           present too, but ``METAPROC_WORKER_ID`` only exists inside
           a Batch worker container.
         """
-        env = {"CLAUDE_CONFIG_DIR": str(slot_dir)}
+        env = {
+            "CLAUDE_CONFIG_DIR": str(slot_dir),
+            "ANTHROPIC_CONFIG_DIR": str(slot_dir / ".anthropic"),
+        }
         if vehicle is Vehicle.OAUTH_TOKEN:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = blob
             env["DISABLE_UPDATES"] = "1"
@@ -901,13 +905,12 @@ class ClaudeCodeCliAdapter:
         session's tool subprocesses. Unsetting ``ANTHROPIC_PROFILE`` and
         either federation variable stops Claude Code selecting those sources;
         the identity-token, service-account, and workspace variables are read
-        only during the federation exchange. An *active* ``oidc_federation``
-        profile file in the Anthropic configuration directory
-        (``ANTHROPIC_CONFIG_DIR``, default ``~/.config/anthropic``) also
-        outranks ``/login``. Unsetting a variable cannot remove that file,
-        so this scrub does not cover it.
+        only during the federation exchange. An active profile file can
+        also outrank ``/login``. :meth:`credential_scope_env` redirects
+        the profile lookup to the slot's own Anthropic configuration directory.
         """
         scrub: dict[str, str] = {
+            CLAUDE_CREDS_ENV_VAR: "",
             "ANTHROPIC_AUTH_TOKEN": "",
             "CLAUDE_CODE_APIKEY_HELPER": "",
             # Cloud-provider mode flags would silently route every API
@@ -961,6 +964,7 @@ class ClaudeCodeCliAdapter:
         """
         slot_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         slot_dir.chmod(0o700)
+        (slot_dir / ".anthropic").mkdir(mode=0o700, exist_ok=True)
         # Pre-write hardening so claude --print actually reaches the API:
         #
         # 1. ``.claude.json`` with ``hasCompletedOnboarding: true`` —

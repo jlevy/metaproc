@@ -19,7 +19,7 @@ process:
     - id: auth-check-dry
       mode: code
       command: >-
-        bash -lc "cd ../../.. && uv run metaproc auth-check --variant codex-cli"
+        bash -lc "cd ../.. && uv run metaproc auth-check --variant codex-cli"
       description: >-
         Dry survey — binary path + credential source (OPENAI_API_KEY or
         ChatGPT OAuth via ~/.codex/auth.json). Exits non-zero if either
@@ -29,7 +29,7 @@ process:
     - id: live-probe
       mode: code
       command: >-
-        bash -lc "cd ../../.. && uv run metaproc auth-check --live --variant codex-cli --assert-model gpt"
+        bash -lc "cd ../.. && uv run metaproc auth-check --live --variant codex-cli --assert-model gpt"
       description: >-
         Send a trivial "Respond with exactly: OK" prompt via
         `codex exec --json` and assert that the model Codex requested

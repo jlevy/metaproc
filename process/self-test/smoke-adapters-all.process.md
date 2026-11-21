@@ -32,7 +32,7 @@ process:
     - id: auth-check-survey
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; unset METAPROC_GCP_SECRET_CLAUDE_CREDS && export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; unset METAPROC_GCP_SECRET_CLAUDE_CREDS && export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc auth-check"
       description: >-
         Phase 1 dry survey across all registered adapters (disk space,
         gcloud token, each adapter's binary + credential). No prompts

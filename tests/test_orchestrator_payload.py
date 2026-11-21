@@ -51,6 +51,7 @@ class TestToEnvVars:
             initial_concurrency=3,
             spot=False,  # explicit opt-out so encoder writes "false"
             variant="gemini-3",
+            artifact_namespace="continuation",
             adapter_config={"model": "gemini-3"},
             skip_steps=("predict-ticker",),
             from_step="curate",
@@ -69,6 +70,7 @@ class TestToEnvVars:
         assert env["METAPROC_INITIAL_CONCURRENCY"] == "3"
         assert env["METAPROC_SPOT"] == "false"
         assert env["METAPROC_VARIANT"] == "gemini-3"
+        assert env["METAPROC_ARTIFACT_NAMESPACE"] == "continuation"
         assert json.loads(env["METAPROC_ADAPTER_CONFIG"]) == {"model": "gemini-3"}
         assert env["METAPROC_SKIP_STEPS"] == "predict-ticker"
         assert env["METAPROC_FROM_STEP"] == "curate"
@@ -99,6 +101,7 @@ class TestFromEnv:
                 "METAPROC_INITIAL_CONCURRENCY": "3",
                 "METAPROC_SPOT": "false",
                 "METAPROC_VARIANT": "gemini-3",
+                "METAPROC_ARTIFACT_NAMESPACE": "continuation",
                 "METAPROC_ADAPTER_CONFIG": '{"model": "gemini-3"}',
                 "METAPROC_SKIP_STEPS": "a,b,c",
                 "METAPROC_FROM_STEP": "curate",
@@ -115,6 +118,7 @@ class TestFromEnv:
         assert p.initial_concurrency == 3
         assert p.spot is False
         assert p.variant == "gemini-3"
+        assert p.artifact_namespace == "continuation"
         assert p.adapter_config == {"model": "gemini-3"}
         assert p.skip_steps == ("a", "b", "c")
         assert p.from_step == "curate"

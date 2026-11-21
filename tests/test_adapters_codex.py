@@ -9,6 +9,7 @@ import pickle
 import stat
 import subprocess
 from compression import zstd
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar
 from unittest.mock import patch
@@ -30,6 +31,7 @@ from metaproc.adapters.codex_cli import (
 )
 from metaproc.commands.auth_check import _evaluate_model_assertion, _run_live_check
 from metaproc.config.env_vars import SECRET_VARS, MetaprocEnv
+from metaproc.dispatch.slot_coordinator import apply_slot_env
 from metaproc.engine import runtime as engine_runtime
 from metaproc.engine.command_diagnostics import redact_diagnostic
 from metaproc.logutil.parsing import LogFile
@@ -460,6 +462,21 @@ class TestCodexBootstrap:
         with pytest.raises(RuntimeError, match="JSON object"):
             self.adapter.bootstrap(tmp_path)
 
+    def test_refuses_mixed_auth_before_materializing_a_slot(self, tmp_path: Path) -> None:
+        blob = json.dumps(
+            {
+                "auth_mode": "chatgpt",
+                "tokens": {"access_token": "oauth-fixture"},
+                "personal_access_token": "fixture-value",
+            }
+        )
+
+        with pytest.raises(RuntimeError, match="personal_access_token") as exc:
+            self.adapter.materialize_credential(tmp_path, blob)
+
+        assert "fixture-value" not in str(exc.value)
+        assert not (tmp_path / ".codex").exists()
+
 
 class TestCodexCheckAuth:
     def setup_method(self):
@@ -662,6 +679,18 @@ class TestCodexAuthCapableSubprotocol:
         assert "OPENAI_API_KEY" not in scrub
         # The CODEX_API_KEY bridge prepare_env may add never reaches an OAuth slot.
         assert scrub["CODEX_API_KEY"] == ""
+
+    def test_slot_launch_scrubs_ambient_access_token(self, tmp_path: Path) -> None:
+        self.adapter.materialize_credential(tmp_path, _VALID_OAUTH_PAYLOAD)
+        env = apply_slot_env(
+            {"CODEX_HOME": str(tmp_path / "host"), "CODEX_ACCESS_TOKEN": "host-token"},
+            scope_env=self.adapter.credential_scope_env(tmp_path),
+            scrub_env=self.adapter.credential_scrub_env(),
+        )
+
+        child_env = self.adapter.prepare_env(env, {})
+        assert child_env["CODEX_HOME"] == str(tmp_path / ".codex")
+        assert "CODEX_ACCESS_TOKEN" not in child_env
 
     def test_materialize_credential_writes_auth_json_and_config_toml(self, tmp_path):
         slot = tmp_path / "slot"
@@ -1263,6 +1292,22 @@ class TestCodexApiKeyBridge:
         out = self.adapter.prepare_env(self._env(tmp_path), {})
         assert "CODEX_API_KEY" not in out
 
+    def test_oversized_config_toml_blocks_the_bridge(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("metaproc.adapters.codex_cli._MAX_CODEX_CONFIG_BYTES", 32)
+        (tmp_path / ".codex").mkdir()
+        (tmp_path / ".codex" / "config.toml").write_text("# " + "x" * 50, encoding="utf-8")
+        out = self.adapter.prepare_env(self._env(tmp_path), {})
+        assert "CODEX_API_KEY" not in out
+
+    def test_relative_codex_home_withholds_the_bridge(self, tmp_path: Path) -> None:
+        out = self.adapter.prepare_env(
+            self._env(tmp_path, CODEX_HOME="relative-codex"), {"working_directory": str(tmp_path)}
+        )
+        assert "CODEX_API_KEY" not in out
+        assert out["CODEX_HOME"] == "relative-codex"
+
 
 class TestCodexBridgeFollowsStepEnv:
     """Launchers apply a step's `env` after prepare_env; the bridge decides on the merged env."""
@@ -1308,6 +1353,12 @@ class TestCodexBridgeFollowsStepEnv:
         env = self._prepared(tmp_path)
         env.update({"CODEX_HOME": str(step_home)})
         assert env["CODEX_API_KEY"] == "sk-openai"
+
+    def test_relative_step_codex_home_withdraws_the_bridge(self, tmp_path: Path) -> None:
+        env = self._prepared(tmp_path)
+        env.update({"CODEX_HOME": "relative-codex"})
+        assert "CODEX_API_KEY" not in env
+        assert env["CODEX_HOME"] == "relative-codex"
 
     def test_step_access_token_withdraws_the_bridge(self, tmp_path: Path) -> None:
         env = self._prepared(tmp_path)
@@ -1437,6 +1488,7 @@ class TestCodexCheckAuthPrecedence:
         )
         status = self.adapter.check_auth()
         assert status.auth_mode == "unknown"
+        assert status.credentials_found is False
         assert "etc-codex" in status.details
 
     def test_auth_json_wins_over_openai_api_key(
@@ -1472,7 +1524,19 @@ class TestCodexCheckAuthPrecedence:
         (tmp_path / "config.toml").write_text('cli_auth_credentials_store = "keyring"\n')
         status = self.adapter.check_auth()
         assert status.auth_mode == "unknown"
-        assert status.credentials_found is True
+        assert status.credentials_found is False
+        assert "keyring" in status.details
+
+    @pytest.mark.parametrize("with_auth_file", [False, True])
+    def test_dry_auth_reports_keyring_unverified_without_an_api_key(
+        self, tmp_path: Path, with_auth_file: bool
+    ) -> None:
+        (tmp_path / "config.toml").write_text('cli_auth_credentials_store = "keyring"\n')
+        if with_auth_file:
+            (tmp_path / "auth.json").write_text(_VALID_OAUTH_PAYLOAD)
+        status = self.adapter.check_auth()
+        assert status.auth_mode == "unknown"
+        assert status.credentials_found is False
         assert "keyring" in status.details
 
     def test_nothing_configured_is_none(self) -> None:
@@ -1482,11 +1546,12 @@ class TestCodexCheckAuthPrecedence:
 
 
 class TestCodexApiKeyRedaction:
-    """CODEX_API_KEY is masked wherever Metaproc masks secrets."""
+    """Explicit Codex credentials are masked wherever Metaproc masks secrets."""
 
-    def test_registered_as_secret(self) -> None:
-        assert MetaprocEnv.CODEX_API_KEY.kind == "SECRET"
-        assert MetaprocEnv.CODEX_API_KEY in SECRET_VARS
+    @pytest.mark.parametrize("var", [MetaprocEnv.CODEX_API_KEY, MetaprocEnv.CODEX_ACCESS_TOKEN])
+    def test_registered_as_secret(self, var: MetaprocEnv) -> None:
+        assert var.kind == "SECRET"
+        assert var in SECRET_VARS
 
     def test_invocation_sidecar_redacts_it(self, tmp_path: Path) -> None:
         sidecar = tmp_path / "invocation.json"
@@ -1542,6 +1607,41 @@ class TestCodexRolloutModel:
     def test_reads_turn_context_model(self, tmp_path: Path) -> None:
         _write_rollout(tmp_path, _THREAD_ID, "gpt-6.1-sol")
         assert codex_rollout_model(tmp_path, _THREAD_ID) == "gpt-6.1-sol"
+
+    def test_stops_after_the_first_model_record(self, tmp_path: Path) -> None:
+        rollout = _write_rollout(tmp_path, _THREAD_ID, "gpt-6.1-sol")
+        rollout.write_bytes(rollout.read_bytes() + b"\xff\n")
+        assert codex_rollout_model(tmp_path, _THREAD_ID) == "gpt-6.1-sol"
+
+    def test_recent_rollout_does_not_scan_session_history(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        recent = tmp_path / "sessions" / datetime.now(UTC).strftime("%Y/%m/%d")
+        recent.mkdir(parents=True)
+        rollout = recent / f"rollout-recent-{_THREAD_ID}.jsonl"
+        rollout.write_text(
+            '{"type":"turn_context","payload":{"model":"gpt-6.1-sol"}}\n', encoding="utf-8"
+        )
+
+        def reject_history_scan(_path: Path, _pattern: str) -> None:
+            pytest.fail("A recent rollout should not require a recursive scan")
+
+        monkeypatch.setattr(Path, "rglob", reject_history_scan)
+        assert codex_rollout_model(tmp_path, _THREAD_ID) == "gpt-6.1-sol"
+
+    @pytest.mark.parametrize("compressed", [False, True])
+    def test_ignores_model_after_an_oversized_line(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, compressed: bool
+    ) -> None:
+        monkeypatch.setattr("metaproc.adapters.codex_cli._MAX_ROLLOUT_LINE_BYTES", 128)
+        rollout = _write_rollout(tmp_path, _THREAD_ID, "gpt-6.1-sol")
+        data = b" " * 129 + b"\n" + rollout.read_bytes()
+        if compressed:
+            rollout.with_suffix(".jsonl.zst").write_bytes(zstd.compress(data))
+            rollout.unlink()
+        else:
+            rollout.write_bytes(data)
+        assert codex_rollout_model(tmp_path, _THREAD_ID) is None
 
     def test_missing_rollout_is_none(self, tmp_path: Path) -> None:
         assert codex_rollout_model(tmp_path, _THREAD_ID) is None

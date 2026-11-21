@@ -78,6 +78,7 @@ class TestBaseline:
             "--num-workers",
             "--initial-concurrency",
             "--variant",
+            "--artifact-namespace",
             "--auth-account",
             "--auth-backend",
             "--auth-include-labels",
@@ -105,11 +106,12 @@ class TestEntrypoint:
         log_resources.assert_not_called()
         bootstrap.assert_not_called()
 
-    def test_forwards_orchestrator_admission_marker_to_inner_process(self) -> None:
+    def test_forwards_orchestrator_admission_marker_and_explicit_namespace(self) -> None:
         env = {
             "METAPROC_PROCESS_SPEC": "path/to/spec.process.md",
-            "METAPROC_VARS": '{"RUN_ID": "test-run"}',
+            "METAPROC_VARS": '{"RUN_ID": "test-run", "VARIANT": "legacy-variable"}',
             "METAPROC_GCP_ORCHESTRATOR": "1",
+            "METAPROC_ARTIFACT_NAMESPACE": "continuation",
         }
         with (
             patch.dict("os.environ", env, clear=True),
@@ -124,6 +126,10 @@ class TestEntrypoint:
 
         child_env = run.call_args.kwargs["env"]
         assert child_env["METAPROC_GCP_ORCHESTRATOR"] == "1"
+        child_argv = run.call_args.args[0]
+        assert child_argv[child_argv.index("--artifact-namespace") + 1] == "continuation"
+        assert "VARIANT=legacy-variable" in child_argv
+        assert "ARTIFACT_NAMESPACE=continuation" not in child_argv
 
 
 class TestAuthFlags:

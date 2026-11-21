@@ -3,8 +3,9 @@
 These tests pin what the Claude Code 2.1.325 upgrade changed in the adapter
 (pin, debug-capture argv, credential scrub) and replay real 2.1.325 captures
 through the parsers metaproc runs on Claude output. The captures are in
-``tests/fixtures/claude_api_signals/`` and are sanitized: paths are rewritten and
-the ``system/init`` event keeps only the fields metaproc and these tests read.
+``tests/fixtures/claude_api_signals/``. Paths, request and session identifiers, and
+quota data were replaced. The ``system/init`` event keeps only the fields metaproc
+and these tests read.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from metaproc.adapters.claude_cli import (
     parse_claude_api_signals,
 )
 from metaproc.dispatch.credential_pool import Vehicle
+from metaproc.dispatch.slot_coordinator import apply_slot_env
 from metaproc.logutil.usage import sum_claude_usage
 
 FIXTURES = Path(__file__).parent / "fixtures" / "claude_api_signals"
@@ -97,15 +99,26 @@ class TestCredentialScrub:
             assert scrub[name] == "", name
 
     @pytest.mark.parametrize("vehicle", [None, Vehicle.LOGIN_CREDENTIALS, Vehicle.OAUTH_TOKEN])
-    def test_keeps_api_key_and_profile_directory(
-        self, adapter: ClaudeCodeCliAdapter, vehicle: Vehicle | None
+    def test_scopes_host_config_and_profile_directories(
+        self, adapter: ClaudeCodeCliAdapter, vehicle: Vehicle | None, tmp_path: Path
     ) -> None:
-        scrub = adapter.credential_scrub_env(vehicle=vehicle)
-        # API-key mode is refused at acquisition, not silently scrubbed.
-        assert "ANTHROPIC_API_KEY" not in scrub
-        # Unsetting the directory would only move profile lookup to
-        # ~/.config/anthropic; it is not a credential.
-        assert "ANTHROPIC_CONFIG_DIR" not in scrub
+        slot_dir = tmp_path / "slot"
+        env = apply_slot_env(
+            {
+                "CLAUDE_CONFIG_DIR": str(tmp_path / "host-claude"),
+                "ANTHROPIC_CONFIG_DIR": str(tmp_path / "host-anthropic"),
+                "ANTHROPIC_PROFILE": "host-profile",
+                "CLAUDE_CODE_OAUTH_TOKEN": "ambient-token",
+            },
+            scope_env=adapter.credential_scope_env(slot_dir, vehicle=vehicle, blob="slot-token"),
+            scrub_env=adapter.credential_scrub_env(vehicle=vehicle),
+        )
+        assert env["CLAUDE_CONFIG_DIR"] == str(slot_dir)
+        assert env["ANTHROPIC_CONFIG_DIR"] == str(slot_dir / ".anthropic")
+        assert "ANTHROPIC_PROFILE" not in env
+        assert env.get("CLAUDE_CODE_OAUTH_TOKEN") == (
+            "slot-token" if vehicle is Vehicle.OAUTH_TOKEN else None
+        )
 
     def test_vehicle_a_keeps_its_token(self, adapter: ClaudeCodeCliAdapter) -> None:
         assert "CLAUDE_CODE_OAUTH_TOKEN" not in adapter.credential_scrub_env(
@@ -218,6 +231,6 @@ class TestDebugLogCapture:
     def test_extracts_status_and_request_id(self) -> None:
         signals = parse_claude_api_signals(debug_text=DEBUG_404_FIXTURE.read_text(encoding="utf-8"))
         assert signals.api_status == 404
-        assert signals.request_id == "req_011Ch9cSZ7uhYbJAAjhrX1Cf"
+        assert signals.request_id == "req_fixture006"
         assert signals.oauth_refresh_status is None
         assert signals.error_body_excerpt.startswith("2026-11-18T02:33:51.322Z [ERROR] API error")

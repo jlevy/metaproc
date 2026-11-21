@@ -12,6 +12,7 @@ from typing import Any, cast
 import pytest
 from typer.testing import CliRunner
 
+import metaproc.logutil.usage as usage_module
 from metaproc.cli import app
 from metaproc.io import fmf_read
 from metaproc.logutil.parsing import LogFile
@@ -228,6 +229,31 @@ class TestPricing:
         # 1M * 5/1M + 100K * 25/1M + 500K * 0.5/1M = 5 + 2.5 + 0.25 = 7.75
         assert abs(cost - 7.75) < 0.001
 
+    def test_default_list_estimates_reuse_a_private_price_table(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(usage_module, "_default_estimate_pricing", None, raising=False)
+        default_loads = 0
+
+        def track_load() -> dict[str, dict[str, Any]]:
+            nonlocal default_loads
+            default_loads += 1
+            return load_pricing()
+
+        monkeypatch.setattr(usage_module, "load_pricing", track_load)
+        stats = UsageStats(input_tokens=1_000_000, model="gemini-4-neon", has_token_usage=True)
+
+        assert estimate_list_cost(stats) == 3.0
+        assert estimate_list_cost(stats) == 3.0
+        assert default_loads == 1
+
+        custom = load_pricing()
+        custom[stats.model]["actual_price"]["input_per_1m"] = 9.0
+        assert estimate_list_cost(stats, custom) == 9.0
+        assert estimate_list_cost(stats) == 3.0
+        assert load_pricing()[stats.model]["actual_price"]["input_per_1m"] == 3.0
+        assert default_loads == 1
+
     def test_compute_cost_unknown_model(self) -> None:
         pricing = load_pricing()
         stats = UsageStats(input_tokens=1000, model="unknown-model-xyz")
@@ -353,6 +379,22 @@ class TestPricing:
         assert compute_cost(stats, pricing) == pytest.approx(12.10)
         assert estimate_list_cost(stats, pricing) == pytest.approx(24.20)
 
+    def test_gemini_neon_usage_has_a_standard_api_cost_estimate(self) -> None:
+        [stats] = extract_gemini_usage(
+            {
+                "models": {
+                    "gemini-4-neon": {
+                        "input_tokens": 200_000,
+                        "output_tokens": 10_000,
+                        "cached": 100_000,
+                    },
+                },
+            }
+        )
+
+        # 100K uncached input at $3, 10K output at $15, and 100K cached input at $0.15.
+        assert estimate_list_cost(stats) == pytest.approx(0.465)
+
     def test_haiku_5_5_stores_the_base_prompt_tier(self) -> None:
         """The single rate card is the <=100K-prompt tier, the published base rate."""
         rates = load_pricing()["claude-haiku-5-5"]["actual_price"]
@@ -463,6 +505,37 @@ class TestSumPiUsage:
         assert stats.model == "claude-opus-4-6"
         assert stats.provider == "anthropic"
         assert stats.cost_is_estimated is True
+
+    @pytest.mark.parametrize(
+        ("provider", "model", "reported_cost", "expected"),
+        [
+            ("vertex-maas", "deepseek-ai/deepseek-v4.1-flash-1017-maas", 0.0, None),
+            ("vertex-maas", "deepseek-v4.1-flash-1017-maas", 0.0, None),
+            ("vertex-maas", "deepseek-ai/deepseek-v4.1-flash-1017-maas", 0.25, 0.25),
+            ("vertex-maas", "deepseek-ai/deepseek-v4.1-flash-maas", 0.0, 0.0),
+            ("operator", "deepseek-ai/deepseek-v4.1-flash-1017-maas", 0.0, 0.0),
+        ],
+    )
+    def test_reported_pi_cost_requires_a_price_basis(
+        self, provider: str, model: str, reported_cost: float, expected: float | None
+    ) -> None:
+        stats = sum_pi_usage(
+            {
+                "type": "agent_end",
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "provider": provider,
+                        "model": model,
+                        "usage": {"input": 100, "output": 20, "cost": {"total": reported_cost}},
+                    },
+                ],
+            }
+        )
+
+        assert stats.has_token_usage
+        assert stats.has_cost is (expected is not None)
+        assert estimate_list_cost(stats) == expected
 
 
 # ── Claude Code usage extraction ───────────────────────────────
@@ -690,6 +763,34 @@ class TestSumCodexUsage:
         assert stats.output_tokens == 0
         assert stats.cache_read_tokens == 0
         assert stats.provider == "openai"
+
+    @pytest.mark.parametrize(
+        ("reported_reads", "reads", "writes", "cost"),
+        [(8, 8, 2, 0.0000158), (12, 10, 0, 0.000011)],
+    )
+    def test_codex_caps_cache_buckets_at_reported_input(
+        self, reported_reads: int, reads: int, writes: int, cost: float
+    ) -> None:
+        stats = sum_codex_usage(
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 10,
+                    "cached_input_tokens": reported_reads,
+                    "cache_write_input_tokens": 8,
+                    "output_tokens": 1,
+                },
+            }
+        )
+        stats.model = "gpt-6.1-sol"
+
+        assert (stats.input_tokens, stats.cache_read_tokens, stats.cache_write_tokens) == (
+            0,
+            reads,
+            writes,
+        )
+        assert stats.total_tokens == 11
+        assert estimate_list_cost(stats) == pytest.approx(cost)
 
     def test_usage_cost_roll_up(self) -> None:
         """End-to-end: codex usage + pricing.md rates produce expected cost."""

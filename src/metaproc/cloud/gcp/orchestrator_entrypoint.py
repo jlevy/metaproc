@@ -16,6 +16,7 @@ Configuration via environment variables (set by ``orchestrator_dispatch.py``):
     METAPROC_INITIAL_CONCURRENCY -- Starting concurrency for fan-out runpools
     METAPROC_SPOT             -- "true"/"false" for worker spot VMs
     METAPROC_VARIANT          -- Adapter/variant override
+    METAPROC_ARTIFACT_NAMESPACE -- Explicit --artifact-namespace override
     METAPROC_ADAPTER_CONFIG   -- JSON-encoded adapter config overrides
     METAPROC_SKIP_STEPS       -- Comma-separated step IDs to skip
     METAPROC_FROM_STEP        -- Start from this step
@@ -68,6 +69,7 @@ def build_runprocess_cmd(
     initial_concurrency: str = "",
     spot: str = "true",
     variant: str = "",
+    artifact_namespace: str = "",
     adapter_config_json: str = "",
     skip_steps: str = "",
     from_step: str = "",
@@ -113,6 +115,8 @@ def build_runprocess_cmd(
 
     if variant:
         cmd.extend(["--variant", variant])
+    if artifact_namespace:
+        cmd.extend(["--artifact-namespace", artifact_namespace])
 
     if adapter_config_json:
         adapter_configs: dict[str, str] = json.loads(adapter_config_json)
@@ -171,6 +175,7 @@ def main() -> int:
     initial_concurrency = MetaprocEnv.METAPROC_INITIAL_CONCURRENCY.read_str(default="")
     spot = MetaprocEnv.METAPROC_SPOT.read_str(default="true")
     variant = MetaprocEnv.METAPROC_VARIANT.read_str(default="")
+    artifact_namespace = MetaprocEnv.METAPROC_ARTIFACT_NAMESPACE.read_str(default="")
     adapter_config_json = MetaprocEnv.METAPROC_ADAPTER_CONFIG.read_str(default="")
     skip_steps = MetaprocEnv.METAPROC_SKIP_STEPS.read_str(default="")
     from_step = MetaprocEnv.METAPROC_FROM_STEP.read_str(default="")
@@ -214,6 +219,7 @@ def main() -> int:
         initial_concurrency=initial_concurrency,
         spot=spot,
         variant=variant,
+        artifact_namespace=artifact_namespace,
         adapter_config_json=adapter_config_json,
         skip_steps=skip_steps,
         from_step=from_step,

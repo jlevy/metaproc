@@ -22,11 +22,13 @@ development series.
   Newly accepted: Claude `claude-fable-5-2`, `claude-opus-5-5`, `claude-sonnet-5-5` and
   `claude-haiku-5-5`; OpenAI `gpt-6.2-astra`, `gpt-6.2-sol`, `gpt-6.1-sol`,
   `gpt-6.1-terra`, `gpt-6-sol` and `gpt-6-luna`; Google `gemini-4-argon`,
-  `gemini-4-carbon` and `gemini-4-hydrogen`; Vertex MaaS `glm-5.2-maas` and
-  `deepseek-v4.1-flash-maas`; DeepSeek `deepseek-flash`; Moonshot `kimi-k3` and
-  `kimi-k3.1-pro`. Each new Claude, OpenAI and Gemini ID completed a live tool-call
-  probe on the Anthropic, OpenAI API-key or Gemini API-key route; Vertex routes are
-  unverified.
+  `gemini-4-carbon`, `gemini-4-hydrogen` and `gemini-4-neon`; Vertex MaaS `glm-5.2-maas`
+  and `deepseek-v4.1-flash-maas`; DeepSeek `deepseek-flash`; Moonshot `kimi-k3` and
+  `kimi-k3.1-pro`. Live tool-call probes passed for all four new Claude IDs on the
+  Anthropic route, GPT-6.2 Astra, GPT-6.2 Sol, GPT-6.1 Sol and GPT-6 Luna on the Codex
+  API-key route, and Gemini 4 Argon, Carbon and Hydrogen on the Gemini API-key route.
+  A Codex ChatGPT sign-in tool-call probe also passed with GPT-6.1 Sol selected.
+  Gemini 4 Neon, GPT-6.1 Terra, GPT-6 Sol and Vertex routes remain unverified.
 - **Retired and superseded models are no longer accepted.** An explicit selection of
   `gemini-3.7-flash`, `gemini-3.5-flash`, `gemini-3.1-flash-lite`,
   `gemini-3-flash-preview`, `gemini-3-pro-preview`, `gemini-3.1-flash-lite-preview`,

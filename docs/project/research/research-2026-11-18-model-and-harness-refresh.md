@@ -57,6 +57,15 @@ All three are GA with a 1,048,576-token shared context, reject `minimal` and
 The owner’s request named “Argon” and “Kai Run”; Argon is `gemini-4-argon`, and no
 Google model or codename matches “Kai Run”, so Carbon is the presumed intent.
 
+#### Neon Follow-Up (2026-11-21)
+
+Google made `gemini-4-neon` generally available on the Gemini API paid tier on
+2026-11-18. With Metaproc’s settings, Gemini CLI 0.66.0 preserves the explicit ID during
+model resolution. Neon still needs a live tool-call probe.
+[Gemini API release notes](https://aistudio.google.com/docs/changelog#11-18-2026),
+[Gemini 4 family guide](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/get-started-with-gemini-4),
+[Gemini CLI 0.66.0 resolver](https://github.com/google-gemini/gemini-cli/blob/v0.66.0/packages/core/src/config/models.ts#L238-L324).
+
 ### Gemini 3 Lifecycle
 
 - On the Gemini API, `gemini-3.5-flash` and `gemini-3.7-flash` were deprecated
@@ -127,7 +136,9 @@ source at `rust-v0.166.0`.
 
 Live probes on the API-key route (adapter argv, one shell tool call each):
 `gpt-6.1-sol`, `gpt-6.2-sol`, `gpt-6.2-astra`, `gpt-6-luna` and `gpt-5.5` completed.
-The ChatGPT sign-in route was not probed.
+On 2026-11-21, Codex 0.166.0 with ChatGPT sign-in completed a file-read tool-call probe
+with `gpt-6.1-sol` selected.
+The CLI does not report the model that served the call.
 
 DeepSeek now serves `deepseek-flash` (V4.1 Flash) and bills peak and off-peak rates;
 `deepseek-v4-flash` is a retired alias.
@@ -184,8 +195,8 @@ Anthropic, `google-vertex` and `vertex-maas` were not probed.
 
 ## Open Questions
 
-- Vertex routes for Gemini 4, Gemini 3.1 Pro and the MaaS replacements, and the Codex
-  ChatGPT sign-in route, need bounded probes with production credentials.
+- Vertex routes for Gemini 4, Gemini 3.1 Pro and the MaaS replacements still need
+  bounded probes with production credentials.
 - The Vertex MaaS replacements carry only a 45-day preview minimum (about 2026-11-28 to
   2026-11-30).
 - Gemini 4 Argon and Carbon and GPT-5.6 Sol promotional prices end 2026-11-30 (bead

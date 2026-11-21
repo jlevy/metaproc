@@ -17,7 +17,9 @@ from metaproc.engine.build_plan import build_plan
 from metaproc.engine.process_scope import expand_process_vars
 from metaproc.engine.run_status import scan_step_progress
 from metaproc.io import fmf_read, read_yaml_file
+from metaproc.models.authored import ProcessSpec
 from metaproc.models.node_ids import child_subgraph_key, step_node_id
+from metaproc.models.plan import Plan
 from metaproc.models.viz import NodeProgress, ProgressSnapshot
 from metaproc.paths import run_config_file
 from metaproc.viz.project import PlanBundle
@@ -28,6 +30,7 @@ def load_plan_bundle(
     params: dict[str, str] | None = None,
     *,
     validate_spec: bool = True,
+    resolved_root: tuple[ProcessSpec, Plan] | None = None,
 ) -> PlanBundle:
     """Load ``process_path`` recursively and return a :class:`PlanBundle`.
 
@@ -39,9 +42,14 @@ def load_plan_bundle(
     framework template names, scope collisions, agent write boundaries) is
     skipped so viewers can render structurally-valid-but-semantically-invalid
     specs. See :func:`metaproc.engine.build_plan.build_plan`.
+
+    Pass *resolved_root* when the caller has already planned the root with
+    launch settings. The bundle uses that plan's composite paths.
     """
     resolved_path = resolve_process_path(process_path)
-    return _load_bundle(resolved_path, dict(params or {}), validate_spec=validate_spec)
+    return _load_bundle(
+        resolved_path, dict(params or {}), validate_spec=validate_spec, resolved_root=resolved_root
+    )
 
 
 def load_plan_bundle_from_run(run_dir: Path) -> PlanBundle | None:
@@ -76,16 +84,20 @@ def _load_bundle(
     params: dict[str, str],
     *,
     validate_spec: bool,
+    resolved_root: tuple[ProcessSpec, Plan] | None = None,
 ) -> PlanBundle:
-    spec = load_process_spec(process_path)
-    expanded = expand_process_vars(spec, params, process_dir=process_path.parent)
-    plan = build_plan(
-        spec,
-        expanded,
-        process_path=process_path,
-        validate_required_inputs=False,
-        validate_spec=validate_spec,
-    )
+    if resolved_root is None:
+        spec = load_process_spec(process_path)
+        expanded = expand_process_vars(spec, params, process_dir=process_path.parent)
+        plan = build_plan(
+            spec,
+            expanded,
+            process_path=process_path,
+            validate_required_inputs=False,
+            validate_spec=validate_spec,
+        )
+    else:
+        spec, plan = resolved_root
     body = _extract_body_markdown(process_path)
     children: dict[str, PlanBundle] = {}
     for step in plan.steps:

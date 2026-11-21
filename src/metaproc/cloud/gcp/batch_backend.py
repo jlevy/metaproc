@@ -218,6 +218,27 @@ def build_compute_resource(machine_type: str) -> Any:
 # string as the literal key since 0.77, so such a value sends the variable's name and
 # the provider answers 401; `$NAME` is Pi's environment-variable reference.
 _BARE_API_KEY_ENV_NAME = _re.compile(r"[A-Z][A-Z0-9_]*_API_KEY")
+_PI_ENV_REFERENCE = _re.compile(r"\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*\})")
+_PI_HEADER_REFERENCE = _re.compile(rf"(?:(?i:Bearer|Basic) )?{_PI_ENV_REFERENCE.pattern}")
+_PI_MAAS_TOKEN_HELPER = (
+    '!sh -c \'if [ -n "$METAPROC_PI_API_KEY" ]; then '
+    'printf "%s" "$METAPROC_PI_API_KEY"; else exec gcp-access-token.sh; fi\''
+)
+
+
+class _UnsafePiCloudCredentials(ValueError):
+    """A Pi config carries credential material in a plaintext Batch field."""
+
+
+def _require_pi_header_references(config: dict[str, Any], provider_name: str) -> None:
+    """Check headers at one provider, model, or model override."""
+    for name, value in config.get("headers", {}).items():
+        # Custom gateways choose their own credential header names.
+        if not (isinstance(value, str) and _PI_HEADER_REFERENCE.fullmatch(value)):
+            raise _UnsafePiCloudCredentials(
+                f"Pi provider {provider_name!r} header {name!r} would ship a literal header value "
+                "in the Batch job. Use a $ENV_VAR reference backed by Secret Manager for credentials."
+            )
 
 
 def _rewrite_pi_models_json(raw: str, project: str) -> str:
@@ -233,6 +254,8 @@ def _rewrite_pi_models_json(raw: str, project: str) -> str:
     - Any Vertex ``baseUrl`` has its project path normalized to ``project``,
       so a packaged template with a placeholder project stays correct and
       a workstation-authored file still dispatches to the intended project.
+    - Literal API keys and custom headers cannot pass through the Batch
+      job's plaintext environment. Use references to runtime credentials.
     """
 
     data = _json.loads(raw)
@@ -249,10 +272,25 @@ def _rewrite_pi_models_json(raw: str, project: str) -> str:
             )
             provider["apiKey"] = f"${api_key}"
         if isinstance(api_key, str) and api_key.startswith("!gcloud"):
-            provider["apiKey"] = (
-                '!sh -c \'if [ -n "$METAPROC_PI_API_KEY" ]; then '
-                'printf "%s" "$METAPROC_PI_API_KEY"; else exec gcp-access-token.sh; fi\''
+            provider["apiKey"] = _PI_MAAS_TOKEN_HELPER
+        api_key = provider.get("apiKey", "")
+        if api_key and not (
+            isinstance(api_key, str)
+            and (
+                _PI_ENV_REFERENCE.fullmatch(api_key)
+                or api_key in {"!gcp-access-token.sh", _PI_MAAS_TOKEN_HELPER}
+                or (api_key == "gcp-vertex-credentials" and provider.get("api") == "google-vertex")
             )
+        ):
+            raise _UnsafePiCloudCredentials(
+                f"Pi provider {name!r} apiKey would ship credentials in the Batch job. "
+                "Use a Secret Manager-backed $ENV_VAR reference or the Vertex credential helper."
+            )
+        _require_pi_header_references(provider, name)
+        for model in provider.get("models", []):
+            _require_pi_header_references(model, name)
+        for override in provider.get("modelOverrides", {}).values():
+            _require_pi_header_references(override, name)
         base_url = provider.get("baseUrl", "")
         if "aiplatform.googleapis.com" in base_url and project:
             provider["baseUrl"] = _re.sub(
@@ -399,6 +437,8 @@ def build_pi_models_json(project: str) -> str:
         rewritten = _rewrite_pi_models_json(_json.dumps(merged_doc), project)
         log.info("Built pi models.json from %s (%d bytes)", origin, len(rewritten))
         return rewritten
+    except _UnsafePiCloudCredentials:
+        raise
     except Exception:
         log.warning("Failed to rewrite pi models.json", exc_info=True)
         return ""

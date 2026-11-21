@@ -381,6 +381,9 @@ def _resolve_default_vehicle(adapter: str, flag: str | None) -> Vehicle:
     if flag == "login-credentials":
         return Vehicle.LOGIN_CREDENTIALS
     if flag == "oauth-token":
+        if adapter != "claude-code-cli":
+            msg = f"{adapter} requires --vehicle login-credentials"
+            raise typer.BadParameter(msg, param_hint="--vehicle")
         return Vehicle.OAUTH_TOKEN
     msg = f"--vehicle {flag!r}: expected 'oauth-token' or 'login-credentials'"
     raise typer.BadParameter(msg)

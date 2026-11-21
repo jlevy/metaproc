@@ -661,9 +661,11 @@ Metaproc prints a `Resume changes <field>: <old> -> <new>` warning for each chan
 where the field is `variables.<NAME>`, `step_variants.<STEP>`, `variant`,
 `execution_profile`, `artifact_namespace`, `resolved_profiles`, `backend`, `git_sha`,
 `default_models.<ADAPTER>` (the model an adapter’s agent steps with no `model:` resolve
-to, which moves when a release changes an adapter default), or, for a binding the resume
-adopts or releases, `input_bindings.<NAME>`. It appends one `launch_config_change` event
-listing them to `.logs/dispatch-config-changes.jsonl` and then rewrites those fields in
+to, including known targets of moving aliases), `profile_model_overrides.<PROFILE>` (the
+replacement model selected for a removed profile), or `input_bindings.<NAME>` for a
+binding the resume adopts or releases.
+It appends one `launch_config_change` event listing them to
+`.logs/dispatch-config-changes.jsonl` and then rewrites those fields in
 `run-config.yaml` to the values the resume ran with, so the file describes the latest
 launch and the event log holds its history.
 The event carries a `resolved_profiles` change in full; the warning names only the
@@ -676,6 +678,8 @@ A run that recorded a built-in execution profile a later release removed is rebu
 that profile’s former definition, so `metaproc status` shows its plan and a resume warns
 and continues; where the profile’s model is retired, the resume is refused with the
 successor profile and the exact override to use.
+If you select a replacement model and keep the recorded profile, `metaproc status` uses
+that model to check completed steps.
 A value substituted into a resolved field such as `env:` or an output path re-runs that
 step and its downstream.
 A step that binds the value through `with:`, or reads it at runtime, as a code handler

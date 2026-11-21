@@ -25,7 +25,7 @@ process:
     - id: claude-opus
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; unset METAPROC_GCP_SECRET_CLAUDE_CREDS && uv run metaproc probe-tool-use --execution-profile claude-opus --timeout 120"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; unset METAPROC_GCP_SECRET_CLAUDE_CREDS && uv run metaproc probe-tool-use --execution-profile claude-opus --timeout 120"
       description: >-
         Profile claude-opus (claude-code-cli + opus). Unsets
         METAPROC_GCP_SECRET_CLAUDE_CREDS so the local keychain OAuth path
@@ -34,25 +34,25 @@ process:
     - id: claude-sonnet
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; unset METAPROC_GCP_SECRET_CLAUDE_CREDS && uv run metaproc probe-tool-use --execution-profile claude-sonnet --timeout 90"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; unset METAPROC_GCP_SECRET_CLAUDE_CREDS && uv run metaproc probe-tool-use --execution-profile claude-sonnet --timeout 90"
       description: Profile claude-sonnet (claude-code-cli + sonnet).
 
     - id: codex-gpt61
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; uv run metaproc probe-tool-use --execution-profile codex-gpt61 --timeout 120"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; uv run metaproc probe-tool-use --execution-profile codex-gpt61 --timeout 120"
       description: Profile codex-gpt61 (codex-cli + gpt-6.1-sol), the codex-cli default model.
 
     - id: codex-gpt55
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; uv run metaproc probe-tool-use --execution-profile codex-gpt55 --timeout 120"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; uv run metaproc probe-tool-use --execution-profile codex-gpt55 --timeout 120"
       description: Profile codex-gpt55 (codex-cli + gpt-5.5). API-key route only: Codex retired gpt-5.5 for ChatGPT sign-in on 2026-10-14.
 
     - id: pi-glm52
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc probe-tool-use --execution-profile pi-glm52 --timeout 120"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc probe-tool-use --execution-profile pi-glm52 --timeout 120"
       description: >-
         Profile pi-glm52 (pi-cli + glm-5.2-maas via vertex-maas). GLM 5.2
         capabilities declare native_tools=[Read,Write] only — the probe's
@@ -61,49 +61,49 @@ process:
     - id: pi-gpt61
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; uv run metaproc probe-tool-use --execution-profile pi-gpt61 --timeout 120"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; uv run metaproc probe-tool-use --execution-profile pi-gpt61 --timeout 120"
       description: Profile pi-gpt61 (pi-cli + gpt-6.1-sol via openai).
 
     - id: pi-gpt55
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; uv run metaproc probe-tool-use --execution-profile pi-gpt55 --timeout 120"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; uv run metaproc probe-tool-use --execution-profile pi-gpt55 --timeout 120"
       description: Profile pi-gpt55 (pi-cli + gpt-5.5 via openai).
 
     - id: gemini-flash-38
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc probe-tool-use --execution-profile gemini-flash-38 --timeout 120"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc probe-tool-use --execution-profile gemini-flash-38 --timeout 120"
       description: Profile gemini-flash-38 (gemini-cli + gemini-3.8-flash).
 
     - id: gemini-hydrogen
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc probe-tool-use --execution-profile gemini-hydrogen --timeout 120"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc probe-tool-use --execution-profile gemini-hydrogen --timeout 120"
       description: Profile gemini-hydrogen (gemini-cli + gemini-4-hydrogen), the Flash-class Gemini 4 lane.
 
     - id: gemini-argon
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc probe-tool-use --execution-profile gemini-argon --timeout 180"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc probe-tool-use --execution-profile gemini-argon --timeout 180"
       description: Profile gemini-argon (gemini-cli + gemini-4-argon).
 
     - id: gemini-carbon
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc probe-tool-use --execution-profile gemini-carbon --timeout 180"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc probe-tool-use --execution-profile gemini-carbon --timeout 180"
       description: Profile gemini-carbon (gemini-cli + gemini-4-carbon). Pro tier — slower, deeper reasoning.
 
     - id: gemini-pro
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc probe-tool-use --execution-profile gemini-pro --timeout 180"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc probe-tool-use --execution-profile gemini-pro --timeout 180"
       description: Profile gemini-pro (gemini-cli + gemini-3.1-pro-preview). Pro tier — slower, deeper reasoning.
 
     - id: pi-gemini-hydrogen
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc probe-tool-use --execution-profile pi-gemini-hydrogen --timeout 120"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc probe-tool-use --execution-profile pi-gemini-hydrogen --timeout 120"
       description: >-
         Profile pi-gemini-hydrogen (pi-cli + gemini-4-hydrogen via
         google-vertex). Mirrors gemini-hydrogen but uses the pi-cli harness
@@ -112,7 +112,7 @@ process:
     - id: pi-gemini-pro
       mode: code
       command: >-
-        bash -lc "cd ../../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc probe-tool-use --execution-profile pi-gemini-pro --timeout 180"
+        bash -lc "cd ../.. && [ -f .env ] && set -a && source .env && set +a; export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && uv run metaproc probe-tool-use --execution-profile pi-gemini-pro --timeout 180"
       description: Profile pi-gemini-pro (pi-cli + gemini-3.1-pro-preview via google-vertex).
 ---
 # smoke-execution-profiles — deep tool-use smoke across every shipped profile

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import stat
 from pathlib import Path
 from typing import cast
 
@@ -245,6 +247,45 @@ def test_workspace_settings_unchanged_are_not_rewritten(tmp_path: Path) -> None:
     assert after == before
 
 
+def test_workspace_settings_replace_a_record_with_invalid_utf8(tmp_path: Path) -> None:
+    adapter = GeminiCliAdapter()
+    config = _workspace_config(tmp_path, _STEP_TOOLS)
+    adapter.prepare_env({}, config)
+    settings_path = tmp_path / ".gemini/settings.json"
+    record_path = tmp_path / ".gemini/.metaproc-settings.json"
+    settings, record = settings_path.read_bytes(), record_path.read_bytes()
+    record_path.write_bytes(b"\xc3")
+
+    adapter.prepare_env({}, config)
+
+    assert settings_path.read_bytes() == settings
+    assert record_path.read_bytes() == record
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFO support")
+def test_workspace_settings_leave_a_non_regular_record_in_place(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _workspace_config(tmp_path)
+    adapter = GeminiCliAdapter()
+    adapter.prepare_env({}, config)
+    record_path = tmp_path / ".gemini/.metaproc-settings.json"
+    record_path.unlink()
+    os.mkfifo(record_path)
+    read_text = Path.read_text
+
+    def guarded_read_text(
+        path: Path, encoding: str | None = None, errors: str | None = None
+    ) -> str:
+        assert path != record_path, "a plain text read could block on the FIFO"
+        return read_text(path, encoding, errors)
+
+    monkeypatch.setattr(Path, "read_text", guarded_read_text)
+
+    assert adapter.prepare_env({}, config) == {}
+    assert stat.S_ISFIFO(record_path.lstat().st_mode)
+
+
 def _with_changed_default(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stand in for a later release whose catalog adds a model needing its own override."""
     model_configs = cast("dict[str, list[object]]", GEMINI_DEFAULT_NATIVE_SETTINGS["modelConfigs"])
@@ -257,6 +298,32 @@ def _with_changed_default(monkeypatch: pytest.MonkeyPatch) -> None:
         "modelConfigs": {"overrides": [*model_configs["overrides"], added]},
     }
     monkeypatch.setattr("metaproc.adapters.gemini_cli.GEMINI_DEFAULT_NATIVE_SETTINGS", changed)
+
+
+def test_workspace_settings_bound_the_companion_read_on_resume(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _workspace_config(tmp_path)
+    adapter = GeminiCliAdapter()
+    adapter.prepare_env({}, config)
+    settings_path = tmp_path / ".gemini/settings.json"
+    record_path = tmp_path / ".gemini/.metaproc-settings.json"
+    settings, record = settings_path.read_bytes(), record_path.read_bytes()
+    oversized = record + b" "
+    record_path.write_bytes(oversized)
+    monkeypatch.setattr("metaproc.adapters.gemini_cli._MAX_WORKSPACE_RECORD_BYTES", len(record))
+
+    with monkeypatch.context() as changed_catalog:
+        _with_changed_default(changed_catalog)
+        with pytest.raises(ValueError, match=r"modelConfigs\.overrides"):
+            adapter.prepare_env({}, config)
+    assert settings_path.read_bytes() == settings
+    assert record_path.read_bytes() == oversized
+
+    adapter.prepare_env({}, config)
+
+    assert settings_path.read_bytes() == settings
+    assert record_path.read_bytes() == record
 
 
 def test_workspace_settings_record_lets_a_later_default_change_replace_them(
@@ -302,6 +369,97 @@ def test_workspace_settings_edited_after_metaproc_wrote_them_are_refused(tmp_pat
     with pytest.raises(ValueError, match=r"experimental\.dynamicModelConfiguration"):
         GeminiCliAdapter().prepare_env({}, config)
     assert json.loads(settings_path.read_text())["experimental"]["dynamicModelConfiguration"]
+
+
+@pytest.mark.parametrize(
+    ("operator_settings", "path"),
+    [
+        pytest.param(
+            {"security": {"auth": {"selectedType": "vertex-ai"}}},
+            "security.auth.selectedType",
+            id="operator-section",
+        ),
+        pytest.param(
+            {"general": {"sessionRetention": {"maxAge": "2d"}}},
+            "general.sessionRetention.maxAge",
+            id="nested-operator-key",
+        ),
+        pytest.param(
+            {"experimental": {"dynamicModelConfiguration": True}},
+            "experimental.dynamicModelConfiguration",
+            id="mixed-default-generations",
+        ),
+        pytest.param(
+            {"modelConfigs": {"overrides": [{"match": {"model": "chat-base-3"}}]}},
+            "modelConfigs.overrides",
+            id="operator-model-override",
+        ),
+    ],
+)
+def test_workspace_record_cannot_claim_operator_edits(
+    tmp_path: Path, operator_settings: dict[str, object], path: str
+) -> None:
+    config = _workspace_config(tmp_path)
+    adapter = GeminiCliAdapter()
+    adapter.prepare_env({}, config)
+    settings_path = tmp_path / ".gemini/settings.json"
+    record_path = tmp_path / ".gemini/.metaproc-settings.json"
+    settings = _merge(json.loads(settings_path.read_text()), operator_settings)
+    recorded = json.loads(record_path.read_text())["metaproc_default_native_settings"]
+    _write_settings(tmp_path, settings)
+    record_path.write_text(
+        json.dumps({"metaproc_default_native_settings": _merge(recorded, operator_settings)}),
+        encoding="utf-8",
+    )
+    before = (settings_path.read_bytes(), record_path.read_bytes())
+
+    with pytest.raises(ValueError, match="existing Gemini workspace settings") as refusal:
+        adapter.prepare_env({}, config)
+
+    assert path in str(refusal.value)
+    assert (settings_path.read_bytes(), record_path.read_bytes()) == before
+
+
+def test_workspace_settings_refuse_a_record_from_other_defaults(tmp_path: Path) -> None:
+    config = _workspace_config(tmp_path)
+    adapter = GeminiCliAdapter()
+    adapter.prepare_env({}, config)
+    settings_path = tmp_path / ".gemini/settings.json"
+    record_path = tmp_path / ".gemini/.metaproc-settings.json"
+    settings = json.loads(settings_path.read_text())
+    settings["experimental"]["dynamicModelConfiguration"] = True
+    _write_settings(tmp_path, settings)
+    earlier_defaults = {
+        key: value for key, value in _V061_WORKSPACE_SETTINGS.items() if key != "tools"
+    }
+    record_path.write_text(
+        json.dumps({"metaproc_default_native_settings": earlier_defaults}), encoding="utf-8"
+    )
+    before = (settings_path.read_bytes(), record_path.read_bytes())
+
+    with pytest.raises(ValueError, match=r"modelConfigs\.overrides"):
+        adapter.prepare_env({}, config)
+
+    assert (settings_path.read_bytes(), record_path.read_bytes()) == before
+
+
+def test_workspace_settings_preserve_an_empty_operator_section(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _workspace_config(tmp_path)
+    adapter = GeminiCliAdapter()
+    adapter.prepare_env({}, config)
+    settings_path = tmp_path / ".gemini/settings.json"
+    settings = json.loads(settings_path.read_text())
+    settings["mcpServers"] = {}
+    _write_settings(tmp_path, settings)
+    before = settings_path.read_bytes()
+    _with_changed_default(monkeypatch)
+
+    with pytest.raises(ValueError, match="mcpServers"):
+        adapter.prepare_env({}, config)
+
+    assert settings_path.read_bytes() == before
 
 
 def test_workspace_settings_of_a_step_with_other_native_settings_are_refused(

@@ -74,23 +74,51 @@ def test_rewrite_turns_bare_api_key_env_name_into_reference(
     assert any("'deepseek'" in w for w in warnings)
 
 
-def test_rewrite_leaves_other_api_key_forms_alone(
+def test_rewrite_leaves_cloud_credential_references_alone(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """References, commands, literal keys and non-matching names pass through."""
-    kept = {
-        "ref": "$OPENAI_API_KEY",
-        "cmd": "!gcp-access-token.sh",
-        "literal": "sk-not-a-variable-name",
-        "lower": "openai_api_key",
-        "other_suffix": "OPENAI_TOKEN",
-        "creds": "gcp-vertex-credentials",
+    providers = {
+        "ref": {
+            "apiKey": "$OPENAI_API_KEY",
+            "headers": {"Authorization": "Bearer ${AUTH_TOKEN}", "X-API-Key": "$HEADER_KEY"},
+        },
+        "cmd": {"apiKey": "!gcp-access-token.sh"},
+        "creds": {"api": "google-vertex", "apiKey": "gcp-vertex-credentials"},
     }
-    src = json.dumps({"providers": {name: {"apiKey": key} for name, key in kept.items()}})
     with caplog.at_level(logging.WARNING, logger="metaproc.cloud.gcp.batch_backend"):
-        out = json.loads(_rewrite_pi_models_json(src, "exampletool"))
-    assert {name: p["apiKey"] for name, p in out["providers"].items()} == kept
+        out = json.loads(
+            _rewrite_pi_models_json(json.dumps({"providers": providers}), "exampletool")
+        )
+    assert out["providers"] == providers
     assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"apiKey": "example-private-value"},
+        {"apiKey": "!echo example-private-value"},
+        {"headers": {"Authorization": "Bearer example-private-value"}},
+        {"headers": {"CF-Access-Client-Secret": "example-private-value"}},
+        {"models": [{"id": "demo", "headers": {"X-API-Key": "example-private-value"}}]},
+        {"modelOverrides": {"demo": {"headers": {"x-portkey-api-key": "example-private-value"}}}},
+    ],
+)
+def test_build_refuses_operator_credentials_in_batch_metadata(
+    fields: dict[str, Any], tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    pi_dir = tmp_path / ".pi" / "agent"
+    pi_dir.mkdir(parents=True)
+    (pi_dir / "models.json").write_text(json.dumps({"providers": {"operator": fields}}))
+
+    with (
+        patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=False),
+        pytest.raises(ValueError, match="Pi provider 'operator'.*Secret Manager") as exc,
+    ):
+        build_pi_models_json("exampletool")
+
+    assert "example-private-value" not in str(exc.value)
+    assert "example-private-value" not in caplog.text
 
 
 def test_build_rewrites_bare_api_key_from_operator_overlay(tmp_path: Path) -> None:

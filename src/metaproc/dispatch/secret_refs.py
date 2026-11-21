@@ -20,6 +20,7 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from metaproc.config.env_vars import MetaprocEnv
 from metaproc.config.providers import gcp_secret_refs
 
 
@@ -77,10 +78,11 @@ class SecretRefSet:
     """
 
     refs: tuple[SecretRef, ...]
+    explicit_targets: frozenset[str] = frozenset()
 
     def plaintext_conflicts(self, env: Mapping[str, str]) -> list[str]:
         """Return registered credential targets carrying plaintext in ``env``."""
-        targets = {ref.plaintext_env for ref in self.refs}
+        targets = {ref.plaintext_env for ref in self.refs} | self.explicit_targets
         return sorted(target for target in targets if env.get(target))
 
     @classmethod
@@ -114,7 +116,14 @@ class SecretRefSet:
             SecretRef(plaintext_env=p, secret_env=s, description=d)
             for (p, s, d) in gcp_secret_refs()
         )
-        return cls(refs=static + provider_refs)
+        # These Codex credentials can use explicit --secret bindings. They
+        # have no operator-side ref setting for automatic hydration.
+        return cls(
+            refs=static + provider_refs,
+            explicit_targets=frozenset(
+                {MetaprocEnv.CODEX_API_KEY.name, MetaprocEnv.CODEX_ACCESS_TOKEN.name}
+            ),
+        )
 
     def resolve_env_refs(self, env: Mapping[str, str] | None = None) -> dict[str, str]:
         """Return ``plaintext_env → SM resource name`` for refs that resolve.

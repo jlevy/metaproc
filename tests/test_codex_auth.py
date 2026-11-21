@@ -243,6 +243,38 @@ class TestPushCore:
                 codex_auth._push_core("proj-x", "codex-creds-alice", "user@example.invalid")
             gcloud_mock.assert_not_called()
 
+    @pytest.mark.parametrize(
+        ("fields", "reason"),
+        [
+            ({"OPENAI_API_KEY": "fixture-value"}, "OPENAI_API_KEY"),
+            ({"personal_access_token": "fixture-value"}, "personal_access_token"),
+            ({"bedrock_api_key": "fixture-value"}, "bedrock_api_key"),
+            ({"bedrock_access_keys": {"access_key_id": "fixture-value"}}, "bedrock_access_keys"),
+            ({"agent_identity": "fixture-value"}, "agent_identity"),
+            ({"agent_identity": {"account_id": "fixture-value"}}, "agent_identity"),
+            ({"tokens": {}}, r"tokens\.access_token"),
+        ],
+    )
+    def test_push_rejects_mixed_or_empty_chatgpt_payload(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        fields: dict[str, object],
+        reason: str,
+    ) -> None:
+        self._setup_config(tmp_path, monkeypatch)
+        payload = {"auth_mode": "chatgpt", "tokens": {"access_token": "oauth-fixture"}, **fields}
+        (tmp_path / "auth.json").write_text(json.dumps(payload), encoding="utf-8")
+
+        with (
+            patch.object(codex_auth, "_gcloud") as gcloud_mock,
+            pytest.raises(RuntimeError, match=reason) as exc,
+        ):
+            codex_auth._push_core("proj-x", "codex-creds-example", "user@example.invalid")
+
+        gcloud_mock.assert_not_called()
+        assert "fixture-value" not in str(exc.value)
+
 
 class TestSecretNameDefault:
     def test_default_secret_name_is_codex_creds_user(self, monkeypatch):

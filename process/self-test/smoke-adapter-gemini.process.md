@@ -19,7 +19,7 @@ process:
     - id: auth-check-dry
       mode: code
       command: >-
-        bash -lc "export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && cd ../../.. && uv run metaproc auth-check --variant gemini-cli"
+        bash -lc "export GOOGLE_GENAI_USE_VERTEXAI=true && export GOOGLE_CLOUD_PROJECT=\"$METAPROC_GCP_PROJECT\" && export GOOGLE_CLOUD_LOCATION=\"${GOOGLE_CLOUD_LOCATION:-global}\" && cd ../.. && uv run metaproc auth-check --variant gemini-cli"
       description: >-
         Dry survey in Vertex AI + ADC mode. `GOOGLE_GENAI_USE_VERTEXAI=true`
         switches the adapter into Vertex mode; `GOOGLE_CLOUD_PROJECT`

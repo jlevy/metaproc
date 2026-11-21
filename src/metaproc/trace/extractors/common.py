@@ -265,6 +265,7 @@ def attempt_cost_attrs(
     output_tokens: int | None,
     cached_tokens: int | None,
     self_reported_cost: float | None,
+    cache_write_tokens: int | None = None,
 ) -> dict[str, Any]:
     """Build canonical cost + token attributes for an ``attempt`` span.
 
@@ -284,6 +285,8 @@ def attempt_cost_attrs(
         attrs["attempt.tokens_output"] = output_tokens
     if cached_tokens is not None:
         attrs["attempt.tokens_cached"] = cached_tokens
+    if cache_write_tokens is not None:
+        attrs["attempt.tokens_cache_write"] = cache_write_tokens
 
     # Cost: prefer self-reported
     if self_reported_cost is not None:
@@ -292,12 +295,13 @@ def attempt_cost_attrs(
         return attrs
 
     # Cost: pricing-table fallback
-    if model and (input_tokens is not None or output_tokens is not None):
+    if model and attrs:
         pricing = _get_pricing_table()
         us = UsageStats(
             input_tokens=input_tokens or 0,
             output_tokens=output_tokens or 0,
             cache_read_tokens=cached_tokens or 0,
+            cache_write_tokens=cache_write_tokens or 0,
             model=model,
             provider=provider or "",
         )

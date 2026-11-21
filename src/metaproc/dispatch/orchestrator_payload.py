@@ -3,7 +3,7 @@
 Carries the operator-CLI to orchestrator Batch job environment fields:
 ``METAPROC_PROCESS_SPEC``, ``_VARS``, ``_NUM_WORKERS``,
 ``_DEFAULT_NUM_WORKERS``, ``_MACHINE_TYPE``, ``_MAX_CONCURRENCY``,
-``_INITIAL_CONCURRENCY``, ``_SPOT``, ``_VARIANT``, ``_ADAPTER_CONFIG``,
+``_INITIAL_CONCURRENCY``, ``_SPOT``, ``_VARIANT``, ``_ARTIFACT_NAMESPACE``, ``_ADAPTER_CONFIG``,
 ``_SKIP_STEPS``, ``_FROM_STEP``, ``_ONLY_STEP``, ``_FORCE``,
 ``_CONTINUE_ON_ERROR``.
 
@@ -59,6 +59,7 @@ class OrchestratorDispatchPayload:
     only_step: str = ""
     force: bool = False
     continue_on_error: bool = False
+    artifact_namespace: str = ""
 
     ENV_PROCESS_SPEC: ClassVar[str] = MetaprocEnv.METAPROC_PROCESS_SPEC.name
     ENV_VARS: ClassVar[str] = MetaprocEnv.METAPROC_VARS.name
@@ -69,6 +70,7 @@ class OrchestratorDispatchPayload:
     ENV_INITIAL_CONCURRENCY: ClassVar[str] = MetaprocEnv.METAPROC_INITIAL_CONCURRENCY.name
     ENV_SPOT: ClassVar[str] = MetaprocEnv.METAPROC_SPOT.name
     ENV_VARIANT: ClassVar[str] = MetaprocEnv.METAPROC_VARIANT.name
+    ENV_ARTIFACT_NAMESPACE: ClassVar[str] = MetaprocEnv.METAPROC_ARTIFACT_NAMESPACE.name
     ENV_ADAPTER_CONFIG: ClassVar[str] = MetaprocEnv.METAPROC_ADAPTER_CONFIG.name
     ENV_SKIP_STEPS: ClassVar[str] = MetaprocEnv.METAPROC_SKIP_STEPS.name
     ENV_FROM_STEP: ClassVar[str] = MetaprocEnv.METAPROC_FROM_STEP.name
@@ -95,6 +97,7 @@ class OrchestratorDispatchPayload:
             initial_concurrency=int(initial_conc_raw) if initial_conc_raw else None,
             spot=_decode_bool(e.get(cls.ENV_SPOT, "true")),
             variant=e.get(cls.ENV_VARIANT, ""),
+            artifact_namespace=e.get(cls.ENV_ARTIFACT_NAMESPACE, ""),
             adapter_config=json.loads(adapter_raw) if adapter_raw else {},
             skip_steps=_split_csv(e.get(cls.ENV_SKIP_STEPS, "")),
             from_step=e.get(cls.ENV_FROM_STEP, ""),
@@ -133,6 +136,8 @@ class OrchestratorDispatchPayload:
             out[self.ENV_SPOT] = "false"
         if self.variant:
             out[self.ENV_VARIANT] = self.variant
+        if self.artifact_namespace:
+            out[self.ENV_ARTIFACT_NAMESPACE] = self.artifact_namespace
         if self.adapter_config:
             out[self.ENV_ADAPTER_CONFIG] = json.dumps(self.adapter_config)
         if self.skip_steps:

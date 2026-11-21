@@ -208,13 +208,15 @@ class TestBuildGcpRunJob:
         with pytest.raises(ValueError, match="dispatcher-owned keys"):
             build_gcp_run_job(["echo", "x"], opts)
 
-    def test_extra_env_rejects_registered_plaintext_credentials(self):
+    @pytest.mark.parametrize("name", ["GH_TOKEN", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"])
+    def test_extra_env_rejects_registered_plaintext_credentials(self, name: str) -> None:
         opts = DispatchGcpRunOptions(
             config=_config(),
-            extra_env={"GH_TOKEN": "plaintext"},
+            extra_env={name: "fixture-value"},
         )
-        with pytest.raises(ValueError, match="cannot carry registered credentials"):
+        with pytest.raises(ValueError, match=f"cannot carry registered credentials.*{name}") as exc:
             build_gcp_run_job(["echo", "x"], opts)
+        assert "fixture-value" not in str(exc.value)
 
     def test_extra_env_cannot_override_workspace_packages(self):
         opts = DispatchGcpRunOptions(
@@ -240,7 +242,10 @@ class TestBuildGcpRunJob:
         assert "GH_TOKEN" not in secrets
         assert not environment.secret_variables
 
-    def test_extra_secrets_override_registry(self, monkeypatch: pytest.MonkeyPatch):
+    @pytest.mark.parametrize("name", ["MY_SECRET", "CODEX_API_KEY", "CODEX_ACCESS_TOKEN"])
+    def test_extra_secrets_override_registry(
+        self, monkeypatch: pytest.MonkeyPatch, name: str
+    ) -> None:
         # Empty registry, caller provides a secret directly.
         monkeypatch.delenv("METAPROC_GCP_SECRET_CLAUDE_CREDS", raising=False)
         monkeypatch.delenv("METAPROC_GCP_SECRET_GH_TOKEN", raising=False)
@@ -249,12 +254,13 @@ class TestBuildGcpRunJob:
         cfg = _config()
         opts = DispatchGcpRunOptions(
             config=cfg,
-            extra_secrets={"MY_SECRET": "projects/p/secrets/foo/versions/1"},
+            extra_secrets={name: "projects/p/secrets/foo/versions/1"},
         )
         _, job = build_gcp_run_job(["echo", "x"], opts)
         environment = job.task_groups[0].task_spec.runnables[0].environment
         secrets = json.loads(environment.variables[SECRET_REFS_ENV])
-        assert secrets["MY_SECRET"] == "projects/p/secrets/foo/versions/1"
+        assert secrets[name] == "projects/p/secrets/foo/versions/1"
+        assert name not in environment.variables
         assert not environment.secret_variables
 
     def test_filestore_volume_present_when_configured(self):

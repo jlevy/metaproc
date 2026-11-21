@@ -15,6 +15,7 @@ from unittest.mock import patch
 import pytest
 
 import metaproc.trace.extractors.common as _common_mod
+from metaproc.logutil.usage import estimate_list_cost, sum_codex_usage
 from metaproc.trace.extractors.claude_agent import ClaudeAgentExtractor
 from metaproc.trace.extractors.codex_agent import CodexAgentExtractor
 from metaproc.trace.extractors.common import attempt_cost_attrs
@@ -213,21 +214,22 @@ def _write_codex_log(
     input_tokens: int = 1000,
     output_tokens: int = 200,
     cached_tokens: int = 50,
+    cache_write_tokens: int | None = None,
     model: str = "gpt-5.5",
 ) -> Path:
     """Write a minimal codex JSONL with turn.completed usage."""
     path = run_dir / ".logs" / "tasks" / "step" / "item" / "log.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
+    usage = {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cached_input_tokens": cached_tokens,
+    }
+    if cache_write_tokens is not None:
+        usage["cache_write_input_tokens"] = cache_write_tokens
     events = [
         {"type": "thread.started", "thread_id": "tid"},
-        {
-            "type": "turn.completed",
-            "usage": {
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "cached_input_tokens": cached_tokens,
-            },
-        },
+        {"type": "turn.completed", "usage": usage},
     ]
     with path.open("w") as f:
         for e in events:
@@ -267,6 +269,33 @@ def test_codex_attempt_carries_cost_from_pricing_table(tmp_path: Path) -> None:
     assert attempt.attributes["attempt.tokens_cached"] == 0
     # 5.0 + 3.0 = 8.0
     assert attempt.attributes["attempt.cost_usd"] == pytest.approx(8.0)
+    assert attempt.attributes["attempt.cost_is_estimated"] is True
+
+
+def test_codex_attempt_cache_writes_match_usage_estimate(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    model = "gpt-6.1-sol"
+    log = _write_codex_log(
+        run_dir,
+        input_tokens=1_000_000,
+        output_tokens=100_000,
+        cached_tokens=100_000,
+        cache_write_tokens=400_000,
+        model=model,
+    )
+    stats = sum_codex_usage(json.loads(log.read_text(encoding="utf-8").splitlines()[-1]))
+    stats.model = model
+
+    spans = CodexAgentExtractor().extract(run_dir, trace_id="t")
+    attempt = next(span for span in spans if span.kind == "attempt")
+
+    assert attempt.attributes["attempt.tokens_input"] == stats.input_tokens == 500_000
+    assert attempt.attributes["attempt.tokens_cached"] == stats.cache_read_tokens == 100_000
+    assert attempt.attributes["attempt.tokens_cache_write"] == stats.cache_write_tokens == 400_000
+    assert attempt.attributes["attempt.tokens_output"] == stats.output_tokens == 100_000
+    expected_cost = estimate_list_cost(stats)
+    assert expected_cost == pytest.approx(3.01)
+    assert attempt.attributes["attempt.cost_usd"] == expected_cost
     assert attempt.attributes["attempt.cost_is_estimated"] is True
 
 

@@ -205,17 +205,14 @@ Requires the `metaproc[gcp]` extra (included automatically in the dev dependency
 via `uv sync`). Uses `google.auth.default()` with auto-refreshing credentials — tokens
 never expire mid-run.
 
-The `vertex-maas` provider and its MaaS models are **not** built into pi-cli upstream —
-they live in a pi-cli-level `models.json`. Metaproc dispatch reads
-`~/.pi/agent/models.json` if present (operator-authored), otherwise falls back to the
-packaged canonical copy at `src/metaproc/data/pi-models.default.json`. Cloud workers
-inherit whichever source the dispatching host resolved, with apiKey and project paths
-rewritten for the container at launch time.
-Keep your own `~/.pi/agent/models.json` if you have newer/additional models than the
-packaged default — the packaged file is strictly a fallback for fresh environments (CI,
-new workstations).
-See `src/metaproc/cloud/gcp/batch_backend.py` (`build_pi_models_json`)
-for the resolution logic.
+The `vertex-maas` provider and its MaaS models come from Pi’s `models.json`. For cloud
+jobs, Metaproc combines the packaged `pi-models.default.json` with
+`~/.pi/agent/models.json`, letting operator settings override individual providers and
+models. Dispatch rewrites the project path and Vertex credential helper for the
+container. Use `$NAME` for a credential supplied through a Secret Manager binding.
+Dispatch refuses literal API keys and custom headers before submitting the Batch job.
+See
+[Pi CLI credentials in GCP Batch](arch-authentication.md#uc-6-gcp-batch-worker-with-pi-cli--vertex-maas).
 
 Credential resolution (in priority order):
 

@@ -54,7 +54,8 @@ class ProviderSpec:
 
     requires_gcp_token: bool = False
     """When True, pi-cli live checks for this provider must inject a fresh
-    GCP access token via `--api-key`. Currently only `vertex-maas`."""
+    GCP access token through the provider's configured environment reference.
+    Currently only `vertex-maas`."""
 
     def credentials_present(self) -> bool:
         if self.api_key_env is None:

@@ -18,6 +18,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Lock
 from typing import TYPE_CHECKING, Any, Self, cast
 
 from metaproc.io import fmf_read_frontmatter, fmf_write
@@ -40,6 +41,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _PRICING_PATH = Path(__file__).parent.parent / "data" / "pricing.md"
+_default_estimate_pricing: dict[str, dict[str, Any]] | None = None
+_default_estimate_pricing_lock = Lock()
 
 
 @dataclass
@@ -145,6 +148,16 @@ def load_pricing(path: Path | None = None) -> dict[str, dict[str, Any]]:
     return result
 
 
+def _get_default_estimate_pricing() -> dict[str, dict[str, Any]]:
+    """Load the packaged rate table once for log estimates within this process."""
+    global _default_estimate_pricing  # noqa: PLW0603
+    if _default_estimate_pricing is None:
+        with _default_estimate_pricing_lock:
+            if _default_estimate_pricing is None:
+                _default_estimate_pricing = load_pricing()
+    return _default_estimate_pricing
+
+
 def _lookup_model(model: str, pricing: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
     """Look up model in pricing table, trying full name then basename after '/'."""
     rates = pricing.get(model)
@@ -224,7 +237,7 @@ def estimate_list_cost(
         return stats.cost_usd
     if not stats.has_token_usage or not stats.model:
         return None
-    table = pricing if pricing is not None else load_pricing()
+    table = pricing if pricing is not None else _get_default_estimate_pricing()
     if _lookup_model(stats.model, table) is None:
         return None
     return compute_cost(stats, table, use_list_prices=True)
@@ -256,21 +269,33 @@ def sum_pi_usage(agent_end_event: dict[str, Any]) -> UsageStats:
         stats.cache_read_tokens += _nonnegative_int(usage.get("cacheRead"))
         stats.cache_write_tokens += _nonnegative_int(usage.get("cacheWrite"))
 
-        cost_raw: Any = usage.get("cost", {})
-        if isinstance(cost_raw, dict):
-            cost_dict = cast(dict[str, Any], cost_raw)
-            total_cost = cost_dict.get("total")
-            if isinstance(total_cost, (int, float)) and not isinstance(total_cost, bool):
-                stats.cost_usd += max(float(total_cost), 0.0)
-                stats.has_cost = True
-
-        # Capture model/provider from the first assistant message that has them
+        # Capture model/provider from the first assistant message that has them.
         model = msg.get("model")
         if not stats.model and isinstance(model, str):
             stats.model = model
         provider = msg.get("provider")
         if not stats.provider and isinstance(provider, str):
             stats.provider = provider
+
+        cost_raw: Any = usage.get("cost", {})
+        if isinstance(cost_raw, dict):
+            cost_dict = cast(dict[str, Any], cost_raw)
+            total_cost = cost_dict.get("total")
+            if isinstance(total_cost, (int, float)) and not isinstance(total_cost, bool):
+                # Pi fills in zero rates when this packaged snapshot omits its cost.
+                # Keep positive estimates from operator-supplied rate cards.
+                if (
+                    total_cost == 0
+                    and provider == "vertex-maas"
+                    and model
+                    in (
+                        "deepseek-ai/deepseek-v4.1-flash-1017-maas",
+                        "deepseek-v4.1-flash-1017-maas",
+                    )
+                ):
+                    continue
+                stats.cost_usd += max(float(total_cost), 0.0)
+                stats.has_cost = True
 
     return stats
 
@@ -357,8 +382,9 @@ def sum_codex_usage(turn_completed_event: dict[str, Any]) -> UsageStats:
     ``input_tokens`` includes both cache reads and cache writes, which are
     disjoint: a 0.166.0 rollout records a first request as 13,792 input =
     0 cached + 13,789 written + 3 uncached. Both are split out of
-    ``input_tokens`` into their own buckets. Releases before
-    ``cache_write_input_tokens`` existed omit it, which reads as zero.
+    ``input_tokens`` into their own buckets. If the breakdown exceeds reported
+    input, allocate reads first and cap writes at the remaining input. Older
+    releases that omit ``cache_write_input_tokens`` contribute zero writes.
 
     Sets ``provider="openai"`` for cost-rollup routing.
     """
@@ -368,9 +394,10 @@ def sum_codex_usage(turn_completed_event: dict[str, Any]) -> UsageStats:
         return stats
     usage = cast(dict[str, Any], usage_raw)
     total_input = _nonnegative_int(usage.get("input_tokens"))
-    cached_input = _nonnegative_int(usage.get("cached_input_tokens"))
-    cache_write = _nonnegative_int(usage.get("cache_write_input_tokens"))
-    stats.input_tokens = max(total_input - cached_input - cache_write, 0)
+    cached_input = min(_nonnegative_int(usage.get("cached_input_tokens")), total_input)
+    remaining_input = total_input - cached_input
+    cache_write = min(_nonnegative_int(usage.get("cache_write_input_tokens")), remaining_input)
+    stats.input_tokens = remaining_input - cache_write
     stats.cache_read_tokens = cached_input
     stats.cache_write_tokens = cache_write
     stats.output_tokens = _nonnegative_int(usage.get("output_tokens"))

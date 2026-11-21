@@ -43,7 +43,9 @@ from metaproc.config.model_catalog import (
     resolve_model,
 )
 from metaproc.engine.build_plan import build_plan
+from metaproc.errors import ValidationError
 from metaproc.io import iter_jsonl_objects, read_yaml_file, to_yaml_string
+from metaproc.io.state_io import read_run_plan
 from metaproc.models.execution_profile import (
     REMOVED_EXECUTION_PROFILES,
     ExecutionProfileRegistry,
@@ -81,39 +83,38 @@ def second(variables: dict[str, str], step: object) -> None:  # noqa: ARG001
 '''
 
 
-def _write_process(process_dir: Path) -> Path:
+def _write_process(process_dir: Path, *, default_execution_profile: str | None = None) -> Path:
     """Write a two-step code process; each step logs its run and writes one output."""
     process_dir.mkdir(parents=True, exist_ok=True)
     (process_dir / "handlers.py").write_text(_HANDLERS, encoding="utf-8")
     path = process_dir / "catalog-moves.process.md"
-    path.write_text(
-        textwrap.dedent(
-            """\
-            ---
-            process:
-              name: catalog-moves
-              steps:
-                - id: first
-                  mode: code
-                  handler: "handlers.py:first"
-                  outputs:
-                    out:
-                      path: "{{run.dir}}/first.txt"
-                      kind: file
-                - id: second
-                  mode: code
-                  handler: "handlers.py:second"
-                  needs: [first]
-                  outputs:
-                    out:
-                      path: "{{run.dir}}/second.txt"
-                      kind: file
-            ---
-            Catalog moves.
-            """
-        ),
-        encoding="utf-8",
-    )
+    contents = textwrap.dedent("""\
+        ---
+        process:
+          name: catalog-moves
+          steps:
+            - id: first
+              mode: code
+              handler: "handlers.py:first"
+              outputs:
+                out:
+                  path: "{{run.dir}}/first.txt"
+                  kind: file
+            - id: second
+              mode: code
+              handler: "handlers.py:second"
+              needs: [first]
+              outputs:
+                out:
+                  path: "{{run.dir}}/second.txt"
+                  kind: file
+        ---
+        Catalog moves.
+        """)
+    if default_execution_profile is not None:
+        defaults = f"  defaults:\n    default_execution_profile: {default_execution_profile}\n"
+        contents = contents.replace("  steps:\n", defaults + "  steps:\n", 1)
+    path.write_text(contents, encoding="utf-8")
     return path
 
 
@@ -327,7 +328,7 @@ process:
           model: gpt-6.2-sol
     - id: stamp
       mode: code
-      command: /bin/true
+      command: "true"
 ---
 Default models.
 """
@@ -420,6 +421,41 @@ def test_an_unchanged_default_model_records_nothing(tmp_path: Path) -> None:
     assert changes == {}
 
 
+@pytest.mark.parametrize(
+    ("adapter", "alias", "prior_target", "current_target"),
+    [
+        ("claude-code-cli", "opus", "claude-opus-5", "claude-opus-5-5"),
+        ("pi-cli", "sonnet", "claude-sonnet-5", "claude-sonnet-5-5"),
+    ],
+)
+def test_resume_warns_when_an_implicit_default_alias_moves(
+    tmp_path: Path, adapter: str, alias: str, prior_target: str, current_target: str
+) -> None:
+    process_path = tmp_path / "default-models.process.md"
+    process_path.write_text(
+        _AGENT_PROCESS.replace("type: codex-cli", f"type: {adapter}", 1), encoding="utf-8"
+    )
+    runs_dir = tmp_path / "runs"
+    run_id = "moved-alias"
+    skip_agents = ("--skip", "draft", "--skip", "judge")
+    initial = _run(process_path, runs_dir, run_id, *skip_agents)
+    assert initial.exit_code == 0, _message(initial)
+    run_dir = runs_dir / run_id
+    config = _config(run_dir)
+    assert config["default_models"] == {adapter: current_target}
+    assert config["namespace_default_models"][adapter] == alias
+    config["default_models"] = {adapter: alias}
+    atomic_write_text(_config_path(run_dir), to_yaml_string(config))
+
+    resumed = _run(process_path, runs_dir, run_id, *skip_agents)
+
+    assert resumed.exit_code == 0, _message(resumed)
+    assert f"most likely ran {prior_target} through the {alias!r} alias" in resumed.output
+    assert f"steps this resume runs use {current_target}" in resumed.output
+    assert _config(run_dir)["default_models"] == {adapter: current_target}
+    assert _config(run_dir)["namespace_default_models"] == config["namespace_default_models"]
+
+
 # ── H2: a removed built-in execution profile ──────────────────────
 
 
@@ -476,6 +512,31 @@ def test_a_run_on_a_removed_profile_resumes_with_a_warning_and_reuses_its_steps(
     assert _config(run_dir)["artifact_namespace"] == "gemini-flash-36"
 
 
+def test_an_authored_removed_default_profile_resumes_and_reuses_its_steps(tmp_path: Path) -> None:
+    name = "gemini-flash-36"
+    process_path = _write_process(tmp_path / "proc", default_execution_profile=name)
+    runs_dir = tmp_path / "runs"
+    run_id = "authored-default"
+    (process_path.parent / ".git").mkdir()
+    profile_file = process_path.parent / ".metaproc" / "execution-profiles.yaml"
+    profile_file.parent.mkdir()
+    _former_profile_file(tmp_path, name).rename(profile_file)
+
+    launched = _run(process_path, runs_dir, run_id)
+    assert launched.exit_code == 0, _message(launched)
+    run_dir = runs_dir / run_id
+    assert _config(run_dir)["execution_profile"] == name
+    snapshot = _config(run_dir)["resources"]
+    profile_file.unlink()
+
+    resumed = _run(process_path, runs_dir, run_id)
+
+    assert resumed.exit_code == 0, _message(resumed)
+    assert f"execution profile {name!r} was removed" in resumed.output
+    assert sorted(_invocations(run_dir)) == ["first", "second"]
+    assert _config(run_dir)["resources"] == snapshot
+
+
 @pytest.mark.parametrize(
     ("name", "model", "successor", "successor_model"),
     [
@@ -514,6 +575,57 @@ def test_a_removed_profile_whose_model_is_retired_names_the_override_that_contin
     )
     assert kept.exit_code == 0, _message(kept)
     assert _config(run_dir)["artifact_namespace"] == name
+    assert _config(run_dir)["profile_model_overrides"] == {name: successor_model}
+    assert _step_states(run_dir) == {"first": "current", "second": "current"}
+
+
+def test_a_composite_inherits_the_replacement_model_and_keeps_child_profile_pins(
+    tmp_path: Path,
+) -> None:
+    child = _write_process(tmp_path / "proc")
+    contents = child.read_text(encoding="utf-8").replace(
+        "    - id: second\n", "    - id: second\n      execution_profile: claude-opus\n"
+    )
+    child.write_text(contents, encoding="utf-8")
+    parent = child.with_name("parent.process.md")
+    parent.write_text(
+        textwrap.dedent("""\
+            ---
+            process:
+              name: parent
+              deps:
+                child:
+                  path: ./catalog-moves.process.md
+                  as: path
+              steps:
+                - id: child
+                  mode: composite
+                  uses: deps.child
+            ---
+            """),
+        encoding="utf-8",
+    )
+    runs_dir = tmp_path / "runs"
+    run_id = "composite"
+    name = "pi-glm5"
+    variant = ("--variant", name)
+    profile_file = _former_profile_file(tmp_path, name)
+    launched = _run(parent, runs_dir, run_id, *variant, "--profile-file", str(profile_file))
+    assert launched.exit_code == 0, _message(launched)
+    run_dir = runs_dir / run_id
+    before = read_run_plan(run_dir / "child")
+    assert before is not None
+
+    resumed = _run(parent, runs_dir, run_id, *variant, "--adapter-config", "model=glm-5.2-maas")
+
+    assert resumed.exit_code == 0, _message(resumed)
+    assert _config(run_dir)["artifact_namespace"] == name
+    after = read_run_plan(run_dir / "child")
+    assert after is not None
+    old_fingerprints = {step.step_id: step.fingerprint for step in before.steps}
+    new_fingerprints = {step.step_id: step.fingerprint for step in after.steps}
+    assert new_fingerprints["first"] != old_fingerprints["first"]
+    assert new_fingerprints["second"] == old_fingerprints["second"]
 
 
 def test_a_fresh_launch_on_a_removed_profile_names_its_successor(tmp_path: Path) -> None:
@@ -566,6 +678,48 @@ def test_only_recorded_removed_profiles_are_rebuilt() -> None:
 
 
 # ── M4: a removed model ID says why ───────────────────────────────
+
+
+def test_run_process_refuses_an_authored_removed_model_before_launch(tmp_path: Path) -> None:
+    process_path = tmp_path / "retired-model.process.md"
+    process_path.write_text(
+        _AGENT_PROCESS.replace("model: gpt-6.2-sol", "model: gpt-5.4-mini"), encoding="utf-8"
+    )
+    runs_dir = tmp_path / "runs"
+    skip_agents = ("--skip", "draft", "--skip", "judge")
+
+    refused = _run(process_path, runs_dir, "retired", *skip_agents)
+
+    assert isinstance(refused.exception, ValidationError), _message(refused)
+    assert refused.exception.exit_code == 2
+    message = str(refused.exception)
+    assert "step 'judge': unknown codex-cli model 'gpt-5.4-mini'" in message
+    assert "retired from Codex with ChatGPT sign-in" in message
+    assert "use gpt-6-luna" in message
+    assert not (runs_dir / "retired").exists()
+
+    replaced = _run(
+        process_path, runs_dir, "replacement", *skip_agents, "--adapter-config", "model=gpt-6-luna"
+    )
+    assert replaced.exit_code == 0, _message(replaced)
+
+
+def test_read_only_plans_keep_retired_models_and_launch_plans_keep_model_templates(
+    tmp_path: Path,
+) -> None:
+    process_path = tmp_path / "retired-model.process.md"
+    for model, validate_spec in (("gpt-5.4-mini", False), ("{{MODEL}}", True)):
+        process_path.write_text(
+            _AGENT_PROCESS.replace("model: gpt-6.2-sol", f'model: "{model}"'), encoding="utf-8"
+        )
+        plan = build_plan(
+            load_process_spec(process_path),
+            {},
+            process_path=process_path,
+            validate_required_inputs=False,
+            validate_spec=validate_spec,
+        )
+        assert plan.steps[1].adapter.config["model"] == model
 
 
 @pytest.mark.parametrize(

@@ -19,14 +19,14 @@ process:
     - id: auth-check-dry
       mode: code
       command: >-
-        bash -lc "cd ../../.. && uv run metaproc auth-check --variant pi-cli"
+        bash -lc "cd ../.. && uv run metaproc auth-check --variant pi-cli"
       description: Dry survey — binary path + credential source (`~/.pi/auth.json`).
       needs: [binary-check]
 
     - id: live-probe-vertex-maas
       mode: code
       command: >-
-        bash -lc "cd ../../.. && uv run metaproc auth-check --live --adapter pi-cli --model glm-5.2-maas --provider vertex-maas --assert-model glm-5.2-maas"
+        bash -lc "cd ../.. && uv run metaproc auth-check --live --adapter pi-cli --model glm-5.2-maas --provider vertex-maas --assert-model glm-5.2-maas"
       description: >-
         Send a trivial "Respond with exactly: OK" prompt through
         Vertex MaaS GLM-5.2 and assert the `model` field in the
