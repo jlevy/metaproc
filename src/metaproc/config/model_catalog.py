@@ -43,6 +43,7 @@ MODEL_CATALOG = ModelCatalog(
             "https://code.claude.com/docs/en/model-config",
         ),
         "google": (
+            "https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/get-started-with-gemini-4",
             "https://ai.google.dev/gemini-api/docs/models",
             "https://ai.google.dev/gemini-api/docs/deprecations",
             "https://ai.google.dev/gemini-api/docs/thinking",
@@ -106,6 +107,10 @@ MODEL_CATALOG = ModelCatalog(
         ),
         "gemini-cli": frozenset(
             {
+                "gemini-4-neon",
+                "gemini-4-hydrogen",
+                "gemini-4-carbon",
+                "gemini-4-argon",
                 "gemini-3.8-flash",
                 "gemini-3.7-flash",
                 "gemini-3.6-flash",
