@@ -28,6 +28,10 @@ def _selected_model(command: list[str], flag: str) -> str:
 @pytest.mark.parametrize(
     ("model", "flag"),
     [
+        ("claude-fable-5-2", "--model"),
+        ("claude-opus-5-5", "--model"),
+        ("claude-sonnet-5-5", "--model"),
+        ("claude-haiku-5-5", "--model"),
         ("claude-fable-5-1", "--model"),
         ("claude-opus-5", "--model"),
         ("claude-sonnet-5", "--model"),
@@ -56,7 +60,13 @@ def test_claude_preserves_accepted_explicit_models(
 @pytest.mark.parametrize(
     "model",
     [
+        "gpt-6.2-astra",
+        "gpt-6.2-sol",
+        "gpt-6.1-sol",
+        "gpt-6.1-terra",
         "gpt-6-astra",
+        "gpt-6-sol",
+        "gpt-6-luna",
         "gpt-5.6",
         "gpt-5.6-sol",
         "gpt-5.6-terra",

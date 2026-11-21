@@ -36,6 +36,7 @@ MODEL_CATALOG = ModelCatalog(
             "https://developers.openai.com/api/docs/models",
             "https://learn.chatgpt.com/docs/config-file/config-reference",
             "https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/protocol/src/openai_models.rs",
+            "https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/models-manager/models.json",
         ),
         "anthropic": (
             "https://platform.claude.com/docs/en/models/overview",
@@ -75,6 +76,10 @@ MODEL_CATALOG = ModelCatalog(
     native_models={
         "claude-code-cli": frozenset(
             {
+                "claude-fable-5-2",
+                "claude-opus-5-5",
+                "claude-sonnet-5-5",
+                "claude-haiku-5-5",
                 "claude-fable-5-1",
                 "claude-fable-5",
                 "claude-opus-5",
@@ -92,7 +97,13 @@ MODEL_CATALOG = ModelCatalog(
         ),
         "codex-cli": frozenset(
             {
+                "gpt-6.2-astra",
+                "gpt-6.2-sol",
+                "gpt-6.1-sol",
+                "gpt-6.1-terra",
                 "gpt-6-astra",
+                "gpt-6-sol",
+                "gpt-6-luna",
                 "gpt-5.6-sol",
                 "gpt-5.6-terra",
                 "gpt-5.6-luna",
@@ -143,7 +154,12 @@ MODEL_CATALOG = ModelCatalog(
         ),
     },
     lifecycle_notes={
+        "claude-fable-5-2": "Requires Claude Code 2.1.321 or later.",
+        "claude-opus-5-5": "Requires Claude Code 2.1.280 or later.",
+        "claude-sonnet-5-5": "Requires Claude Code 2.1.284 or later.",
+        "claude-haiku-5-5": "Requires Claude Code 2.1.293 or later.",
         "claude-fable-5-1": "Current Anthropic ID. Claude Code requires at least 2.1.257, newer than this repository's 2.1.234 pin. Absent from the pinned Pi 0.84.2 native catalog; not accepted by the Pi adapter.",
+        "gpt-6.1-terra": "Requires Codex CLI 0.159.0 or later.",
         "gpt-5.6": "Documented Sol alias; retain the requested alias in argv.",
         "gpt-5.3-codex-spark": "Codex research preview; account and plan dependent.",
         "gpt-5.4": "Retained ID. Codex ChatGPT sign-in retirement: 2026-08-31; API-key use differs.",
