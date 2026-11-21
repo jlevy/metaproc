@@ -41,6 +41,7 @@ def test_pi_valid_models_covers_packaged_catalog() -> None:
         "kimi-k3.1-pro",
         "kimi-k3",
         "gpt-6.2-sol",
+        "gemini-3.6-flash",
         "fable",
     ],
 )
@@ -65,7 +66,6 @@ def test_pi_accepts_current_models(model: str) -> None:
         "deepseek-v4-flash",
         "gpt-5.4-nano",
         "gemini-3.7-flash",
-        "gemini-3.6-flash",
         # Pi has no gpt-5.6 model; its fuzzy lookup would pick GPT-5.6 Terra, not Sol.
         "gpt-5.6",
     ],

@@ -147,6 +147,8 @@ class TestRoundTrip:
                 num_workers=4,
                 initial_concurrency=2,
                 spot=False,
+                step_variants={"judge": "profile-b", "run": "profile-a"},
+                profile_files={"config/first.yml": "a" * 64, "config/team profiles.yml": "b" * 64},
                 skip_steps=("a", "b"),
                 force=True,
             ),

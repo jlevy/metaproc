@@ -169,13 +169,13 @@ def test_built_in_registry_contains_gemini_profiles() -> None:
     """Gemini profiles must remain in the packaged catalog.
 
     Operators select them with `--execution-profiles <name>` from a generic
-    dispatch without custom YAML. The 2026-11-18 refresh replaced the 3.5 and
-    3.6 Flash profiles with Gemini 4 profiles.
+    dispatch without custom YAML.
     """
     registry = ExecutionProfileRegistry.load(include_builtins=True)
 
     expected = {
         "gemini-flash-38": ("gemini-cli", "gemini-3.8-flash"),
+        "gemini-flash-36": ("gemini-cli", "gemini-3.6-flash"),
         "gemini-hydrogen": ("gemini-cli", "gemini-4-hydrogen"),
         "gemini-argon": ("gemini-cli", "gemini-4-argon"),
         "gemini-carbon": ("gemini-cli", "gemini-4-carbon"),
@@ -188,7 +188,7 @@ def test_built_in_registry_contains_gemini_profiles() -> None:
         assert (resolved.profile.adapter, resolved.profile.model) == (adapter, model)
 
 
-@pytest.mark.parametrize("name", ["gemini-flash", "gemini-flash-36", "pi-gemini-flash", "pi-glm5"])
+@pytest.mark.parametrize("name", ["gemini-flash", "pi-gemini-flash", "pi-glm5"])
 def test_built_in_registry_drops_retired_model_profiles(name: str) -> None:
     registry = ExecutionProfileRegistry.load(include_builtins=True)
     with pytest.raises(ValueError, match=rf"unknown execution profile: '{name}'"):

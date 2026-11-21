@@ -947,7 +947,7 @@ class CodexCliAdapter:
         if auth_json.is_file():
             auth_mode_str, details = _inspect_auth_json(auth_json)
             if api_key:
-                details += "; OPENAI_API_KEY is set but Codex uses this stored login"
+                details += "; OPENAI_API_KEY is set but Metaproc defers to auth.json"
             return AuthStatus(
                 adapter_type=self.adapter_type,
                 cli_found=True,
@@ -1281,15 +1281,28 @@ class CodexCliAdapter:
 def _inspect_auth_json(path: Path) -> tuple[str, str]:
     """Classify an auth.json file for check_auth reporting."""
     try:
-        doc: Any = json.loads(path.read_text(encoding="utf-8"))
-    except OSError, json.JSONDecodeError:
+        with _open_codex_regular_file(path) as stream:
+            data = stream.read(_MAX_CODEX_CONFIG_BYTES + 1)
+        if len(data) > _MAX_CODEX_CONFIG_BYTES:
+            return ("unknown", f"{path} exceeds the Codex credential read limit")
+        doc: Any = json.loads(data.decode("utf-8"))
+    except OSError, UnicodeDecodeError, json.JSONDecodeError:
         return ("unknown", f"{path} exists but could not be parsed")
     if not isinstance(doc, dict):
         return ("unknown", f"{path} exists but is not a JSON object")
     mode = codex_auth_json_mode(cast("dict[str, Any]", doc))
     if mode == "chatgpt":
+        tokens = doc.get("tokens")
+        access_token = (
+            cast("dict[str, Any]", tokens).get("access_token") if isinstance(tokens, dict) else None
+        )
+        if not isinstance(access_token, str) or not access_token.strip():
+            return ("unknown", f"{path} is missing a nonempty tokens.access_token")
         return ("interactive-login", f"Using ChatGPT OAuth session ({path})")
     if mode == "apikey":
+        key = doc.get("OPENAI_API_KEY")
+        if not isinstance(key, str) or not key.strip():
+            return ("unknown", f"{path} is missing a nonempty OPENAI_API_KEY")
         return ("api-key", f"Using API-key session ({path})")
     if mode is None:
         return ("unknown", f"{path} exists but holds no recognized Codex credential")

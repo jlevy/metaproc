@@ -12,8 +12,9 @@ from __future__ import annotations
 
 import json
 import textwrap
+from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from strif import atomic_write_text
@@ -48,7 +49,9 @@ from metaproc.io import iter_jsonl_objects, read_yaml_file, to_yaml_string
 from metaproc.io.state_io import read_run_plan
 from metaproc.models.execution_profile import (
     REMOVED_EXECUTION_PROFILES,
+    ExecutionProfile,
     ExecutionProfileRegistry,
+    RemovedExecutionProfile,
     recorded_execution_profiles,
     removed_profile_note,
 )
@@ -459,6 +462,27 @@ def test_resume_warns_when_an_implicit_default_alias_moves(
 # ── H2: a removed built-in execution profile ──────────────────────
 
 
+@pytest.fixture
+def former_served_profile(monkeypatch: pytest.MonkeyPatch) -> str:
+    name = "synthetic-old-gemini"
+    catalogs = cast("dict[str, RemovedExecutionProfile]", REMOVED_EXECUTION_PROFILES)
+    monkeypatch.setitem(
+        catalogs,
+        name,
+        RemovedExecutionProfile(
+            removed_on=date(2026, 11, 18),
+            reason="synthetic profile retirement",
+            successor="gemini-hydrogen",
+            definition=ExecutionProfile(
+                adapter="gemini-cli",
+                model="gemini-3.6-flash",
+                config={"model": "gemini-3.6-flash"},
+            ),
+        ),
+    )
+    return name
+
+
 def _former_profile_file(tmp_path: Path, name: str) -> Path:
     """Write *name*'s former built-in definition as an operator profile file."""
     definition = REMOVED_EXECUTION_PROFILES[name].definition
@@ -490,30 +514,34 @@ def _launch_on_former_profile(tmp_path: Path, name: str) -> tuple[Path, Path, st
     return process_path, runs_dir, run_id
 
 
-def test_status_rebuilds_the_plan_of_a_run_on_a_removed_profile(tmp_path: Path) -> None:
-    _process_path, runs_dir, run_id = _launch_on_former_profile(tmp_path, "gemini-flash-36")
+def test_status_rebuilds_the_plan_of_a_run_on_a_removed_profile(
+    tmp_path: Path, former_served_profile: str
+) -> None:
+    _process_path, runs_dir, run_id = _launch_on_former_profile(tmp_path, former_served_profile)
 
     assert _step_states(runs_dir / run_id) == {"first": "current", "second": "current"}
 
 
 def test_a_run_on_a_removed_profile_resumes_with_a_warning_and_reuses_its_steps(
-    tmp_path: Path,
+    tmp_path: Path, former_served_profile: str
 ) -> None:
-    process_path, runs_dir, run_id = _launch_on_former_profile(tmp_path, "gemini-flash-36")
+    process_path, runs_dir, run_id = _launch_on_former_profile(tmp_path, former_served_profile)
     run_dir = runs_dir / run_id
 
-    resumed = _run(process_path, runs_dir, run_id, "--variant", "gemini-flash-36")
+    resumed = _run(process_path, runs_dir, run_id, "--variant", former_served_profile)
 
     assert resumed.exit_code == 0, _message(resumed)
     assert "unknown adapter override" not in resumed.output
-    assert "execution profile 'gemini-flash-36' was removed" in resumed.output
+    assert f"execution profile {former_served_profile!r} was removed" in resumed.output
     assert "its successor is 'gemini-hydrogen'" in resumed.output
     assert sorted(_invocations(run_dir)) == ["first", "second"]
-    assert _config(run_dir)["artifact_namespace"] == "gemini-flash-36"
+    assert _config(run_dir)["artifact_namespace"] == former_served_profile
 
 
-def test_an_authored_removed_default_profile_resumes_and_reuses_its_steps(tmp_path: Path) -> None:
-    name = "gemini-flash-36"
+def test_an_authored_removed_default_profile_resumes_and_reuses_its_steps(
+    tmp_path: Path, former_served_profile: str
+) -> None:
+    name = former_served_profile
     process_path = _write_process(tmp_path / "proc", default_execution_profile=name)
     runs_dir = tmp_path / "runs"
     run_id = "authored-default"
@@ -579,14 +607,7 @@ def test_a_removed_profile_whose_model_is_retired_names_the_override_that_contin
     assert _step_states(run_dir) == {"first": "current", "second": "current"}
 
 
-def test_a_composite_inherits_the_replacement_model_and_keeps_child_profile_pins(
-    tmp_path: Path,
-) -> None:
-    child = _write_process(tmp_path / "proc")
-    contents = child.read_text(encoding="utf-8").replace(
-        "    - id: second\n", "    - id: second\n      execution_profile: claude-opus\n"
-    )
-    child.write_text(contents, encoding="utf-8")
+def _write_composite_parent(child: Path) -> Path:
     parent = child.with_name("parent.process.md")
     parent.write_text(
         textwrap.dedent("""\
@@ -605,6 +626,39 @@ def test_a_composite_inherits_the_replacement_model_and_keeps_child_profile_pins
             """),
         encoding="utf-8",
     )
+    return parent
+
+
+@pytest.mark.parametrize("profile", ["gemini-hydrogen", "private-gemini"])
+def test_fresh_composite_snapshot_inherits_the_launch_profile(tmp_path: Path, profile: str) -> None:
+    child = _write_process(tmp_path / "proc", default_execution_profile="gemini-flash")
+    parent = _write_composite_parent(child)
+    options = ["--variant", profile]
+    if profile == "private-gemini":
+        profile_file = tmp_path / "profiles.yaml"
+        definition = ExecutionProfileRegistry.load().resolve("gemini-hydrogen").profile
+        config = definition.model_dump(mode="json", by_alias=True, exclude_none=True)
+        profile_file.write_text(json.dumps({"profiles": {profile: config}}), encoding="utf-8")
+        options.extend(["--profile-file", str(profile_file)])
+    runs_dir = tmp_path / "runs"
+
+    launched = _run(parent, runs_dir, "fresh-composite", *options)
+
+    assert launched.exit_code == 0, _message(launched)
+    run_dir = runs_dir / "fresh-composite"
+    assert _config(run_dir)["resources"]["hierarchy"]
+    assert (run_dir / "child" / "first.txt").read_text(encoding="utf-8") == f"{profile}\n"
+
+
+def test_a_composite_inherits_the_replacement_model_and_keeps_child_profile_pins(
+    tmp_path: Path,
+) -> None:
+    child = _write_process(tmp_path / "proc")
+    contents = child.read_text(encoding="utf-8").replace(
+        "    - id: second\n", "    - id: second\n      execution_profile: claude-opus\n"
+    )
+    child.write_text(contents, encoding="utf-8")
+    parent = _write_composite_parent(child)
     runs_dir = tmp_path / "runs"
     run_id = "composite"
     name = "pi-glm5"
@@ -664,14 +718,14 @@ def test_removed_profiles_are_gone_and_their_successors_ship() -> None:
 
 def test_only_recorded_removed_profiles_are_rebuilt() -> None:
     config: dict[object, object] = {
-        "execution_profile": "gemini-flash-36",
+        "execution_profile": "gemini-flash",
         "step_variants": {"judge": "pi-glm5"},
         "resolved_profiles": [{"name": "claude-opus", "adapter": "claude-code-cli"}],
     }
     recorded = recorded_execution_profiles(config)
-    assert sorted(recorded) == ["gemini-flash-36", "pi-glm5"]
+    assert sorted(recorded) == ["gemini-flash", "pi-glm5"]
     registry = ExecutionProfileRegistry.load(recorded_profiles=recorded)
-    assert registry.entries["gemini-flash-36"].source.kind == "recorded"
+    assert registry.entries["gemini-flash"].source.kind == "recorded"
     # A name a source still defines resolves from that source.
     shadowed = ExecutionProfileRegistry.load(recorded_profiles={"claude-opus": recorded["pi-glm5"]})
     assert shadowed.entries["claude-opus"].source.kind == "built-in"
@@ -753,9 +807,9 @@ def test_an_unknown_model_keeps_the_generic_refusal() -> None:
 
 
 def test_a_model_still_served_by_an_adapter_is_not_called_removed() -> None:
-    assert resolve_model("gemini-cli", "gemini-3.6-flash") == "gemini-3.6-flash"
-    assert removed_model_note("gemini-cli", "gemini-3.6-flash") is None
-    assert removed_model_note("pi-cli", "gemini-3.6-flash") is not None
+    for adapter in ("gemini-cli", "pi-cli"):
+        assert resolve_model(adapter, "gemini-3.6-flash") == "gemini-3.6-flash"
+        assert removed_model_note(adapter, "gemini-3.6-flash") is None
 
 
 def test_every_removed_model_is_unknown_and_its_replacement_known() -> None:

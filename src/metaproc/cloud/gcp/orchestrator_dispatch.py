@@ -73,6 +73,8 @@ class OrchestratorDispatchConfig:
     # silently desynchronize local, orchestrator, and worker dispatch.
     auth_flags: AuthPoolFlags = field(default_factory=AuthPoolFlags)
     artifact_namespace: str = ""
+    step_variants: dict[str, str] = field(default_factory=dict)
+    profile_files: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -115,6 +117,8 @@ async def dispatch_orchestrator(
         variant=config.variant or "",
         artifact_namespace=config.artifact_namespace,
         adapter_config=config.adapter_config or {},
+        step_variants=config.step_variants,
+        profile_files=config.profile_files,
         skip_steps=tuple(config.skip_steps or ()),
         from_step=config.from_step,
         only_step=config.only_step,
@@ -225,7 +229,8 @@ async def dispatch_orchestrator(
 
     require_secret_service_account(secret_refs, config.gcp.service_account_email)
 
-    # Pi CLI models config.
+    # A run's remote step overrides or a nested process can select Pi even when
+    # the root --variant names another adapter. The resolved plan exists on the VM.
     pi_models = build_pi_models_json(config.gcp.project)
     if pi_models:
         env_vars["METAPROC_PI_MODELS_JSON"] = pi_models

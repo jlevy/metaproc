@@ -12,9 +12,9 @@ upgrade of the four pinned agent CLIs.
 It keeps the four evidence boundaries of
 [Model Catalog Maintenance](../model-catalog-maintenance.md) separate: catalog
 existence, CLI parsing, provider availability, and live compatibility.
-Live probes ran on 2026-11-18 from a cloud development container through the routes
-named in each section; no Vertex AI credential was available, so every Vertex route is
-unverified.
+Live probes on 2026-11-18 used the routes named in each section.
+Vertex AI credentials were unavailable for those probes.
+A direct Vertex API follow-up ran on 2026-11-21.
 
 ## Pin Selection
 
@@ -61,7 +61,7 @@ Google model or codename matches “Kai Run”, so Carbon is the presumed intent
 
 Google made `gemini-4-neon` generally available on the Gemini API paid tier on
 2026-11-18. With Metaproc’s settings, Gemini CLI 0.66.0 preserves the explicit ID during
-model resolution. Neon still needs a live tool-call probe.
+model resolution. The Vertex route passed a Gemini CLI file-read round trip.
 [Gemini API release notes](https://aistudio.google.com/docs/changelog#11-18-2026),
 [Gemini 4 family guide](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/start/get-started-with-gemini-4),
 [Gemini CLI 0.66.0 resolver](https://github.com/google-gemini/gemini-cli/blob/v0.66.0/packages/core/src/config/models.ts#L238-L324).
@@ -70,13 +70,31 @@ model resolution. Neon still needs a live tool-call probe.
 
 - On the Gemini API, `gemini-3.5-flash` and `gemini-3.7-flash` were deprecated
   2026-10-08 and auto-route to 3.6 Flash and 3.8 Flash.
-- On Vertex, `gemini-3.6-flash` retires 2026-11-19 (replacement `gemini-3.8-flash`),
-  `gemini-3.7-flash` retires 2027-01-28, and `gemini-3.5-flash` stays GA until at least
-  2027-05-19.
+- Vertex restricted 3.6 Flash access for new and inactive projects on 2026-11-19. Active
+  projects can use it until 2027-01-28, when it shuts down.
+  The shipped `gemini-flash-36` profile and Pi’s built-in `google-vertex` selection
+  retain the exact ID for those projects.
+  Google recommends Gemini 4 Hydrogen as the upgrade.
+  [3.6 Flash model page](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-6-flash),
+  [Vertex lifecycle](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/model-versions).
+- On Vertex, `gemini-3.7-flash` retires 2027-01-28 and `gemini-3.5-flash` stays GA until
+  at least 2027-05-19.
 - `gemini-3.1-pro-preview-customtools` is a documented public-preview endpoint on both
   surfaces with a 1,048,576-token context, not the 2,097,152 previously packaged for Pi.
-- The owner’s operator comparisons rated 3.8 Flash below 3.6 Flash, so the refresh
-  retires 3.6 and 3.5 Flash profiles in favor of Gemini 4 Hydrogen rather than 3.8.
+- Operator comparisons rated 3.8 Flash below 3.6 Flash.
+  Gemini 4 Hydrogen replaces the 3.5 Flash profiles and is the upgrade path for 3.6
+  Flash.
+
+#### Vertex Global API Follow-Up (2026-11-21)
+
+A generation probe using Application Default Credentials on the Vertex global endpoint
+returned HTTP 200 and the exact `modelVersion` for `gemini-3.6-flash`,
+`gemini-4-hydrogen`, and `gemini-4-neon`. This verifies model availability for the
+project used. Gemini CLI 0.66.0 also completed an isolated file-read tool round trip for
+all three models using the same Vertex project.
+The Metaproc auth check for `gemini-flash-36` reported the exact billed model.
+Pi 1.5.2 completed a file-read tool round trip for 3.6 Flash on its native
+`google-vertex` route.
 
 ### Vertex MaaS
 
@@ -191,12 +209,12 @@ except the pinned CLI:
 
 Live probes (adapter argv, one bash tool call each): `gpt-6.1-sol`, `gpt-6.2-sol` and
 `gpt-5.5` on `openai`, and `gemini-4-argon` on Pi’s `google` provider, completed.
-Anthropic, `google-vertex` and `vertex-maas` were not probed.
+Pi’s Anthropic and `vertex-maas` routes remain unverified.
 
 ## Open Questions
 
-- Vertex routes for Gemini 4, Gemini 3.1 Pro and the MaaS replacements still need
-  bounded probes with production credentials.
+- Vertex routes for Gemini 4 Argon, Gemini 4 Carbon, Gemini 3.1 Pro and the MaaS
+  replacements still need bounded harness tool-call probes.
 - The Vertex MaaS replacements carry only a 45-day preview minimum (about 2026-11-28 to
   2026-11-30).
 - Gemini 4 Argon and Carbon and GPT-5.6 Sol promotional prices end 2026-11-30 (bead

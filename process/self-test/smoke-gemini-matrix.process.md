@@ -120,10 +120,12 @@ when step 1 is green.
 | `gemini-cli` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | `pi-cli` (google-vertex) | — | ✓ | ✓ | ✓ | — | ✓ | — |
 
-The gemini-cli row covers every concrete model the catalog accepts for that harness
-except `gemini-3.6-flash`, which Vertex retires on 2026-11-19 and which remains
-reachable only through the Gemini API. The pi-cli row covers one model per Gemini lane;
-the other `google-vertex` models use the same API path.
+The matrix covers the standard Vertex smoke lanes.
+Vertex projects active before the 2026-11-19 cutoff can probe `gemini-3.6-flash`
+individually until its 2027-01-28 shutdown.
+`gemini-4-neon` is available for explicit Gemini CLI selection and still needs a harness
+tool-call probe.
+[Gemini 3.6 Flash availability](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-6-flash).
 The pi-cli `--assert-model` check is a substring match, so its `gemini-3.1-pro-preview`
 cell would also pass on `gemini-3.1-pro-preview-customtools`.
 

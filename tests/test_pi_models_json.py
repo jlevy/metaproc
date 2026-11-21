@@ -2,21 +2,31 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+from contextlib import nullcontext
 from importlib import resources
 from pathlib import Path
 from typing import Any, cast
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
 from metaproc.cloud.gcp.batch_backend import (
+    GCPBatchConfig,
     _merge_pi_models_json,
     _rewrite_pi_models_json,
     build_pi_models_json,
 )
+from metaproc.cloud.gcp.orchestrator_dispatch import (
+    OrchestratorDispatchConfig,
+    dispatch_orchestrator,
+)
+from metaproc.cloud.gcp.worker_dispatch import WorkerDispatchConfig, _submit_workers
 from metaproc.config.model_catalog import MODEL_CATALOG
+from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
+from metaproc.models.plan import ResolvedAdapter, ResolvedStep
 
 
 def test_rewrite_swaps_gcloud_apikey_helper() -> None:
@@ -119,6 +129,76 @@ def test_build_refuses_operator_credentials_in_batch_metadata(
 
     assert "example-private-value" not in str(exc.value)
     assert "example-private-value" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("adapter", "shared_target", "fallback", "requires_pi"),
+    [
+        ("codex-cli", True, "", False),
+        ("pi-cli", True, "", True),
+        ("codex-cli", False, "", True),
+        ("codex-cli", True, "both", True),
+    ],
+)
+def test_batch_worker_checks_pi_overlay_for_possible_consumers(
+    tmp_path: Path, adapter: str, shared_target: bool, fallback: str, requires_pi: bool
+) -> None:
+    pi_dir = tmp_path / ".pi" / "agent"
+    pi_dir.mkdir(parents=True)
+    (pi_dir / "models.json").write_text('{"providers":{"gateway":{"apiKey":"fixture-only"}}}')
+    step = ResolvedStep(step_id="review", mode="agent", adapter=ResolvedAdapter(type=adapter))
+    config = WorkerDispatchConfig(
+        gcp=GCPBatchConfig(project="test", filestore_server="10.0.0.1" if shared_target else ""),
+        resolved_step=step,
+        scope_run_id="test-run",
+        auth_flags=AuthPoolFlags(
+            auth_account="codex-cli" if fallback else "", auth_fallback_policy=fallback
+        ),
+    )
+    client = MagicMock()
+    client.create_job.return_value.name = "jobs/test"
+    with (
+        patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=True),
+        patch("google.cloud.batch_v1.BatchServiceClient", return_value=client),
+        pytest.raises(ValueError, match="Pi provider 'gateway'") if requires_pi else nullcontext(),
+    ):
+        asyncio.run(
+            _submit_workers(
+                config=config,
+                partitions=[["item"]],
+                context_partitions=[[{"ITEM": "item"}]],
+                step=step.step_id,
+                process_spec_rel="example.process.md",
+                vars_json='{"RUN_ID":"test-run"}',
+                run_dir=tmp_path / "runs" / "test-run",
+                out=MagicMock(),
+            )
+        )
+    if requires_pi:
+        client.create_job.assert_not_called()
+    else:
+        job = client.create_job.call_args.args[0].job
+        env = job.task_groups[0].task_spec.runnables[-1].environment.variables
+        assert "METAPROC_PI_MODELS_JSON" not in env
+
+
+def test_root_variant_cannot_exclude_pi_from_an_unresolved_orchestrator(tmp_path: Path) -> None:
+    pi_dir = tmp_path / ".pi" / "agent"
+    pi_dir.mkdir(parents=True)
+    (pi_dir / "models.json").write_text('{"providers":{"gateway":{"apiKey":"fixture-only"}}}')
+    config = OrchestratorDispatchConfig(
+        gcp=GCPBatchConfig(project="test"),
+        process_spec_rel="example.process.md",
+        variables={"RUN_ID": "existing-run"},
+        variant="codex-cli",
+    )
+    with (
+        patch.dict("os.environ", {"HOME": str(tmp_path)}, clear=True),
+        patch("google.cloud.batch_v1.BatchServiceClient") as client,
+        pytest.raises(ValueError, match="Pi provider 'gateway'"),
+    ):
+        asyncio.run(dispatch_orchestrator(config))
+    client.return_value.create_job.assert_not_called()
 
 
 def test_build_rewrites_bare_api_key_from_operator_overlay(tmp_path: Path) -> None:

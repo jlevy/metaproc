@@ -4,7 +4,7 @@ Carries the operator-CLI to orchestrator Batch job environment fields:
 ``METAPROC_PROCESS_SPEC``, ``_VARS``, ``_NUM_WORKERS``,
 ``_DEFAULT_NUM_WORKERS``, ``_MACHINE_TYPE``, ``_MAX_CONCURRENCY``,
 ``_INITIAL_CONCURRENCY``, ``_SPOT``, ``_VARIANT``, ``_ARTIFACT_NAMESPACE``, ``_ADAPTER_CONFIG``,
-``_SKIP_STEPS``, ``_FROM_STEP``, ``_ONLY_STEP``, ``_FORCE``,
+``_STEP_VARIANTS``, ``_PROFILE_FILES``, ``_SKIP_STEPS``, ``_FROM_STEP``, ``_ONLY_STEP``, ``_FORCE``,
 ``_CONTINUE_ON_ERROR``.
 
 The encoder mirrors the existing orchestrator_dispatch behavior: only
@@ -21,6 +21,8 @@ import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import ClassVar
+
+from pydantic import TypeAdapter
 
 from metaproc.config.env_vars import MetaprocEnv
 
@@ -60,6 +62,8 @@ class OrchestratorDispatchPayload:
     force: bool = False
     continue_on_error: bool = False
     artifact_namespace: str = ""
+    step_variants: dict[str, str] = field(default_factory=dict)
+    profile_files: dict[str, str] = field(default_factory=dict)
 
     ENV_PROCESS_SPEC: ClassVar[str] = MetaprocEnv.METAPROC_PROCESS_SPEC.name
     ENV_VARS: ClassVar[str] = MetaprocEnv.METAPROC_VARS.name
@@ -71,6 +75,8 @@ class OrchestratorDispatchPayload:
     ENV_SPOT: ClassVar[str] = MetaprocEnv.METAPROC_SPOT.name
     ENV_VARIANT: ClassVar[str] = MetaprocEnv.METAPROC_VARIANT.name
     ENV_ARTIFACT_NAMESPACE: ClassVar[str] = MetaprocEnv.METAPROC_ARTIFACT_NAMESPACE.name
+    ENV_STEP_VARIANTS: ClassVar[str] = MetaprocEnv.METAPROC_STEP_VARIANTS.name
+    ENV_PROFILE_FILES: ClassVar[str] = MetaprocEnv.METAPROC_PROFILE_FILES.name
     ENV_ADAPTER_CONFIG: ClassVar[str] = MetaprocEnv.METAPROC_ADAPTER_CONFIG.name
     ENV_SKIP_STEPS: ClassVar[str] = MetaprocEnv.METAPROC_SKIP_STEPS.name
     ENV_FROM_STEP: ClassVar[str] = MetaprocEnv.METAPROC_FROM_STEP.name
@@ -88,6 +94,7 @@ class OrchestratorDispatchPayload:
         initial_conc_raw = e.get(cls.ENV_INITIAL_CONCURRENCY, "").strip()
         vars_raw = e.get(cls.ENV_VARS, "").strip()
         adapter_raw = e.get(cls.ENV_ADAPTER_CONFIG, "").strip()
+        step_variants_raw = e.get(cls.ENV_STEP_VARIANTS, "").strip()
         return cls(
             process_spec=e.get(cls.ENV_PROCESS_SPEC, ""),
             variables=json.loads(vars_raw) if vars_raw else {},
@@ -99,12 +106,25 @@ class OrchestratorDispatchPayload:
             variant=e.get(cls.ENV_VARIANT, ""),
             artifact_namespace=e.get(cls.ENV_ARTIFACT_NAMESPACE, ""),
             adapter_config=json.loads(adapter_raw) if adapter_raw else {},
+            step_variants=json.loads(step_variants_raw) if step_variants_raw else {},
+            profile_files=cls.profile_files_from_env(e),
             skip_steps=_split_csv(e.get(cls.ENV_SKIP_STEPS, "")),
             from_step=e.get(cls.ENV_FROM_STEP, ""),
             only_step=e.get(cls.ENV_ONLY_STEP, ""),
             force=_decode_bool(e.get(cls.ENV_FORCE, "")),
             continue_on_error=_decode_bool(e.get(cls.ENV_CONTINUE_ON_ERROR, "")),
         )
+
+    @classmethod
+    def profile_files_from_env(cls, env: Mapping[str, str]) -> dict[str, str]:
+        """Decode the ordered mapping of explicit workspace profiles to their digests."""
+        raw = env.get(cls.ENV_PROFILE_FILES, "").strip()
+        if not raw:
+            return {}
+        try:
+            return TypeAdapter(dict[str, str]).validate_json(raw)
+        except ValueError as exc:
+            raise ValueError(f"invalid profile digest mapping in {cls.ENV_PROFILE_FILES}") from exc
 
     def to_env_vars(self) -> dict[str, str]:
         """Encode to a Batch job env_vars dict.
@@ -140,6 +160,10 @@ class OrchestratorDispatchPayload:
             out[self.ENV_ARTIFACT_NAMESPACE] = self.artifact_namespace
         if self.adapter_config:
             out[self.ENV_ADAPTER_CONFIG] = json.dumps(self.adapter_config)
+        if self.step_variants:
+            out[self.ENV_STEP_VARIANTS] = json.dumps(self.step_variants)
+        if self.profile_files:
+            out[self.ENV_PROFILE_FILES] = json.dumps(self.profile_files)
         if self.skip_steps:
             out[self.ENV_SKIP_STEPS] = ",".join(self.skip_steps)
         if self.from_step:

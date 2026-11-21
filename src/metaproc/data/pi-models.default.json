@@ -17,7 +17,7 @@
       ]
     },
     "google-vertex": {
-      "_note": "Pi 1.5.2 ships gemini-3.8-flash, gemini-3.5-flash-lite, gemini-3.1-pro-preview, gemini-3.1-pro-preview-customtools (1,048,576-token context) and gemini-4-argon as built-in google-vertex models; they are not repeated here. Gemini 4 Carbon and Hydrogen are not built in. Pi maps Gemini thinking levels low through high only, so Hydrogen's xhigh level is not reachable through Pi. Carbon's price is Google's launch rate, which rises to $4/$20/$0.20 per million tokens on 2026-12-01.",
+      "_note": "Pi 1.5.2 ships gemini-3.8-flash, gemini-3.6-flash, gemini-3.5-flash-lite, gemini-3.1-pro-preview, gemini-3.1-pro-preview-customtools (1,048,576-token context) and gemini-4-argon as built-in google-vertex models. Active Vertex projects retain access to 3.6 Flash until 2027-01-28. This catalog adds Gemini 4 Carbon and Hydrogen. Pi maps Gemini thinking levels through high, so Hydrogen's xhigh level is unavailable through Pi. Carbon's price is Google's launch rate, which rises to $4/$20/$0.20 per million tokens on 2026-12-01.",
       "baseUrl": "https://{location}-aiplatform.googleapis.com",
       "api": "google-vertex",
       "apiKey": "gcp-vertex-credentials",

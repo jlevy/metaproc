@@ -408,6 +408,13 @@ Shared by worker and orchestrator entrypoints via
   Large item-context payloads spill to
   `{run_dir}/.state/steps/{step_id}/worker_payloads/worker-<id>-item-contexts.json` on
   Filestore and are loaded via `METAPROC_ITEM_CONTEXTS_FILE`.
+- **Resolved step.** The orchestrator writes one private Filestore payload per resolved
+  step and scope. `METAPROC_WORKER_STEP_FILE` points to it.
+  Each worker uses the resolved adapter, configuration, and scope identity from that
+  payload. Different payloads have different paths so an adopted job retains the step it
+  was dispatched with.
+  Use the same Metaproc build on the orchestrator and workers so both jobs support the
+  payload.
 - **Resume/adoption**: writes `{run_dir}/.state/steps/{step_id}/dispatch-manifest.yaml`
   after submission so later resumes can adopt already-running worker jobs.
 - **Scaling/reconcile**: reads step-level `scale-state.yaml` and uses per-worker
@@ -424,7 +431,7 @@ Shared by worker and orchestrator entrypoints via
 
 `WorkerDispatchConfig` (frozen dataclass): `gcp`, `num_workers`, `max_concurrency`,
 `initial_concurrency`, `max_retries`, `poll_interval`, `spot`, `variant`,
-`adapter_config_json`, `auth_flags` (`AuthPoolFlags`).
+`adapter_config_json`, `auth_flags` (`AuthPoolFlags`), `resolved_step`, `scope_run_id`.
 
 ### 3.4 Worker Entrypoint (`worker_entrypoint.py`)
 
@@ -441,6 +448,7 @@ Unified container entrypoint for worker containers:
 3. Call `bootstrap_container()`.
 4. Build and run:
    `python -m metaproc run-parallel <process_spec> --step <step> --items <items> --backend local [--auth-* flags]`.
+   The command reads the inherited `METAPROC_WORKER_STEP_FILE` path when set.
 5. Exit with `run-parallel`’s exit code.
    Outputs land on NFS.
 

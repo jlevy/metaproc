@@ -660,10 +660,10 @@ Git commit it runs from.
 Metaproc prints a `Resume changes <field>: <old> -> <new>` warning for each change,
 where the field is `variables.<NAME>`, `step_variants.<STEP>`, `variant`,
 `execution_profile`, `artifact_namespace`, `resolved_profiles`, `backend`, `git_sha`,
-`default_models.<ADAPTER>` (the model an adapter’s agent steps with no `model:` resolve
-to, including known targets of moving aliases), `profile_model_overrides.<PROFILE>` (the
-replacement model selected for a removed profile), or `input_bindings.<NAME>` for a
-binding the resume adopts or releases.
+`default_models.<ADAPTER>` (the model an adapter’s root-process agent steps with no
+`model:` resolve to, including known targets of moving aliases),
+`profile_model_overrides.<PROFILE>` (the replacement model selected for a removed
+profile), or `input_bindings.<NAME>` for a binding the resume adopts or releases.
 It appends one `launch_config_change` event listing them to
 `.logs/dispatch-config-changes.jsonl` and then rewrites those fields in
 `run-config.yaml` to the values the resume ran with, so the file describes the latest

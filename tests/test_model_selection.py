@@ -157,6 +157,7 @@ def test_gemini_preserves_accepted_explicit_models(
         ("google-vertex", "gemini-4-carbon"),
         ("google-vertex", "gemini-4-hydrogen"),
         ("google-vertex", "gemini-3.8-flash"),
+        ("google-vertex", "gemini-3.6-flash"),
         ("google-vertex", "gemini-3.5-flash-lite"),
         ("google-vertex", "gemini-3.1-pro-preview-customtools"),
     ],

@@ -174,6 +174,7 @@ MODEL_CATALOG = ModelCatalog(
                 # google-vertex
                 "gemini-4-argon",
                 "gemini-3.8-flash",
+                "gemini-3.6-flash",
                 "gemini-3.5-flash-lite",
                 "gemini-3.1-pro-preview",
                 "gemini-3.1-pro-preview-customtools",
@@ -203,8 +204,8 @@ MODEL_CATALOG = ModelCatalog(
         "gemini-4-argon": "GA 2026-10-13; Vertex availability until at least 2027-10-13. Thinking low, medium, high; minimal returns HTTP 400. Unknown to gemini-cli through 0.69.0-preview.0, which forwards it unchanged without a thinking-level alias.",
         "gemini-4-carbon": "GA 2026-11-10; Google's strongest model, paid tier only. Thinking low, medium, high. Unknown to gemini-cli through 0.69.0-preview.0, which forwards it unchanged.",
         "gemini-4-hydrogen": "GA 2026-11-12; Google's recommended upgrade from 3.8 Flash. Thinking low through xhigh, default high. Unknown to gemini-cli through 0.69.0-preview.0, which forwards it unchanged.",
-        "gemini-4-neon": "GA 2026-11-18 on the paid Gemini API tier. The pinned Gemini CLI 0.66.0 passes the explicit ID through unchanged. Live routes remain unverified.",
-        "gemini-3.6-flash": "Retained on the Gemini API (GA, no shutdown announced). Vertex retires it 2026-11-19 with gemini-3.8-flash as the replacement; shipped profiles no longer use it.",
+        "gemini-4-neon": "GA 2026-11-18 on the paid Gemini API tier. A direct Vertex global probe served the exact ID on 2026-11-21, and Gemini CLI 0.66.0 completed a file-read tool round trip on the same route.",
+        "gemini-3.6-flash": "The Gemini API continues to offer this GA ID. On Vertex, new and inactive projects lost access on 2026-11-19. Active projects retain access until 2027-01-28. Google's Vertex replacement is gemini-4-hydrogen.",
         "gemini-3.5-flash-lite": "Current Flash-Lite. gemini-cli 0.62.0 and later send it for gemini-3.1-flash-lite and flash-lite.",
         "gemini-3.1-pro-preview-customtools": "Public-preview endpoint on the Gemini API and Vertex (released 2026-02-23); 1,048,576-token context. The gemini-cli default.",
         "flash": "Moving gemini-cli alias: gemini-3.8-flash in 0.66.0.",
@@ -219,7 +220,7 @@ MODEL_CATALOG = ModelCatalog(
         "deepseek-flash": "DeepSeek's current Flash name, served by DeepSeek-V4.1-Flash-1017. The legacy deepseek-v4-flash name is a retired alias and is no longer accepted.",
         "kimi-k3.1-pro": "Moonshot's current flagship (1,048,576-token context), on Metaproc's moonshot route; kimi-k3 is the previous generation.",
         "kimi-k2.6": "Exact Moonshot ID confirmed; closed to new users from 2026-11-01, deprecation expected late December 2026. Retained on Pi's moonshot route for existing accounts until then.",
-        "pi-removed-2026-11-18": "Dropped from the pi-cli catalog as retired, retiring, or superseded: deepseek-v4-flash, gpt-5.4-mini, gpt-5.4-nano, gemini-3.7-flash, gemini-3.6-flash (Vertex retires it 2026-11-19), gemini-3.5-flash, gemini-3.1-flash-lite, gemini-3-flash-preview, and the six Vertex MaaS IDs retired 2026-10-21 with their short forms.",
+        "pi-removed-2026-11-18": "Dropped from the pi-cli catalog as retired, retiring, or superseded: deepseek-v4-flash, gpt-5.4-mini, gpt-5.4-nano, gemini-3.7-flash, gemini-3.5-flash, gemini-3.1-flash-lite, gemini-3-flash-preview, and the six Vertex MaaS IDs retired 2026-10-21 with their short forms.",
     },
 )
 
@@ -255,8 +256,7 @@ def known_model_ids(adapter: str) -> frozenset[str]:
 class RemovedModel(BaseModel):
     """A model ID the catalog accepted before and has since dropped.
 
-    ``adapters`` are the adapters that accepted the ID until ``removed_on``; an adapter
-    that still accepts it (``gemini-3.6-flash`` on gemini-cli) is not listed.
+    ``adapters`` are the adapters that accepted the ID until ``removed_on``.
     ``replacement`` names the ID or IDs to select instead.
     """
 
@@ -318,8 +318,6 @@ REMOVED_MODELS: dict[str, RemovedModel] = {
         "gemini-cli", "preview shut down 2026-05-25", "gemini-3.5-flash-lite"
     ),
     "auto-gemini-3": _removed("gemini-cli", "gemini-cli deprecated the alias", "auto"),
-    # gemini-cli still accepts gemini-3.6-flash; Pi's Vertex route retires it 2026-11-19.
-    "gemini-3.6-flash": _removed("pi-cli", "Vertex AI retires it 2026-11-19", "gemini-3.8-flash"),
     "gpt-5.4": _removed(
         "codex-cli", "retired from Codex with ChatGPT sign-in 2026-08-31", "gpt-6.1-sol"
     ),

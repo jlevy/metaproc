@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import stat
 import subprocess
 import tempfile
 import time
@@ -244,6 +245,7 @@ def _pi_validate_registration(
 
 
 _PI_GCP_TOKEN_ENV = "METAPROC_PI_API_KEY"
+_MAX_PI_PROBE_CATALOG_BYTES = 4 * 1024 * 1024
 _PI_GCP_TOKEN_SOURCES = frozenset(
     {
         "$METAPROC_PI_API_KEY",
@@ -268,8 +270,22 @@ def _stage_pi_gcp_probe_catalog(
         if agent_dir
         else (Path(home) if home else Path.home()) / ".pi" / "agent"
     ) / "models.json"
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
     try:
-        config = json.loads(models_path.read_text(encoding="utf-8-sig"))["providers"][provider]
+        fd = os.open(models_path, flags)
+        try:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                raise ValueError("not a regular file")
+            with os.fdopen(fd, "rb", closefd=False) as stream:
+                data = stream.read(_MAX_PI_PROBE_CATALOG_BYTES + 1)
+        finally:
+            os.close(fd)
+        if len(data) > _MAX_PI_PROBE_CATALOG_BYTES:
+            raise ValueError("exceeds the Pi probe catalog read limit")
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"could not read {provider} probe catalog {models_path}: {exc}") from exc
+    try:
+        config = json.loads(data.decode("utf-8-sig"))["providers"][provider]
         api_key = config["apiKey"]
     except OSError, ValueError, KeyError, TypeError:
         config = {}

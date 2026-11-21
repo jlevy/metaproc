@@ -211,6 +211,28 @@ profiles:
       model: gemini-3.1-pro-preview
       no_session_persistence: true
 
+  gemini-flash-36:
+    schema: metaproc:ExecutionProfile/0.1
+    status: tested
+    adapter: gemini-cli
+    provider: google-vertex
+    model: gemini-3.6-flash
+    notes: |
+      Gemini 3.6 Flash (GA 2026-07-21) via gemini-cli through Vertex AI.
+      Current stable Flash profile for bounded agentic workflows. A direct
+      model check and bounded agent runs passed on 2026-07-24.
+    capabilities:
+      native_tools: [Read, Write, Edit, Bash, WebSearch, Glob, Grep, LS]
+      native_web_search: true
+      shell: true
+    resources:
+      estimated_process_rss_mb: 250
+      initial_memory_budget_fraction: 0.5
+    config:
+      model: gemini-3.6-flash
+      permission_mode: bypassPermissions
+      output_format: stream-json
+
   gemini-hydrogen:
     schema: metaproc:ExecutionProfile/0.1
     status: experimental
@@ -218,10 +240,9 @@ profiles:
     provider: google-vertex
     model: gemini-4-hydrogen
     notes: |
-      Gemini 4 Hydrogen (GA 2026-11-12) via gemini-cli. Google's recommended
-      upgrade from 3.8 Flash and the Flash-class lane; replaces gemini-flash-36
-      (3.6 Flash retires on Vertex 2026-11-19). Promote to "tested" after a
-      clean tier-1 large workflow dry run.
+      Gemini 4 Hydrogen (GA 2026-11-12) via gemini-cli. Google recommends it
+      as the upgrade from Gemini 3.6 Flash and 3.8 Flash. Promote to "tested"
+      after a clean tier-1 large workflow dry run.
     capabilities:
       native_tools: [Read, Write, Edit, Bash, WebSearch, Glob, Grep, LS]
       native_web_search: true

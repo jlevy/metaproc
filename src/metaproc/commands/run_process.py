@@ -100,6 +100,7 @@ from metaproc.dispatch.preflight import (
     check_step_preflight,
     validate_guard_posture,
 )
+from metaproc.dispatch.repo_sync_payload import RepoSyncPayload
 from metaproc.dispatch.slot_coordinator import SlotCoordinator, SlotLease
 from metaproc.engine.build_plan import (
     build_plan,
@@ -211,6 +212,7 @@ from metaproc.engine.write_boundary import (
 )
 from metaproc.errors import AttemptTerminalConflictError, CLIError, ValidationError
 from metaproc.io import from_yaml_string, read_yaml_file, to_yaml_string
+from metaproc.io.digests import file_sha256
 from metaproc.io.orchestrator_lease import LeaseHeartbeat, acquire_lease, release_lease
 from metaproc.io.overrides import (
     OverridesDocument,
@@ -288,7 +290,7 @@ from metaproc.runpool.scalar_admission import (
     admitted_launch,
 )
 from metaproc.settings import POOL_MAX_CONCURRENCY
-from metaproc.viz_loader import load_plan_bundle
+from metaproc.viz_loader import PlanBundleLaunch, load_plan_bundle
 
 log = logging.getLogger(__name__)
 
@@ -1405,6 +1407,45 @@ def _cloud_active_step_ids(
     if only_step:
         return {only_step}
     return {step.id for step in spec.steps}
+
+
+def _cloud_profile_digests(repo_root: Path, profile_files: Sequence[Path]) -> dict[str, str]:
+    """Identify explicit profiles by workspace path and content, in precedence order."""
+    if not profile_files:
+        return {}
+    source = RepoSyncPayload.from_env()
+    uses_clone = bool(source.repo_url and source.run_branch and not source.workspace_gcs)
+    sparse_dirs = tuple(
+        Path(path.strip()) for path in source.sparse_paths.split(",") if path.strip()
+    )
+    digests: dict[str, str] = {}
+    for profile_file in profile_files:
+        resolved = profile_file.resolve()
+        try:
+            relative = resolved.relative_to(repo_root)
+        except ValueError as exc:
+            raise ValidationError(
+                f"--cloud profile file {str(profile_file)!r} must be inside the repository checkout"
+            ) from exc
+        if (
+            uses_clone
+            and sparse_dirs
+            and not any(
+                relative.is_relative_to(directory) or relative.parent in directory.parents
+                for directory in sparse_dirs
+            )
+        ):
+            raise ValidationError(
+                f"--cloud profile file {relative.as_posix()!r} is outside the sparse checkout"
+            )
+        key = relative.as_posix()
+        # Repeating a file makes its definitions win over any intervening files.
+        digests.pop(key, None)
+        try:
+            digests[key] = file_sha256(resolved)
+        except OSError as exc:
+            raise ValidationError(f"could not read --cloud profile file {key!r}") from exc
+    return digests
 
 
 def _validate_execution_lanes(lane_ids: Sequence[str]) -> None:
@@ -5195,6 +5236,8 @@ async def _execute_fan_out_step(
                 else None
             ),
             auth_flags=auth_flags,
+            target=target,
+            run_id=run_id,
             out=out,
         )
 
@@ -5428,6 +5471,8 @@ async def _execute_gcp_worker_dispatch(
     max_retries: int | None,
     out: Any,
     auth_flags: AuthPoolFlags = AuthPoolFlags(),
+    target: ResolvedStep | None = None,
+    run_id: str | None = None,
 ) -> bool:
     """Dispatch a fan-out step to GCP worker VMs via worker_dispatch.
 
@@ -5453,6 +5498,8 @@ async def _execute_gcp_worker_dispatch(
         variant=variant,
         adapter_config_json=adapter_config_json,
         auth_flags=auth_flags,
+        resolved_step=target,
+        scope_run_id=run_id,
     )
 
     resolved = process_path.resolve()
@@ -7042,6 +7089,7 @@ def run_process_command(
             process_spec_rel = str(resolved.relative_to(repo_root))
         except ValueError:
             process_spec_rel = str(resolved)
+        cloud_profile_files = _cloud_profile_digests(repo_root, profile_files)
 
         if auth_account and auth_include_labels and auth_exclude_labels:
             raise CLIError("--auth-include-labels and --auth-exclude-labels are mutually exclusive")
@@ -7058,6 +7106,8 @@ def run_process_command(
             variant=variant or "",
             artifact_namespace=artifact_namespace or "",
             adapter_config=config_overrides or None,
+            step_variants=step_profile_overrides,
+            profile_files=cloud_profile_files,
             skip_steps=list(skip) if skip else None,
             from_step=from_step or "",
             only_step=only_step or "",
@@ -7268,14 +7318,26 @@ def run_process_command(
     )
     snapshot_bundle = None
     resource_snapshot = None
+    snapshot_launch = PlanBundleLaunch(
+        adapter_override=variant or None,
+        profile_files=tuple(profile_files),
+        recorded_profiles=resume_record.recorded_profiles,
+        profile_model_overrides=profile_model_overrides,
+        namespace_default_models=resume_record.namespace_default_models,
+    )
     if not paths_mod.run_config_file(run_dir).exists():
-        snapshot_bundle = load_plan_bundle(process_path, resolved_root=(spec, plan))
+        snapshot_bundle = load_plan_bundle(
+            process_path, resolved_root=(spec, plan), launch=snapshot_launch
+        )
         resource_snapshot = build_resource_run_snapshot(snapshot_bundle, run_id=run_id)
     elif not resume_record.has_resource_snapshot:
         # Older runs have no hierarchy snapshot for terminal resource reporting.
         try:
             snapshot_bundle = load_plan_bundle(
-                process_path, resolved_root=(spec, plan), validate_spec=False
+                process_path,
+                resolved_root=(spec, plan),
+                validate_spec=False,
+                launch=snapshot_launch,
             )
         except (CLIError, OSError, TypeError, ValueError) as exc:
             log.warning("Could not rebuild the legacy resource hierarchy for %s: %s", run_dir, exc)

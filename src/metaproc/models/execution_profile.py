@@ -154,18 +154,6 @@ _GEMINI_CLI_RESOURCES = {"estimated_process_rss_mb": 250, "initial_memory_budget
 _PI_RESOURCES = {"estimated_process_rss_mb": 500, "initial_memory_budget_fraction": 0.25}
 
 REMOVED_EXECUTION_PROFILES: Mapping[str, RemovedExecutionProfile] = {
-    "gemini-flash-36": _removed_profile(
-        reason="Vertex AI retires gemini-3.6-flash on 2026-11-19",
-        successor="gemini-hydrogen",
-        definition={
-            "status": "tested",
-            "adapter": "gemini-cli",
-            "provider": "google-vertex",
-            "model": "gemini-3.6-flash",
-            "resources": _GEMINI_CLI_RESOURCES,
-            "config": {"model": "gemini-3.6-flash", **_GEMINI_CLI_CONFIG},
-        },
-    ),
     "gemini-flash": _removed_profile(
         reason="its model gemini-3.5-flash was dropped from the model catalog",
         successor="gemini-hydrogen",

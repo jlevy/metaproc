@@ -9,13 +9,18 @@ to the legacy single-credential path.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
+
+import pytest
 
 from metaproc.cloud.gcp import orchestrator_entrypoint
 from metaproc.cloud.gcp.container_bootstrap import BootstrapResult
 from metaproc.cloud.gcp.orchestrator_entrypoint import build_runprocess_cmd, main
 from metaproc.dispatch.auth_pool_flags import AuthPoolFlags, _split_csv
+from metaproc.io.digests import file_sha256
 
 
 def _baseline_cmd(
@@ -106,30 +111,66 @@ class TestEntrypoint:
         log_resources.assert_not_called()
         bootstrap.assert_not_called()
 
-    def test_forwards_orchestrator_admission_marker_and_explicit_namespace(self) -> None:
+    @pytest.mark.parametrize("profile_state", ["matching", "edited", "missing", "outside"])
+    def test_forwards_profile_selections_only_for_matching_workspace_files(
+        self, tmp_path: Path, profile_state: str
+    ) -> None:
+        workspace = tmp_path / "repo"
+        (workspace / "config").mkdir(parents=True)
+        paths = ("config/first.yml", "config/team profiles.yml")
+        for relative in paths:
+            (workspace / relative).write_text(f"# {relative}\n", encoding="utf-8")
+        digests = {relative: file_sha256(workspace / relative) for relative in paths}
+        final_profile = workspace / paths[-1]
+        if profile_state == "edited":
+            final_profile.write_text("profiles: {}\n", encoding="utf-8")
+        elif profile_state == "missing":
+            final_profile.unlink()
+        elif profile_state == "outside":
+            outside = tmp_path / "external.yml"
+            final_profile.rename(outside)
+            final_profile.symlink_to(outside)
         env = {
             "METAPROC_PROCESS_SPEC": "path/to/spec.process.md",
             "METAPROC_VARS": '{"RUN_ID": "test-run", "VARIANT": "legacy-variable"}',
             "METAPROC_GCP_ORCHESTRATOR": "1",
             "METAPROC_ARTIFACT_NAMESPACE": "continuation",
+            "METAPROC_STEP_VARIANTS": '{"judge":"profile-b","run":"profile-a"}',
+            "METAPROC_PROFILE_FILES": json.dumps(digests),
         }
         with (
             patch.dict("os.environ", env, clear=True),
             patch(
                 "metaproc.cloud.gcp.orchestrator_entrypoint.bootstrap_container",
-                return_value=BootstrapResult(work_dir="/work/repo"),
+                return_value=BootstrapResult(work_dir=str(workspace)),
             ),
             patch("metaproc.cloud.gcp.orchestrator_entrypoint.log_resource_context"),
             patch("metaproc.cloud.gcp.orchestrator_entrypoint._run", return_value=0) as run,
         ):
-            assert main() == 0
+            status = main()
 
+        if profile_state != "matching":
+            assert status == 1
+            run.assert_not_called()
+            return
+
+        assert status == 0
         child_env = run.call_args.kwargs["env"]
         assert child_env["METAPROC_GCP_ORCHESTRATOR"] == "1"
         child_argv = run.call_args.args[0]
         assert child_argv[child_argv.index("--artifact-namespace") + 1] == "continuation"
         assert "VARIANT=legacy-variable" in child_argv
         assert "ARTIFACT_NAMESPACE=continuation" not in child_argv
+        assert [
+            value
+            for flag, value in zip(child_argv, child_argv[1:], strict=False)
+            if flag == "--step-variant"
+        ] == ["judge=profile-b", "run=profile-a"]
+        assert [
+            value
+            for flag, value in zip(child_argv, child_argv[1:], strict=False)
+            if flag == "--profile-file"
+        ] == ["config/first.yml", "config/team profiles.yml"]
 
 
 class TestAuthFlags:

@@ -155,6 +155,10 @@ class MetaprocEnv(EnvEnum):
         "Variant label passed through to worker / orchestrator entrypoints."
     )
     METAPROC_ARTIFACT_NAMESPACE = optional("Explicit artifact namespace for a Batch orchestrator.")
+    METAPROC_STEP_VARIANTS = optional("Serialized JSON step-to-profile overrides for Batch.")
+    METAPROC_PROFILE_FILES = optional(
+        "JSON mapping of Batch workspace profile paths to SHA-256 digests."
+    )
     METAPROC_ADAPTER_CONFIG = optional(
         "Serialized JSON adapter configuration passed to worker entrypoints."
     )
@@ -182,6 +186,9 @@ class MetaprocEnv(EnvEnum):
     METAPROC_ITEM_CONTEXTS = optional("Inline JSON item-context map.")
     METAPROC_ITEM_CONTEXTS_FILE = optional(
         "Path to a file containing item contexts (alternative to inline JSON)."
+    )
+    METAPROC_WORKER_STEP_FILE = optional(
+        "Path to the orchestrator-resolved step on shared worker storage."
     )
 
     # ── Secrets (.env-backed or Secret Manager) ──

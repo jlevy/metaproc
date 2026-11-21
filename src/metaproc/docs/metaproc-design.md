@@ -2141,8 +2141,11 @@ packaged `pi-models.default.json`. The authoritative list is
   claude-opus-5-5
 - **OpenAI**: gpt-6.1-sol, gpt-6.1-terra, gpt-6-astra, gpt-5.5, and the packaged
   gpt-6.2-astra and gpt-6.2-sol
-- **Google (`google-vertex`)**: gemini-4-argon, gemini-3.8-flash, gemini-3.5-flash-lite,
-  gemini-3.1-pro-preview, and the packaged gemini-4-carbon and gemini-4-hydrogen
+- **Google (`google-vertex`)**: gemini-4-argon, gemini-3.8-flash, gemini-3.6-flash,
+  gemini-3.5-flash-lite, gemini-3.1-pro-preview, and the packaged gemini-4-carbon and
+  gemini-4-hydrogen. Gemini 3.6 Flash remains available to active projects until
+  2027-01-28. Vertex restricted access for new and inactive projects on 2026-11-19.
+  [Gemini 3.6 Flash availability](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-6-flash).
 - **DeepSeek**: deepseek-flash, deepseek-v4-pro
 - **Moonshot** (packaged custom provider): kimi-k3.1-pro, kimi-k3, kimi-k2.6
 - **Vertex AI MaaS** (packaged custom provider): zai-org/glm-5.2-maas,

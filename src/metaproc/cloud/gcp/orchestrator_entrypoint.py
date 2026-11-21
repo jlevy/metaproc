@@ -17,6 +17,8 @@ Configuration via environment variables (set by ``orchestrator_dispatch.py``):
     METAPROC_SPOT             -- "true"/"false" for worker spot VMs
     METAPROC_VARIANT          -- Adapter/variant override
     METAPROC_ARTIFACT_NAMESPACE -- Explicit --artifact-namespace override
+    METAPROC_STEP_VARIANTS    -- JSON-encoded step-to-profile overrides
+    METAPROC_PROFILE_FILES    -- JSON mapping of workspace-relative profile files to SHA-256 digests
     METAPROC_ADAPTER_CONFIG   -- JSON-encoded adapter config overrides
     METAPROC_SKIP_STEPS       -- Comma-separated step IDs to skip
     METAPROC_FROM_STEP        -- Start from this step
@@ -47,6 +49,7 @@ import json
 import logging
 import os
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from metaproc.cloud.gcp.container_bootstrap import _run, bootstrap_container
@@ -54,6 +57,8 @@ from metaproc.cloud.gcp.secret_hydration import hydrate_secret_env
 from metaproc.commands.helpers import seed_runtime_vars
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
+from metaproc.dispatch.orchestrator_payload import OrchestratorDispatchPayload
+from metaproc.io.digests import verify_file_sha256
 from metaproc.osutils.resource_context import log_resource_context
 
 log = logging.getLogger(__name__)
@@ -70,6 +75,8 @@ def build_runprocess_cmd(
     spot: str = "true",
     variant: str = "",
     artifact_namespace: str = "",
+    step_variants: Mapping[str, str] | None = None,
+    profile_files: Sequence[str] = (),
     adapter_config_json: str = "",
     skip_steps: str = "",
     from_step: str = "",
@@ -117,6 +124,10 @@ def build_runprocess_cmd(
         cmd.extend(["--variant", variant])
     if artifact_namespace:
         cmd.extend(["--artifact-namespace", artifact_namespace])
+    for step_id, profile in (step_variants or {}).items():
+        cmd.extend(["--step-variant", f"{step_id}={profile}"])
+    for profile_file in profile_files:
+        cmd.extend(["--profile-file", profile_file])
 
     if adapter_config_json:
         adapter_configs: dict[str, str] = json.loads(adapter_config_json)
@@ -176,6 +187,9 @@ def main() -> int:
     spot = MetaprocEnv.METAPROC_SPOT.read_str(default="true")
     variant = MetaprocEnv.METAPROC_VARIANT.read_str(default="")
     artifact_namespace = MetaprocEnv.METAPROC_ARTIFACT_NAMESPACE.read_str(default="")
+    step_variants: dict[str, str] = json.loads(
+        MetaprocEnv.METAPROC_STEP_VARIANTS.read_str(default="") or "{}"
+    )
     adapter_config_json = MetaprocEnv.METAPROC_ADAPTER_CONFIG.read_str(default="")
     skip_steps = MetaprocEnv.METAPROC_SKIP_STEPS.read_str(default="")
     from_step = MetaprocEnv.METAPROC_FROM_STEP.read_str(default="")
@@ -197,6 +211,19 @@ def main() -> int:
         return 1
 
     work_dir = result.work_dir
+    try:
+        profile_files = OrchestratorDispatchPayload.profile_files_from_env(os.environ)
+        root = Path(work_dir).resolve()
+        for relative, digest in profile_files.items():
+            path = (root / relative).resolve()
+            if Path(relative).is_absolute() or not path.is_relative_to(root):
+                raise ValueError(f"profile {relative!r} must be relative to the workspace")
+            if not path.is_file():
+                raise ValueError(f"profile {relative!r} is missing or is not a regular file")
+            verify_file_sha256(path, digest, metadata_name="METAPROC_PROFILE_FILES")
+    except (OSError, RuntimeError, ValueError) as exc:
+        log.error("Workspace profile verification failed: %s", exc)
+        return 1
     variables: dict[str, str] = json.loads(vars_json)
 
     seed_runtime_vars(variables)
@@ -220,6 +247,8 @@ def main() -> int:
         spot=spot,
         variant=variant,
         artifact_namespace=artifact_namespace,
+        step_variants=step_variants,
+        profile_files=tuple(profile_files),
         adapter_config_json=adapter_config_json,
         skip_steps=skip_steps,
         from_step=from_step,

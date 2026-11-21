@@ -28,7 +28,10 @@ development series.
   Anthropic route, GPT-6.2 Astra, GPT-6.2 Sol, GPT-6.1 Sol and GPT-6 Luna on the Codex
   API-key route, and Gemini 4 Argon, Carbon and Hydrogen on the Gemini API-key route.
   A Codex ChatGPT sign-in tool-call probe also passed with GPT-6.1 Sol selected.
-  Gemini 4 Neon, GPT-6.1 Terra, GPT-6 Sol and Vertex routes remain unverified.
+  Direct Vertex generation probes returned the requested IDs for Gemini 3.6 Flash,
+  Gemini 4 Hydrogen and Gemini 4 Neon, and all three completed Gemini CLI file-read tool
+  probes on that route.
+  GPT-6.1 Terra and GPT-6 Sol remain unverified.
 - **Retired and superseded models are no longer accepted.** An explicit selection of
   `gemini-3.7-flash`, `gemini-3.5-flash`, `gemini-3.1-flash-lite`,
   `gemini-3-flash-preview`, `gemini-3-pro-preview`, `gemini-3.1-flash-lite-preview`,
@@ -37,8 +40,9 @@ development series.
   now fails validation.
   Gemini CLI 0.62.0 and later send `gemini-3.5-flash` and `gemini-3-flash` as
   `gemini-3.8-flash`, so those IDs could no longer be served as requested.
-  `gemini-3.6-flash` stays accepted for the Gemini API, where Google still serves it;
-  Vertex retires it 2026-11-19.
+  `gemini-3.6-flash` remains available through the Gemini API and in active Vertex
+  projects. Vertex blocked new and inactive projects on 2026-11-19 and schedules the
+  shutdown for 2027-01-28.
 - **Default models move, by recorded decision.** The codex-cli default changes from
   `gpt-5.5`, which Codex retired for ChatGPT sign-in on 2026-10-14, to `gpt-6.1-sol`.
   The claude-code-cli default stays the alias `opus` and the pi-cli default the alias
@@ -47,8 +51,8 @@ development series.
 - **Shipped execution profiles follow the catalog.** New profiles: `gemini-hydrogen`
   (the recommended Flash-class lane), `gemini-argon`, `gemini-carbon`,
   `pi-gemini-hydrogen`, `pi-glm52`, `codex-gpt61` and `pi-gpt61`. Removed:
-  `gemini-flash` (3.5 Flash), `gemini-flash-36` (3.6 Flash, retiring on Vertex),
-  `pi-gemini-flash` (3.5 Flash) and `pi-glm5`, whose model retired on 2026-10-21.
+  `gemini-flash` and `pi-gemini-flash` (3.5 Flash), plus `pi-glm5`, whose model retired
+  on 2026-10-21. `gemini-flash-36` keeps its exact model pin.
   `gemini-flash-38` is demoted to experimental.
   `codex-gpt55` and `pi-gpt55` remain for API-key runs.
 - **Codex permission modes pass approval values the CLI accepts.** `acceptEdits` and
@@ -101,18 +105,17 @@ development series.
   moving to `codex-cli-gpt-5.5` and re-running; the resume warns what a new run would
   derive.
 - **A moved default model is recorded on resume.** `run-config.yaml` records
-  `default_models`, the model each adapter’s agent steps with no `model:` resolved to.
-  A resume that resolves another one records `default_models.<adapter>` as a
+  `default_models`, the model each adapter’s root-process agent steps with no `model:`
+  resolved to. A resume that resolves another one records `default_models.<adapter>` as a
   launch-config change and warns that completed steps keep their earlier results (for
   codex-cli runs created before this release, most likely `gpt-5.5`) while steps it runs
   use the new default.
   Nothing is refused or re-run.
 - **Runs on removed built-in execution profiles still resume.** A run that recorded
-  `gemini-flash-36`, `gemini-flash`, `pi-gemini-flash` or `pi-glm5` is rebuilt from the
-  profile’s former definition: `metaproc status` shows its plan, and a resume warns and
-  reuses completed steps.
-  Where the profile’s model is retired (`gemini-3.5-flash`, `glm-5-maas`), the resume is
-  refused with the retirement, the successor and the exact override
+  `gemini-flash`, `pi-gemini-flash` or `pi-glm5` is rebuilt from the profile’s former
+  definition: `metaproc status` shows its plan, and a resume warns and reuses completed
+  steps. Where the profile’s model is retired (`gemini-3.5-flash`, `glm-5-maas`), the
+  resume is refused with the retirement, the successor and the exact override
   (`--variant <successor>`, or
   `--variant <name> --adapter-config model=<successor model>` to keep the namespace).
   A fresh launch naming a removed profile is refused with its successor.

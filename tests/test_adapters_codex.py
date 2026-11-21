@@ -532,11 +532,12 @@ class TestCodexCheckAuth:
         codex_dir = tmp_path / ".codex"
         codex_dir.mkdir()
         (codex_dir / "auth.json").write_text(
-            json.dumps({"tokens": {"auth_mode": "apikey", "access_token": "sk"}})
+            json.dumps({"auth_mode": "apikey", "OPENAI_API_KEY": "fixture-key"})
         )
 
         status = self.adapter.check_auth()
         assert status.auth_mode == "api-key"
+        assert status.credentials_found is True
 
     def test_no_creds_reports_none_with_setup_hint(self, monkeypatch, tmp_path):
         monkeypatch.setattr("metaproc.adapters.codex_cli.shutil.which", lambda _: "/usr/bin/codex")
@@ -1498,7 +1499,25 @@ class TestCodexCheckAuthPrecedence:
         (tmp_path / "auth.json").write_text(_VALID_OAUTH_PAYLOAD)
         status = self.adapter.check_auth()
         assert status.auth_mode == "interactive-login"
-        assert "OPENAI_API_KEY is set but Codex uses this stored login" in status.details
+        assert "OPENAI_API_KEY is set but Metaproc defers to auth.json" in status.details
+
+    @pytest.mark.parametrize(
+        "payload, missing",
+        [
+            ({"auth_mode": "chatgpt"}, "tokens.access_token"),
+            ({"tokens": {"access_token": " "}}, "tokens.access_token"),
+            ({"auth_mode": "apikey"}, "OPENAI_API_KEY"),
+            ({"auth_mode": "apikey", "OPENAI_API_KEY": " "}, "OPENAI_API_KEY"),
+        ],
+    )
+    def test_incomplete_stored_login_is_unverified(
+        self, tmp_path: Path, payload: dict[str, object], missing: str
+    ) -> None:
+        (tmp_path / "auth.json").write_text(json.dumps(payload))
+        status = self.adapter.check_auth()
+        assert status.auth_mode == "unknown"
+        assert status.credentials_found is False
+        assert missing in status.details
 
     def test_codex_api_key_wins_over_auth_json(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path

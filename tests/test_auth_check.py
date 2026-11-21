@@ -1558,6 +1558,30 @@ class TestRunLiveCheckPiRegistrationGate:
         mock_list.assert_not_called()
         mock_run.assert_not_called()
 
+    @pytest.mark.parametrize("oversize", [False, True])
+    def test_live_probe_rejects_unusable_catalog_without_starting_pi(
+        self, tmp_path: Path, oversize: bool
+    ) -> None:
+        models_path = tmp_path / "models.json"
+        models_path.unlink()
+        if oversize:
+            models_path.write_bytes(b" " * 65)
+            expected = "probe catalog read limit"
+        else:
+            models_path.mkdir()
+            expected = "not a regular file"
+
+        with (
+            patch("metaproc.commands.auth_check._MAX_PI_PROBE_CATALOG_BYTES", 64),
+            patch("metaproc.commands.auth_check.ADAPTER_REGISTRY", {"pi-cli": self._adapter()}),
+            patch("metaproc.commands.auth_check._pi_list_models") as mock_list,
+        ):
+            [(ok, message)] = _run_live_check("pi-cli", "zai-org/glm-5.2-maas", timeout_s=30)
+
+        assert not ok
+        assert expected in message
+        mock_list.assert_not_called()
+
     def test_explicit_provider_override_is_respected(self):
         """Operator-supplied --provider overrides naming-based inference."""
         captured: dict[str, dict[str, object]] = {}
