@@ -4,12 +4,9 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
 
 ## Current Release
 
-- **[v0.6.1](https://github.com/jlevy/metaproc/releases/tag/v0.6.1)**: published
-  2026-11-17 from tag `5ea6732`, the merge of pull request 125 and the tip of main at
-  the time. A patch carrying four Metabrowser plugin fixes and lock-only security bumps
-  for `pyasn1`, `opentelemetry-api`, and `certifi`; no public CLI surface, process-file
-  field, runtime artifact shape, plugin entry point, adapter default, or dependency
-  floor changed.
+The [latest published release](https://github.com/jlevy/metaproc/releases/latest) is
+listed on GitHub. See the [changelog](CHANGELOG.md) and
+[release notes](docs/project/releases/) for user-facing changes.
 
 ## Release Follow-Ups
 
@@ -22,8 +19,8 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
   published extra could not install.
   Blocked on a Metabrowser release whose declared range admits Softschema 0.9. Once one
   exists, restore the pin, the cutoff entry, and the manifest version together, verify
-  `metaproc[browser]` installs from a built wheel, and carry it in v0.7.0 rather than a
-  patch, since discovery refuses any other SDK and the pair moves as one.
+  `metaproc[browser]` installs from a built wheel, and ship it in a minor release.
+  Plugin discovery requires the host and the manifest to use the same SDK version.
 - **Decide the Gemini `respectGitIgnore` default** (`mp-x1qh`): v0.4.0 shipped
   `respectGitIgnore: False`, so a Gemini step can read ignored files including `.env`.
   Disclosure has landed — the amended [v0.4.0 notes](docs/project/releases/v0.4.0.md)
@@ -32,15 +29,6 @@ This index stays brief; tbd beads and linked plans hold implementation detail.
   and [v0.6.0](docs/project/releases/v0.6.0.md) notes repeat it as a standing caution —
   so what remains is the behavior question disclosure does not settle: whether reading
   ignored files should become opt-in per step or per profile.
-- **Verify the GCP image interpreter** (`mp-mo74`): Metaproc has required Python 3.14
-  since v0.5.0, and container bootstrap refuses the shipped wheel on an image whose
-  `/opt/venv` is older.
-  The image build lives outside this repository, so v0.5.0 and v0.6.0 both went out
-  unverified; until the image is confirmed or rebuilt on 3.14 and re-pinned, dispatch
-  with `--no-wheel` or from 0.4.x, as the release notes and
-  `metaproc help cloud-dispatch` say.
-  Two consecutive releases have now shipped around this, so confirming the image is
-  worth doing before a third.
 
 ## Active Development
 

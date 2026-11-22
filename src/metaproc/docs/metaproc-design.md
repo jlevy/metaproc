@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-11-21) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-11-22) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -2146,10 +2146,12 @@ packaged `pi-models.default.json`. The authoritative list is
   gemini-3-flash-preview, gemini-3.1-pro-preview, and the packaged gemini-4-carbon,
   gemini-4-hydrogen, and gemini-4-neon.
   Gemini 3.6 Flash remains available to active projects until 2027-01-28. Vertex
-  restricted access for new and inactive projects on 2026-11-19.
+  restricted access for new and inactive projects on 2026-11-19. Gemini 3.7 Flash also
+  retires on Vertex on 2027-01-28.
   [Gemini 3.6 Flash availability](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-6-flash).
 - **DeepSeek**: deepseek-flash, deepseek-v4-pro
-- **Moonshot** (packaged custom provider): kimi-k3.1-pro, kimi-k3, kimi-k2.6
+- **Moonshot** (packaged custom provider): kimi-k3.1-pro, kimi-k3.1-pro-highspeed,
+  kimi-k3, kimi-k2.6
 - **Vertex AI MaaS** (packaged custom provider): zai-org/glm-5.2-maas,
   deepseek-ai/deepseek-v4.1-flash-maas, deepseek-ai/deepseek-v4.1-flash-1017-maas
 
