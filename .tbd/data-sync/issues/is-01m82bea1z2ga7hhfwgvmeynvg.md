@@ -3,16 +3,20 @@ type: is
 id: is-01m82bea1z2ga7hhfwgvmeynvg
 title: Verify current model catalog and retained model routes
 kind: task
-status: in_progress
+status: closed
 priority: 1
-version: 4
+version: 5
 labels: []
 dependencies:
   - type: blocks
     target: is-01m82bedqvj9ka2vb2xcza34ar
 parent_id: is-01m82be4yjpzsaestvwb057vxx
 created_at: 2026-11-22T19:24:01.982Z
-updated_at: 2026-11-22T19:36:08.784Z
+updated_at: 2026-11-22T19:51:05.424Z
+closed_at: 2026-11-22T19:51:05.423Z
+close_reason: Release-candidate model and compatibility review complete. Validated exact retained and new Gemini plans across six lanes against prior live results, verified current provider catalogs and rates, added and verified exact Kimi Highspeed registration, checked both downstream locked environments and passed the focused acceptance suites. Final released version and review fixes remain tracked in their own tasks.
+resolution: null
+duplicate_of: null
 ---
 Check official model capabilities, exact routing, lifecycle and prices, refresh omissions, and exercise latest and retained profiles in a downstream comparison.
 
