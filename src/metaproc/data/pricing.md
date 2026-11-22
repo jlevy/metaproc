@@ -1,5 +1,5 @@
 ---
-last_updated: '2026-11-21'
+last_updated: '2026-11-22'
 
 providers:
   openai:
@@ -507,6 +507,16 @@ providers:
 
   moonshot:
     models:
+      kimi-k3.1-pro-highspeed:
+        actual_price:
+          input_per_1m: 4.00
+          output_per_1m: 20.00
+          cache_read_per_1m: 0.20
+          cache_write_per_1m: 4.00
+        cost_source: computed
+        source_url: 'https://platform.kimi.ai/docs/pricing/chat'
+        last_reviewed: '2026-11-22'
+        notes: "Highspeed has a separate Moonshot API ID. The default 5-minute cache write costs $4.00 per million tokens. One-hour writes cost $8.00."
       kimi-k3.1-pro:
         actual_price:
           input_per_1m: 2.00
@@ -515,8 +525,8 @@ providers:
           cache_write_per_1m: 2.00
         cost_source: computed
         source_url: 'https://platform.kimi.ai/docs/pricing/chat'
-        last_reviewed: '2026-11-18'
-        notes: "Reviewed 2026-11-18 against Kimi's model inference pricing page (platform.moonshot.ai now redirects to platform.kimi.ai). Current K3-series flagship; 1,048,576-token context; flat pricing with no context-length tier. cache_write_per_1m is the 5-minute TTL write rate ($4.00 for 1-hour writes); cache hits bill only the cached-input rate. Packaged for Pi's moonshot provider."
+        last_reviewed: '2026-11-22'
+        notes: "K3-series flagship with a 1,048,576-token context window and flat pricing. The default 5-minute cache write costs $2.00 per million tokens. One-hour writes cost $4.00."
       kimi-k3:
         actual_price:
           input_per_1m: 3.00
@@ -525,8 +535,8 @@ providers:
           cache_write_per_1m: 3.00
         cost_source: computed
         source_url: 'https://platform.kimi.ai/docs/pricing/chat'
-        last_reviewed: '2026-11-18'
-        notes: "Reviewed 2026-11-18 against Kimi's model inference pricing page. K3-series model; 1,048,576-token context; flat pricing with no context-length tier. cache_write_per_1m is the 5-minute TTL write rate ($6.00 for 1-hour writes). Packaged for Pi's moonshot provider."
+        last_reviewed: '2026-11-22'
+        notes: "K3-series model with a 1,048,576-token context window and flat pricing. The default 5-minute cache write costs $3.00 per million tokens. One-hour writes cost $6.00."
       kimi-k2.6:
         actual_price:
           input_per_1m: 0.95
@@ -682,6 +692,7 @@ alias (same as `gpt-5.6-sol`), and the dated `claude-haiku-4-5-20251001` ID (sam
 | claude-opus-5-5 | Anthropic | $4.00 | 14.29x | $20.00 | $0.20 | $5.00 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
 | gemini-4-carbon | Google | $4.00 | 14.29x | $20.00 | $0.20 | -- | [google](https://aistudio.google.com/docs/pricing) |
 | gemini-4-argon | Google | $4.00 | 14.29x | $20.00 | $0.20 | -- | [google](https://aistudio.google.com/docs/pricing) |
+| kimi-k3.1-pro-highspeed | Moonshot | $4.00 | 14.29x | $20.00 | $0.20 | $4.00 | [moonshot](https://platform.kimi.ai/docs/pricing/chat) |
 | gpt-5.4 | OpenAI | $2.50 | 8.93x | $15.00 | $0.25 | -- | [openai](https://developers.openai.com/api/docs/pricing) |
 | claude-sonnet-4-6 | Anthropic | $3.00 | 10.71x | $15.00 | $0.30 | $3.75 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
 | claude-sonnet-4-5 | Anthropic | $3.00 | 10.71x | $15.00 | $0.30 | $3.75 | [anthropic](https://platform.claude.com/docs/en/about-claude/pricing) |
@@ -885,16 +896,17 @@ point while that model served.
 
 ### Moonshot (Kimi)
 
-**Verified 2026-11-18** against Kimi’s
+**K3 rates verified 2026-11-22** against Kimi’s
 [model inference pricing page](https://platform.kimi.ai/docs/pricing/chat).
-`platform.moonshot.ai` now redirects to `platform.kimi.ai`.
 
-- `kimi-k3.1-pro` ($2.00 / $10.00 / $0.20) and `kimi-k3` ($3.00 / $15.00 / $0.30) are
-  the current K3-series models, with flat pricing across the 1,048,576-token context.
-  `cache_write_per_1m` stores the 5-minute TTL write rate; Kimi also publishes a 1-hour
-  rate, noted per row.
-  Both models ship under Pi’s `moonshot` provider in
-  [`pi-models.default.json`](pi-models.default.json).
+- Pi’s `moonshot` provider includes `kimi-k3.1-pro`, `kimi-k3.1-pro-highspeed`, and
+  `kimi-k3`. All three have flat pricing across the 1,048,576-token context window.
+  Highspeed has its own API ID and charges twice the standard Pro input and output
+  rates. Both charge $0.20 per million cached input tokens.
+- For all three K3 models, a default 5-minute cache write costs the input rate, and a
+  1-hour write costs twice the input rate.
+  The pricing table and [Pi configuration](pi-models.default.json) use the 5-minute
+  rate.
 - `kimi-k2.6` is unchanged at $0.95 / $4.00 / $0.16. Kimi closed K2-series models to
   newly registered users on 2026-10-31 and plans to retire them by the end of December
   2026\.
@@ -1146,7 +1158,7 @@ They now vary within provider families, so verify each rate against the provider
 | Anthropic | 0.025x for Fable 5.1 and 5.2; 0.05x for Opus 5.5 and Sonnet 5.5; 0.1x otherwise. 5-minute cache write = input × 1.25; 1-hour cache write = input × 2 |
 | Google | 0.05x for Gemini 4 (implicit caching only); 0.1x for Gemini 3.x |
 | DeepSeek | 0.02x for `deepseek-flash`; about 0.033x for `deepseek-v4-pro` |
-| Moonshot | 0.1x for K3 series; about 0.17x for `kimi-k2.6` |
+| Moonshot | 0.05x for K3.1 Pro Highspeed, 0.1x for K3.1 Pro and K3, about 0.17x for `kimi-k2.6` |
 | xAI | input ÷ 4 (75% discount) for most models |
 
 <!-- This document follows common-doc-guidelines.md.

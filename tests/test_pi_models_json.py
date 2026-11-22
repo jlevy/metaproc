@@ -26,6 +26,7 @@ from metaproc.cloud.gcp.orchestrator_dispatch import (
 from metaproc.cloud.gcp.worker_dispatch import WorkerDispatchConfig, _submit_workers
 from metaproc.config.model_catalog import MODEL_CATALOG
 from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
+from metaproc.logutil.usage import load_pricing
 from metaproc.models.plan import ResolvedAdapter, ResolvedStep
 
 
@@ -392,12 +393,40 @@ def test_packaged_default_moonshot_models(tmp_path: Path) -> None:
     moonshot = out["providers"]["moonshot"]
     assert moonshot["baseUrl"] == "https://api.moonshot.ai/v1"
     models = {m["id"]: m for m in moonshot["models"]}
-    assert set(models) == {"kimi-k3.1-pro", "kimi-k3", "kimi-k2.6"}
+    assert set(models) == {"kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3", "kimi-k2.6"}
     for model in models.values():
         # Copied from Pi's built-in moonshotai entries, including the wire format.
         assert model["compat"]["thinkingFormat"] in {"openai", "deepseek"}
         assert model["cost"]["input"] > 0
     assert "deepseek" not in out["providers"], "DeepSeek models are Pi built-ins"
+
+
+def test_moonshot_highspeed_uses_k31_pro_capabilities() -> None:
+    models = {model["id"]: model for model in _packaged_doc()["providers"]["moonshot"]["models"]}
+    pro = models["kimi-k3.1-pro"]
+    highspeed = models["kimi-k3.1-pro-highspeed"]
+    assert (highspeed["contextWindow"], highspeed["maxTokens"]) == (1048576, 1048576)
+    for field in ("reasoning", "input", "thinkingLevelMap", "compat"):
+        assert highspeed[field] == pro[field]
+
+
+@pytest.mark.parametrize(
+    ("model_id", "expected"),
+    [
+        ("kimi-k3.1-pro", (2, 10, 0.2, 2)),
+        ("kimi-k3.1-pro-highspeed", (4, 20, 0.2, 4)),
+        ("kimi-k3", (3, 15, 0.3, 3)),
+    ],
+)
+def test_moonshot_k3_rates_include_five_minute_cache_writes(
+    model_id: str, expected: tuple[float, float, float, float]
+) -> None:
+    models = _packaged_doc()["providers"]["moonshot"]["models"]
+    cost = next(model["cost"] for model in models if model["id"] == model_id)
+    assert tuple(cost[key] for key in ("input", "output", "cacheRead", "cacheWrite")) == expected
+    rates = load_pricing()[model_id]["actual_price"]
+    keys = ("input_per_1m", "output_per_1m", "cache_read_per_1m", "cache_write_per_1m")
+    assert tuple(rates[key] for key in keys) == expected
 
 
 def _packaged_doc() -> dict[str, Any]:

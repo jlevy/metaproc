@@ -39,14 +39,17 @@ retroactively.
 5. Write release notes following `tbd guidelines release-notes-guidelines`. Describe the
    aggregate user-visible delta, compatibility notes, and shipped Agent Skill or
    process-content changes.
-   Past notes live in [releases/](project/releases/); the most recent are
-   [v0.6.1.md](project/releases/v0.6.1.md).
-   End with a concrete compare link.
+   Past notes live in [releases/](project/releases/). End with a concrete compare link.
 
-6. Create a GitHub release with a `vX.Y.Z` tag:
+6. Create and push a `vX.Y.Z` tag at the exact commit verified in step 3. If the tag
+   already exists, check that its remote target matches that commit before resuming.
+   Stop if the tag points to a different commit.
 
    ```shell
-   gh release create vX.Y.Z --target main --title vX.Y.Z --notes-file <notes>
+   git tag vX.Y.Z <verified-main-sha>
+   git push origin refs/tags/vX.Y.Z
+   git ls-remote --tags origin refs/tags/vX.Y.Z 'refs/tags/vX.Y.Z^{}'
+   gh release create vX.Y.Z --verify-tag --title vX.Y.Z --notes-file <notes>
    ```
 
    The workflow checks out that exact tag, rejects non-semantic tags, and verifies that

@@ -7,6 +7,8 @@ development series.
 
 ## [Unreleased][unreleased]
 
+## [0.7.0][] - 2026-11-22
+
 ### Changed
 
 - **Agent CLI pins move to current releases.** The adapters now pin Claude Code 2.1.325
@@ -24,9 +26,10 @@ development series.
   `gpt-6.1-terra`, `gpt-6-sol` and `gpt-6-luna`; Google `gemini-4-argon`,
   `gemini-4-carbon`, `gemini-4-hydrogen` and `gemini-4-neon`; Vertex MaaS `glm-5.2-maas`
   and `deepseek-v4.1-flash-maas`; DeepSeek `deepseek-flash`; Moonshot `kimi-k3` and
-  `kimi-k3.1-pro`. Live tool-call probes passed for all four new Claude IDs on the
-  Anthropic route, GPT-6.2 Astra, GPT-6.2 Sol, GPT-6.1 Sol and GPT-6 Luna on the Codex
-  API-key route, and Gemini 4 Argon, Carbon and Hydrogen on the Gemini API-key route.
+  `kimi-k3.1-pro`, plus `kimi-k3.1-pro-highspeed` on the direct Moonshot route.
+  Live tool-call probes passed for all four new Claude IDs on the Anthropic route,
+  GPT-6.2 Astra, GPT-6.2 Sol, GPT-6.1 Sol and GPT-6 Luna on the Codex API-key route, and
+  Gemini 4 Argon, Carbon and Hydrogen on the Gemini API-key route.
   A Codex ChatGPT sign-in tool-call probe also passed with GPT-6.1 Sol selected.
   Direct Vertex generation probes returned the requested IDs for Gemini 3.6 Flash,
   Gemini 4 Hydrogen and Gemini 4 Neon, and all three completed Gemini CLI file-read tool
@@ -44,7 +47,7 @@ development series.
   `gemini-3.1-flash-lite`, and `gemini-3-flash-preview` through `google-vertex`.
   `gemini-3.6-flash` remains available through the Gemini API and in active Vertex
   projects. Vertex blocked new and inactive projects on 2026-11-19 and schedules the
-  shutdown for 2027-01-28.
+  shutdown for 2027-01-28. Gemini 3.7 Flash also retires on Vertex on 2027-01-28.
 - **Default models move, by recorded decision.** The codex-cli default changes from
   `gpt-5.5`, which Codex retired for ChatGPT sign-in on 2026-10-14, to `gpt-6.1-sol`.
   The claude-code-cli default stays the alias `opus` and the pi-cli default the alias
@@ -94,8 +97,9 @@ development series.
   now fails as not verifiable instead of passing on its own `-m`.
 - **Pricing is refreshed against primary provider pages.** Rows are added for every
   newly accepted model, `gemini-3.6-flash` moves to its introductory rate, DeepSeek
-  direct rows move to peak rates, and rows for retired models stay as labelled
-  historical rows so earlier runs still price.
+  direct rows move to peak rates, and the direct Moonshot Pi rows apply Moonshot’s
+  five-minute cache-write rates.
+  Rows for retired models stay as labelled historical rows so earlier runs still price.
 
 ### Fixed
 
@@ -1598,7 +1602,8 @@ These documentation changes altered no runtime behavior, artifact shape, or CLI 
   implicitly. Schemas consumed through Metaproc must be self-contained: use local `$defs`
   references or a registered Pydantic model instead of network-resolved references.
 
-[unreleased]: https://github.com/jlevy/metaproc/compare/v0.6.1...HEAD
+[unreleased]: https://github.com/jlevy/metaproc/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/jlevy/metaproc/releases/tag/v0.7.0
 [0.6.1]: https://github.com/jlevy/metaproc/releases/tag/v0.6.1
 [0.6.0]: https://github.com/jlevy/metaproc/releases/tag/v0.6.0
 [0.5.0]: https://github.com/jlevy/metaproc/releases/tag/v0.5.0
