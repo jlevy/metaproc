@@ -93,6 +93,12 @@ ACTIVE_LOG_PRESSURE_BYTES = 1 * 1024**3
 _SHUTDOWN_CLEANUP_TIMEOUT_S = 10.0
 
 
+def _request_submission_cancellation(task: asyncio.Task[object]) -> None:
+    """Cancel once so another owner joining shutdown cannot interrupt backend cleanup."""
+    if not task.done() and not task.cancelling():
+        task.cancel()
+
+
 @dataclass(frozen=True)
 class SystemHealthSample:
     """Runpool resource heartbeat used for telemetry and launch throttling."""
@@ -1275,8 +1281,8 @@ class RunPool:
         def _cancel_submission_when_future_is_cancelled(
             completed_future: asyncio.Future[ProcessResult],
         ) -> None:
-            if completed_future.cancelled() and not task.done():
-                task.cancel()
+            if completed_future.cancelled():
+                _request_submission_cancellation(task)
 
         task.add_done_callback(_forget_submission)
         future.add_done_callback(_cancel_submission_when_future_is_cancelled)
@@ -1294,7 +1300,7 @@ class RunPool:
         task = self._submission_tasks_by_future.get(future)
         if task is None:
             return
-        task.cancel()
+        _request_submission_cancellation(task)
         while not task.done():
             try:
                 await asyncio.shield(task)
@@ -1372,7 +1378,11 @@ class RunPool:
             # the same kill-and-record path as any other cancelled submission.
             remaining_tasks = tuple(self._submission_tasks | self._code_tasks)
             for task in remaining_tasks:
-                task.cancel()
+                if task in self._submission_tasks:
+                    _request_submission_cancellation(task)
+                else:
+                    # Code slots borrow caller tasks that can carry earlier cancellation requests.
+                    task.cancel()
             if remaining_tasks:
                 done, pending = await asyncio.wait(
                     remaining_tasks,
@@ -1386,6 +1396,7 @@ class RunPool:
                         "RunPool shutdown cleanup timed out with %d submission(s) still owned",
                         len(pending),
                     )
+                    # Only the hard deadline may interrupt an in-progress cleanup.
                     for task in pending:
                         task.cancel()
         finally:
@@ -2022,7 +2033,7 @@ class RunPool:
 
         self._shutdown_event.set()
         for task in tuple(self._submission_tasks):
-            task.cancel()
+            _request_submission_cancellation(task)
         return True
 
     def _read_overrides(self) -> None:

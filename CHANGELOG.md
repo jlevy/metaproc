@@ -103,6 +103,10 @@ development series.
 
 ### Fixed
 
+- **RunPool keeps ownership of cancelled subprocesses through cleanup.** When a
+  cancelled submission and pool shutdown overlap, the pool gives the first cancellation
+  time to clean up a child that is starting or already running.
+  The hard shutdown deadline still applies.
 - **Resume keeps the artifact namespace across a default-model move.** A run now records
   the adapter defaults its derived artifact namespaces compare against
   (`namespace_default_models` in `run-config.yaml`), and a resume derives against them.

@@ -22,6 +22,7 @@ from metaproc.runpool.event_models import HostAdmissionDeniedEvent
 from metaproc.runpool.event_reader import read_runpool_events
 from metaproc.runpool.events import EventLogger
 from metaproc.runpool.host_admission import HostAdmissionGate
+from metaproc.runpool.mock_backend import MockBackend
 from metaproc.runpool.pool import (
     ProcessConfig,
     RunPool,
@@ -355,6 +356,57 @@ class TestRunPool:
         assert kill_calls == 1
         assert result_cancelled
         assert pending_count == 0
+
+    @pytest.mark.parametrize("cancel_during_launch", [True, False], ids=["late", "active"])
+    def test_shutdown_drains_an_already_cancelled_submission(
+        self, tmp_path: Path, cancel_during_launch: bool
+    ) -> None:
+        async def exercise() -> None:
+            ready_to_cancel = asyncio.Event()
+            release_launch = asyncio.Event()
+            kill_started = asyncio.Event()
+            release_kill = asyncio.Event()
+
+            class GatedBackend(MockBackend):
+                async def launch(self, prepared: PreparedLaunch, label: str = "") -> LaunchHandle:
+                    if cancel_during_launch:
+                        ready_to_cancel.set()
+                        await release_launch.wait()
+                    return await super().launch(prepared, label)
+
+                async def poll(self, handle: LaunchHandle) -> int | None:
+                    ready_to_cancel.set()
+                    return None
+
+                async def kill(self, handle: LaunchHandle, sig: int | None = None) -> None:
+                    kill_started.set()
+                    await release_kill.wait()
+                    await super().kill(handle, sig)
+
+            backend = GatedBackend()
+            pool = RunPool(
+                RunPoolConfig(
+                    state_dir=tmp_path / "state",
+                    logs_dir=tmp_path / "logs",
+                    host_admission_enabled=False,
+                ),
+                backend=backend,
+            )
+            result = pool.submit(
+                ProcessConfig(launch=PreparedLaunch(command=("unused",)), label="job")
+            )
+            await ready_to_cancel.wait()
+            result.cancel()
+            release_launch.set()
+            await kill_started.wait()
+            shutdown = asyncio.create_task(pool.shutdown(timeout_s=0))
+            await asyncio.sleep(0)  # Let shutdown request cancellation while kill is suspended.
+            release_kill.set()
+            await shutdown
+            assert backend.calls.count(("kill", "job")) == 1
+            assert pool.snapshot.active_count == pool.snapshot.pending_count == 0
+
+        asyncio.run(asyncio.wait_for(exercise(), timeout=30))
 
     def test_kill_sentinel_cancels_owned_submissions(self, tmp_path: Path) -> None:
         class BlockingBackend:
