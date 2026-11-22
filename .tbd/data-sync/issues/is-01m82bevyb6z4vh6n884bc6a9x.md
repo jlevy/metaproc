@@ -3,16 +3,20 @@ type: is
 id: is-01m82bevyb6z4vh6n884bc6a9x
 title: Run candidate verification and certify the release commit
 kind: task
-status: in_progress
+status: closed
 priority: 1
-version: 4
+version: 5
 labels: []
 dependencies:
   - type: blocks
     target: is-01m82beyvkx5hang2z1kt6zr4j
 parent_id: is-01m82be4yjpzsaestvwb057vxx
 created_at: 2026-11-22T19:24:20.297Z
-updated_at: 2026-11-22T20:39:21.824Z
+updated_at: 2026-11-22T20:45:28.792Z
+closed_at: 2026-11-22T20:45:28.792Z
+close_reason: "Merged in PR #129 after senior, security and correctness review plus complete local verification. Exact-main CI run 45067836697 passed all four jobs on f6697c9. The timing-sensitive local tests all passed in their own lane."
+resolution: null
+duplicate_of: null
 ---
 Run make verify, inspect packaged artifacts, watch PR/main CI, and confirm the immutable source commit.
 
