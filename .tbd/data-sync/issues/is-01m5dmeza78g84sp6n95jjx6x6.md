@@ -3,16 +3,20 @@ type: is
 id: is-01m5dmeza78g84sp6n95jjx6x6
 title: "PR #107 F1: confirm the GCP cloud image /opt/venv runs Python 3.14 before releasing the 3.14 floor"
 kind: bug
-status: open
+status: closed
 priority: 1
-version: 2
+version: 3
 labels: []
 dependencies:
   - type: blocks
     target: is-01m5dmf0426xcenc926ajgrrxr
 parent_id: is-01m5dmedq0w40wpkbx1qt44zr7
 created_at: 2026-10-20T21:46:14.213Z
-updated_at: 2026-10-20T21:46:28.929Z
+updated_at: 2026-11-22T19:28:30.198Z
+closed_at: 2026-11-22T19:28:30.197Z
+close_reason: Verified the downstream worker image’s immutable digest against a successful retained build and image probe. The build explicitly reports Python 3.14.9 in /opt/venv, and a provider-free Batch smoke subsequently completed. New harness image rollout is a separate operation.
+resolution: null
+duplicate_of: null
 ---
 PR #107 raises \`requires-python\` to \`>=3.14,<4.0\` so \`compression.zstd\` is available from the standard library.
 
