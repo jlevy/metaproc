@@ -5,15 +5,16 @@ title: "Address PR #107 review: artifact compression codecs"
 kind: task
 status: open
 priority: 2
-version: 6
+version: 7
 labels: []
 dependencies: []
 child_order_hints:
   - is-01m5dmeza78g84sp6n95jjx6x6
   - is-01m5dmeznh3wdg4h9rt1sknetk
   - is-01m5dmf0426xcenc926ajgrrxr
+  - is-01m5e4zckffwkte875tdxe1cwy
 created_at: 2026-10-20T21:45:56.191Z
-updated_at: 2026-10-20T21:46:28.261Z
+updated_at: 2026-10-21T02:34:49.314Z
 ---
 Review of PR #107, https://github.com/jlevy/metaproc/pull/107.
 
