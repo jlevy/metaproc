@@ -119,6 +119,7 @@ from metaproc.engine.collected_inputs import (
     record_collected_inputs,
 )
 from metaproc.engine.command_diagnostics import (
+    ExecutionFailure,
     command_failure_message,
     handler_failure_message,
     summarize_failure_causes,
@@ -186,6 +187,7 @@ from metaproc.engine.retry import (
     compute_backoff,
     extract_log_error,
     is_rate_quota,
+    is_transient_failure,
     max_retries_for,
     retry_backoff_s,
 )
@@ -232,6 +234,7 @@ from metaproc.io.state_io import (
     read_manual_ack_at,
     read_run_plan,
     read_status_at,
+    read_task_attempt_at,
     reconcile_stale_running,
     validate_task_status_identity_at,
     write_attempt_at,
@@ -2760,6 +2763,19 @@ async def _execute_code_step(
     # the same second must not overwrite the file their durable errors point at.
     log_file = logs_dir / f"process_{running_record.attempt_id}.log"
     env = dict(os.environ)
+    # A declared for_each.retry budget owns re-attempts; without one, every failure is
+    # this task's last attempt, as it always was.
+    retry_is_owned = target.fan_out is not None and target.fan_out.retry is not None
+
+    def _operational_disposition(failure: ExecutionFailure) -> AttemptDisposition:
+        """Record a transient failure as retryable when a declared budget will retry it.
+
+        ``_contract_retry_decision`` reads this disposition back, so the decision is
+        made once, here, from the classification of the full diagnostic.
+        """
+        if retry_is_owned and is_transient_failure(failure.failure_class, failure.verdict):
+            return AttemptDisposition.retryable
+        return AttemptDisposition.permanent
 
     try:
         handler_fn = resolve_code_handler(handler_ref, process_dir) if handler_ref else None
@@ -2838,6 +2854,7 @@ async def _execute_code_step(
             error=command_failure.error,
             running_record=running_record,
             failure_class=str(command_failure.failure_class),
+            attempt_disposition=_operational_disposition(command_failure),
         )
         return False
     except (asyncio.CancelledError, KeyboardInterrupt) as exc:
@@ -2862,6 +2879,7 @@ async def _execute_code_step(
             error=handler_failure.error,
             running_record=running_record,
             failure_class=str(handler_failure.failure_class),
+            attempt_disposition=_operational_disposition(handler_failure),
         )
         return False
     except BaseException as exc:
@@ -2883,7 +2901,6 @@ async def _execute_code_step(
         )
         if output_failures:
             output_errors = [f.summary() for f in output_failures]
-            retry_is_owned = target.fan_out is not None and target.fan_out.retry is not None
             disposition = (
                 AttemptDisposition.retryable
                 if classify_output_failures(output_failures, effective_outputs)
@@ -2924,15 +2941,19 @@ def _contract_retry_decision(
     step_def_map: dict[str, ProcessStep],
     run_dir: Path,
 ) -> Callable[[str, dict[str, str]], bool]:
-    """Decide retryability from what refused the output, per the output's declaration.
+    """Decide retryability from what refused the output, or from the recorded attempt.
 
     Nothing here interprets a failure. The producing output declares what its contract
     failure costs through ``on_invalid``, and ``classify_output_failures`` resolves that
     by reading the refusing invariant rather than the sentence describing it. Keeping the
     decision on the contract is what stops every consumer from re-deciding it.
 
-    A failure with no structured record is not a contract failure, so it is left alone:
-    the operational path owns those.
+    A failure with no structured record is operational, and a code step has no adapter
+    retry beneath it. ``_execute_code_step`` classified that failure from the full
+    diagnostic and recorded the attempt ``retryable`` when it is positively transient (a
+    rate limit, a per-minute quota refusal, a 5xx, a timeout, or a connection reset); this
+    reads that disposition back rather than classifying the clipped message again. A
+    hard quota, an unclassified handler error, or a bare nonzero exit is permanent.
     """
 
     def _should_retry(step_id: str, item_vars: dict[str, str]) -> bool:
@@ -2941,10 +2962,20 @@ def _contract_retry_decision(
             status = read_status_at(state_dir)
         except ValueError, TypeError, ValidationError:
             return False
-        failures = getattr(status, "output_failures", None) or []
-        if not failures:
+        if status is None:
             return False
-        return classify_output_failures(failures, step_map[step_id].outputs) == RetryVerdict.RETRY
+        if status.output_failures:
+            return (
+                classify_output_failures(status.output_failures, step_map[step_id].outputs)
+                == RetryVerdict.RETRY
+            )
+        if status.attempt_id is None:
+            return False
+        try:
+            attempt = read_task_attempt_at(state_dir, status.attempt_id)
+        except ValueError, TypeError, ValidationError:
+            return False
+        return attempt is not None and attempt.disposition is AttemptDisposition.retryable
 
     return _should_retry
 

@@ -13,7 +13,13 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from metaproc.config.env_vars import MetaprocEnv
-from metaproc.engine.retry import FailureClass, RetryVerdict, classify_error, classify_failure
+from metaproc.engine.retry import (
+    FailureClass,
+    RetryVerdict,
+    classify_error,
+    classify_failure,
+    has_permanent_signal,
+)
 
 _SECRET_ENV_NAME = re.compile(
     r"(?:^|_)(?:TOKEN|KEY|SECRET|PASSWORD|PASSWD|CREDENTIALS?|CREDS|AUTH|BEARER)"
@@ -197,6 +203,80 @@ def command_failure_message(
     )
 
 
+_MAX_EXCEPTION_CHAIN = 8
+
+# Exception class names, matched anywhere in an exception's MRO, that name a transport
+# failure in the HTTP clients model SDKs are built on (httpx, requests, urllib3,
+# aiohttp, and the OpenAI, Anthropic, and Google SDKs). Matching names rather than
+# importing the classes keeps every one of these libraries optional.
+_TRANSPORT_TIMEOUT_NAMES: frozenset[str] = frozenset(
+    {"TimeoutException", "Timeout", "ReadTimeoutError", "ServerTimeoutError", "DeadlineExceeded"}
+)
+_TRANSPORT_FAILURE_NAMES: frozenset[str] = frozenset(
+    {
+        "NetworkError",
+        "RemoteProtocolError",
+        "ConnectionError",
+        "ProtocolError",
+        "NewConnectionError",
+        "ClientConnectionError",
+        "ServerDisconnectedError",
+        "APIConnectionError",
+    }
+)
+
+
+def _exception_chain(exception: BaseException) -> list[BaseException]:
+    """The exception and what it was raised from or during, outermost first."""
+    chain: list[BaseException] = []
+    current: BaseException | None = exception
+    while current is not None and current not in chain and len(chain) < _MAX_EXCEPTION_CHAIN:
+        chain.append(current)
+        current = current.__cause__ or (
+            None if current.__suppress_context__ else current.__context__
+        )
+    return chain
+
+
+def _http_status(exception: BaseException) -> int | None:
+    """The HTTP status an SDK exception carries, read from its common attributes."""
+    candidates: list[object] = []
+    for owner, attribute in (
+        (exception, "status_code"),
+        (exception, "code"),
+        (exception, "status"),
+        (getattr(exception, "response", None), "status_code"),
+    ):
+        try:
+            candidates.append(getattr(owner, attribute, None))
+        except Exception:  # noqa: BLE001 - an SDK property that fails is no evidence
+            continue
+    for value in candidates:
+        if isinstance(value, int) and not isinstance(value, bool) and 100 <= value <= 599:
+            return value
+    return None
+
+
+def _transport_failure_class(chain: Iterable[BaseException]) -> FailureClass | None:
+    """Classify a transient transport failure from exception types and HTTP status."""
+    for exception in chain:
+        status = _http_status(exception)
+        if status == 429:
+            return FailureClass.RATE_LIMITED
+        if status in (408, 504):
+            return FailureClass.TIMEOUT
+        if status is not None and status >= 500:
+            return FailureClass.SERVER_ERROR
+        if isinstance(exception, TimeoutError):
+            return FailureClass.TIMEOUT
+        names = {cls.__name__ for cls in type(exception).__mro__}
+        if names & _TRANSPORT_TIMEOUT_NAMES:
+            return FailureClass.TIMEOUT
+        if isinstance(exception, ConnectionError) or names & _TRANSPORT_FAILURE_NAMES:
+            return FailureClass.SERVER_ERROR
+    return None
+
+
 def handler_failure_message(
     exception: Exception,
     *,
@@ -207,12 +287,37 @@ def handler_failure_message(
 
     The caller retains the complete traceback at ``log_path``. Classify the full
     redacted exception before clipping its message or attaching that evidence path.
+
+    The evidence is the whole cause chain, so a handler that wraps an SDK error
+    (``raise RuntimeError("transcribe failed") from exc``) is classified by what it
+    wraps. When the text names nothing, the exceptions' structure decides: an HTTP
+    status of 429, 408, or 5xx, a ``TimeoutError`` or ``ConnectionError``, or a known
+    transport error type classifies as transient. Structure never overrides a
+    permanent signal in the text, such as a quota or billing refusal.
     """
     exception_type = type(exception).__name__
     detail = redact_diagnostic(str(exception), env=env)
     summary = clip_diagnostic(detail)
     message = f"{exception_type}: {summary}" if summary else exception_type
-    return _classified(f"{message} (traceback: {log_path})", evidence=f"{exception_type}: {detail}")
+    chain = _exception_chain(exception)
+    evidence = "\n".join(
+        [
+            f"{exception_type}: {detail}",
+            *(
+                f"caused by {type(cause).__name__}: {redact_diagnostic(str(cause), env=env)}"
+                for cause in chain[1:]
+            ),
+        ]
+    )
+    failure = _classified(f"{message} (traceback: {log_path})", evidence=evidence)
+    if failure.failure_class is not FailureClass.UNKNOWN or has_permanent_signal(evidence):
+        return failure
+    transport_class = _transport_failure_class(chain)
+    if transport_class is None:
+        return failure
+    return ExecutionFailure(
+        error=failure.error, failure_class=transport_class, verdict=RetryVerdict.RETRY
+    )
 
 
 def failure_cause(error: str) -> str:
