@@ -14,6 +14,7 @@ import time
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from types import FrameType
 from typing import IO, Any, Literal, TextIO
@@ -21,7 +22,15 @@ from typing import IO, Any, Literal, TextIO
 import psutil
 
 from metaproc.logutil.resource_events import ResourceEventLogger
-from metaproc.models.resources import HierarchyRef, SourceRef
+from metaproc.logutil.usage import UsageStats, estimate_list_cost
+from metaproc.models.resources import (
+    HierarchyRef,
+    Metrics,
+    ProviderRef,
+    SourceRef,
+    TaxonomyPaths,
+    UsageEvent,
+)
 from metaproc.osutils.psutil_sampler import PsutilSampler
 from metaproc.paths import LOGS_DIR, RESOURCE_EVENTS_FILE, run_config_file
 
@@ -65,6 +74,93 @@ def _sampling_target(run_dir: Path, run_id: str, step_node_id: str) -> _Sampling
         run_id=root_run_id,
         step_node_id="::".join((*subgraph_parts, step_node_id)),
     )
+
+
+CODE_HANDLER_SOURCE_KIND = "code_handler"
+"""``SourceRef.kind`` of a usage event a code handler recorded through its context."""
+
+# Handler threads of one fan-out share the run ledger; one writer at a time keeps each
+# appended line whole.
+_CODE_USAGE_LOCK = threading.Lock()
+
+
+def record_code_usage(
+    *,
+    run_dir: Path,
+    run_id: str,
+    step_node_id: str,
+    item_key: str | None = None,
+    provider: str,
+    product: str,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int = 0,
+    list_cost_usd: float | None = None,
+    actual_cost_usd: float | None = None,
+    api_requests: int = 1,
+    retries: int = 0,
+    cache_hit: bool | None = None,
+    request_id: str | None = None,
+) -> UsageEvent:
+    """Append one ``UsageEvent`` for a model or API call a code handler made itself.
+
+    Agent steps get their usage from adapter logs. A code handler that calls a model
+    API directly writes no log metaproc parses, so without this its tokens and cost are
+    missing from ``resource-usage-summary.md``. The event goes to the run's resource
+    ledger under the same hierarchy as the step's resource samples, so finalization
+    rolls it up per item and step.
+
+    ``input_tokens`` counts uncached input and ``cache_read_tokens`` the cached input,
+    as the pricing table bills them; a provider that reports cached tokens inside its
+    prompt count (Gemini's ``prompt_token_count``) needs the cached share subtracted.
+    ``list_cost_usd`` defaults to the bundled pricing-table estimate for ``model`` and
+    stays unset for a model the table does not price. The event carries no wall time:
+    the step's own samples already measure it, and adding a call's latency would count
+    the same seconds twice.
+    """
+    if list_cost_usd is None:
+        list_cost_usd = estimate_list_cost(
+            UsageStats(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                cache_read_tokens=cache_read_tokens,
+                has_token_usage=True,
+                model=model,
+            )
+        )
+    target = _sampling_target(run_dir, run_id, step_node_id)
+    event_path = target.run_dir / LOGS_DIR / RESOURCE_EVENTS_FILE
+    event = UsageEvent(
+        ts=datetime.now(UTC),
+        hierarchy=HierarchyRef(
+            run_id=target.run_id, step_node_id=target.step_node_id, item_key=item_key
+        ),
+        provider=ProviderRef(
+            provider=provider, product=product, model=model, request_id=request_id
+        ),
+        taxonomy=TaxonomyPaths(
+            provider_path=["provider", provider], model_path=["model", provider, model]
+        ),
+        source=SourceRef(
+            kind=CODE_HANDLER_SOURCE_KIND,
+            path=event_path.relative_to(target.run_dir).as_posix(),
+        ),
+        metrics=Metrics(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            list_cost_usd=list_cost_usd,
+            actual_cost_usd=actual_cost_usd,
+            api_requests=api_requests,
+            retries=retries,
+            cache_hits=None if cache_hit is None else int(cache_hit),
+            cache_misses=None if cache_hit is None else int(not cache_hit),
+        ),
+    )
+    with _CODE_USAGE_LOCK, ResourceEventLogger(event_path) as logger:
+        logger.write(event)
+    return event
 
 
 @contextmanager

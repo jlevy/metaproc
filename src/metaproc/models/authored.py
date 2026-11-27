@@ -19,11 +19,13 @@ from metaproc.models.resource_budget import ResourceBudgetSpec
 
 
 class StepContext(dict[str, str]):
-    """Resolved code-handler inputs plus cooperative cancellation state.
+    """Resolved code-handler inputs plus cooperative cancellation and usage reporting.
 
     The mapping behavior preserves the original handler API. Long-running handlers can
     call :meth:`cancel_requested` at safe checkpoints and return promptly when the
-    owning run is cancelled.
+    owning run is cancelled. A handler that calls a model API itself reports each call
+    through :meth:`record_usage`, so its tokens and cost reach the run's resource
+    summary.
     """
 
     def __init__(
@@ -31,13 +33,66 @@ class StepContext(dict[str, str]):
         values: dict[str, str],
         *,
         cancel_requested: Callable[[], bool] | None = None,
+        attempt: int | None = None,
+        item_key: str | None = None,
+        usage_recorder: Callable[..., object] | None = None,
     ) -> None:
         super().__init__(values)
         self._cancel_requested = cancel_requested
+        self.attempt = attempt
+        """The task's attempt number for this invocation, when the harness knows it.
+
+        It counts every attempt the task has had in this run, including those of an
+        earlier launch, so a declared retry or a resume after a failure sees 2 or more.
+        """
+        self.item_key = item_key
+        """The fan-out item key, or ``None`` for a step that does not fan out."""
+        self._usage_recorder = usage_recorder
 
     def cancel_requested(self) -> bool:
         """Return whether the owning run has requested cooperative cancellation."""
         return self._cancel_requested is not None and self._cancel_requested()
+
+    def record_usage(
+        self,
+        *,
+        provider: str,
+        product: str,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cache_read_tokens: int = 0,
+        list_cost_usd: float | None = None,
+        actual_cost_usd: float | None = None,
+        api_requests: int = 1,
+        retries: int = 0,
+        cache_hit: bool | None = None,
+        request_id: str | None = None,
+    ) -> None:
+        """Record one model or API call the handler made itself.
+
+        The call appears in the run's resource roll-up under this step and item; see
+        :func:`metaproc.engine.resource_sampling.record_code_usage` for how each value
+        is counted. ``list_cost_usd`` defaults to the bundled pricing table's estimate
+        for ``model``. Outside a run, as in a unit test that builds the context
+        directly, it does nothing.
+        """
+        if self._usage_recorder is None:
+            return
+        self._usage_recorder(
+            provider=provider,
+            product=product,
+            model=model,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            cache_read_tokens=cache_read_tokens,
+            list_cost_usd=list_cost_usd,
+            actual_cost_usd=actual_cost_usd,
+            api_requests=api_requests,
+            retries=retries,
+            cache_hit=cache_hit,
+            request_id=request_id,
+        )
 
 
 #: Signature for a code-mode handler function loaded from a .py file.

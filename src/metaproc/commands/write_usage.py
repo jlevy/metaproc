@@ -10,7 +10,7 @@ from metaproc.cli import app, get_output
 from metaproc.io import iter_artifact_paths, logical_path
 from metaproc.logutil.parsing import LogFile
 from metaproc.logutil.usage import load_pricing, write_usage_report
-from metaproc.paths import is_native_session_log_path
+from metaproc.paths import is_native_session_log_path, is_tool_resource_events_log
 
 
 @app.command("write-usage")
@@ -95,11 +95,4 @@ def write_usage(
 
 
 def _is_tool_event_log(path: Path) -> bool:
-    path = logical_path(path)
-    parts = path.parts
-    return (
-        len(parts) >= 4
-        and parts[-4] == ".logs"
-        and parts[-3] == "tools"
-        and parts[-1] == ("resource-events.jsonl")
-    )
+    return is_tool_resource_events_log(logical_path(path))

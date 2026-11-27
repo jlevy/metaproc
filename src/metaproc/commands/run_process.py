@@ -174,7 +174,11 @@ from metaproc.engine.placeholders import (
 from metaproc.engine.preflight import run_preflight
 from metaproc.engine.process_scope import expand_process_vars, is_dep_ref
 from metaproc.engine.resource_finalization import finalize_run_resources
-from metaproc.engine.resource_sampling import run_sampled_step_command, sample_step_resources
+from metaproc.engine.resource_sampling import (
+    record_code_usage,
+    run_sampled_step_command,
+    sample_step_resources,
+)
 from metaproc.engine.resource_snapshot import build_resource_run_snapshot
 from metaproc.engine.retry import (
     FailureClass,
@@ -2748,12 +2752,13 @@ async def _execute_code_step(
 
     state_dir.mkdir(parents=True, exist_ok=True)
     item_record = {"step": step_id}
+    item_key = state_dir.name if step_def.for_each is not None else None
     running_record = mark_running_at(
         state_dir,
         run_id=run_id,
         step_id=step_id,
         item=item_record,
-        item_key=state_dir.name if step_def.for_each is not None else None,
+        item_key=item_key,
     )
 
     # Captured code stdout/stderr is a task log, not a run-level stream.
@@ -2798,6 +2803,15 @@ async def _execute_code_step(
                                 execution_context.cancellation_event.is_set
                                 if execution_context is not None
                                 else None
+                            ),
+                            attempt=running_record.attempt,
+                            item_key=item_key,
+                            usage_recorder=partial(
+                                record_code_usage,
+                                run_dir=run_dir,
+                                run_id=run_id,
+                                step_node_id=step_id,
+                                item_key=item_key,
                             ),
                         ),
                         process_step,
