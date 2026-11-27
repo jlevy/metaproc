@@ -9,13 +9,19 @@ items whose digests differ.
 
 from __future__ import annotations
 
+import os
+import signal
 import textwrap
 from collections import Counter
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from metaproc.cli import app
+from metaproc.engine import dep_state
 from metaproc.engine.dep_state import changed_item_inputs, fingerprint_item_inputs
 from metaproc.io import read_yaml_file, to_yaml_string
 from metaproc.io.state_io import read_result_at
@@ -231,6 +237,86 @@ def test_a_result_without_digests_keeps_key_based_reuse(tmp_path: Path) -> None:
 
     run.write_input("chrl", "changed\n")
     assert run.launch() == Counter()
+
+
+def test_a_malformed_digest_result_reruns_with_a_warning(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    run = _Run(tmp_path)
+    run.launch()
+    result_path = run.task_dir("upper", "chrl") / "result.yaml"
+    raw = read_yaml_file(result_path)
+    assert isinstance(raw, dict)
+    raw["item_inputs"]["item_sha256"] = "invalid"
+    result_path.write_text(to_yaml_string(raw))
+    run.write_input("chrl", "changed\n")
+
+    assert run.launch() == Counter({"upper:chrl": 1})
+    assert "cannot validate completed item result" in caplog.text
+    assert (run.run_dir / "upper" / "chrl.txt").read_text() == "en:CHANGED\n"
+
+
+@contextmanager
+def _bounded_fifo_check() -> Generator[None]:
+    def timed_out(signum: int, frame: object) -> None:
+        raise AssertionError("input hashing blocked on a FIFO")
+
+    previous = signal.signal(signal.SIGALRM, timed_out)
+    signal.setitimer(signal.ITIMER_REAL, 5)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFOs")
+@pytest.mark.parametrize("resume", [False, True])
+def test_a_fifo_input_is_refused_without_blocking(tmp_path: Path, resume: bool) -> None:
+    run = _Run(tmp_path, process=_PROCESS if resume else _PROCESS.replace(", kind: file }", " }"))
+    if resume:
+        run.launch()
+    path = run.process_dir / "inputs" / "brvo.txt"
+    path.unlink()
+    os.mkfifo(path)
+    with _bounded_fifo_check():
+        result = CliRunner().invoke(
+            app,
+            [
+                "run-process",
+                str(run.process_path),
+                "--var",
+                f"RUNS_DIR={run.runs_dir}",
+                "--var",
+                "RUN_ID=r1",
+                "--var",
+                f"PROCESS_DIR={run.process_dir}",
+            ],
+        )
+    assert result.exit_code != 0
+    assert "regular file" in result.output
+    log = run.runs_dir / "invocations.log"
+    calls = log.read_text().splitlines() if log.exists() else []
+    assert calls.count("upper:brvo") == int(resume)
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="requires POSIX FIFOs")
+def test_hashing_checks_the_open_descriptor_after_path_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "input.txt"
+    path.write_text("original")
+    original_open = os.open
+
+    def replace_before_open(name: str, flags: int) -> int:
+        path.unlink()
+        os.mkfifo(path)
+        return original_open(name, flags)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(os, "open", replace_before_open)
+        with _bounded_fifo_check(), pytest.raises(ValueError, match="regular file"):
+            dep_state._input_digest(path)
 
 
 def test_a_changed_chain_input_reruns_that_item_down_the_chain(tmp_path: Path) -> None:

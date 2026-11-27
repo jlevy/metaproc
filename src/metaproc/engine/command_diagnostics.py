@@ -19,6 +19,7 @@ from metaproc.engine.retry import (
     classify_error,
     classify_failure,
     has_permanent_signal,
+    is_rate_quota,
 )
 
 _SECRET_ENV_NAME = re.compile(
@@ -277,6 +278,53 @@ def _transport_failure_class(chain: Iterable[BaseException]) -> FailureClass | N
     return None
 
 
+# Subprocess diagnostics are opaque and use broad legacy matching. An exception has
+# better evidence: only explicit provider diagnostics may supplement its types/status.
+_HANDLER_TRANSIENT_PATTERNS: tuple[tuple[FailureClass, re.Pattern[str]], ...] = (
+    (
+        FailureClass.RATE_LIMITED,
+        re.compile(r"\b(?:rate[ _-]limit(?:ed|ing)?|too many requests)\b", re.IGNORECASE),
+    ),
+    (
+        FailureClass.TIMEOUT,
+        re.compile(
+            r"\b(?:request timed out|read timed out|deadline[ _]exceeded|gateway timeout)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        FailureClass.SERVER_ERROR,
+        re.compile(
+            r"\b(?:internal server error|service unavailable|bad gateway|connection (?:reset|refused|aborted)|econnreset|econnrefused)\b",
+            re.IGNORECASE,
+        ),
+    ),
+)
+_HANDLER_HTTP_STATUS = re.compile(
+    r"\b(?:HTTP(?:/\d(?:\.\d)?)?|status(?:[ _]code)?|error code)\s*[:=]?\s*(\d{3})\b"
+    r"|\b(429|500|502|503|504)\s+(?:RESOURCE_EXHAUSTED|INTERNAL|BAD_GATEWAY|UNAVAILABLE|DEADLINE_EXCEEDED)\b",
+    re.IGNORECASE,
+)
+
+
+def _handler_text_failure_class(evidence: str) -> FailureClass | None:
+    """Read explicit provider diagnostics, excluding incidental numbers and names."""
+    if is_rate_quota(evidence):
+        return FailureClass.QUOTA_EXHAUSTED
+    for match in _HANDLER_HTTP_STATUS.finditer(evidence):
+        status = int(match.group(1) or match.group(2))
+        if status == 429:
+            return FailureClass.RATE_LIMITED
+        if status in (408, 504):
+            return FailureClass.TIMEOUT
+        if 500 <= status <= 599:
+            return FailureClass.SERVER_ERROR
+    for failure_class, pattern in _HANDLER_TRANSIENT_PATTERNS:
+        if pattern.search(evidence):
+            return failure_class
+    return None
+
+
 def handler_failure_message(
     exception: Exception,
     *,
@@ -292,8 +340,10 @@ def handler_failure_message(
     (``raise RuntimeError("transcribe failed") from exc``) is classified by what it
     wraps. When the text names nothing, the exceptions' structure decides: an HTTP
     status of 429, 408, or 5xx, a ``TimeoutError`` or ``ConnectionError``, or a known
-    transport error type classifies as transient. Structure never overrides a
-    permanent signal in the text, such as a quota or billing refusal.
+    transport error type classifies as transient. A permanent HTTP status or text
+    signal, such as a hard quota or billing refusal, vetoes earlier transient errors.
+    Text alone must name an explicit provider diagnostic, not an incidental number
+    or field name that the subprocess classifier would accept.
     """
     exception_type = type(exception).__name__
     detail = redact_diagnostic(str(exception), env=env)
@@ -309,14 +359,23 @@ def handler_failure_message(
             ),
         ]
     )
-    failure = _classified(f"{message} (traceback: {log_path})", evidence=evidence)
-    if failure.failure_class is not FailureClass.UNKNOWN or has_permanent_signal(evidence):
-        return failure
-    transport_class = _transport_failure_class(chain)
-    if transport_class is None:
-        return failure
+    error = f"{message} (traceback: {log_path})"
+    if has_permanent_signal(evidence):
+        return ExecutionFailure(
+            error=error, failure_class=classify_failure(evidence), verdict=RetryVerdict.FAIL
+        )
+    if any(
+        status is not None and 400 <= status < 500 and status not in (408, 429)
+        for status in (_http_status(cause) for cause in chain)
+    ):
+        return ExecutionFailure(
+            error=error, failure_class=FailureClass.UNKNOWN, verdict=RetryVerdict.FAIL
+        )
+    failure_class = _handler_text_failure_class(evidence) or _transport_failure_class(chain)
     return ExecutionFailure(
-        error=failure.error, failure_class=transport_class, verdict=RetryVerdict.RETRY
+        error=error,
+        failure_class=failure_class or FailureClass.UNKNOWN,
+        verdict=RetryVerdict.RETRY if failure_class is not None else RetryVerdict.FAIL,
     )
 
 

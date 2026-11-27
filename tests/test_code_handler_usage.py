@@ -10,14 +10,17 @@ and came out unmeasured.
 
 from __future__ import annotations
 
+import json
 import textwrap
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
 from metaproc.cli import app
 from metaproc.engine.resource_finalization import finalize_run_resources
+from metaproc.engine.resource_rollup import _read_tool_events
 from metaproc.engine.resource_sampling import CODE_HANDLER_SOURCE_KIND, record_code_usage
 from metaproc.engine.resource_summary import RESOURCE_USAGE_SUMMARY_FILE
 from metaproc.io import fmf_read_frontmatter
@@ -220,3 +223,25 @@ def test_tool_resource_events_are_read_as_typed_events(tmp_path: Path) -> None:
     assert totals["input_tokens"] == 1000
     assert totals["output_tokens"] == 100
     assert totals["list_cost_usd"] == 0.01
+
+
+def test_malformed_tool_event_warning_omits_rejected_values(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    stream = tmp_path / "resource-events.jsonl"
+    event = UsageEvent(
+        ts=datetime.now(UTC),
+        hierarchy=HierarchyRef(run_id="proc/r1"),
+        provider=ProviderRef(provider="google", product="vertex-ai", model="m"),
+        source=SourceRef(kind="gemini_api", path="resource-events.jsonl"),
+        metrics=Metrics(input_tokens=10),
+    )
+    rejected = event.model_dump(mode="json")
+    rejected["metrics"]["input_tokens"] = "Bearer synthetic-resource-event-secret"
+    stream.write_text(json.dumps(rejected) + "\n" + event.model_dump_json() + "\n")
+
+    assert _read_tool_events(stream) == [event]
+    assert f"{stream}:1" in caplog.text
+    assert "skipping malformed resource event" in caplog.text
+    assert "synthetic-resource-event-secret" not in caplog.text
+    assert "input_value" not in caplog.text

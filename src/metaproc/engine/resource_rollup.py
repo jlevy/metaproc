@@ -575,8 +575,13 @@ def _read_tool_events(log_path: Path) -> list[ResourceEvent]:
                 continue
             try:
                 events.append(_RESOURCE_EVENT_ADAPTER.validate_json(stripped))
-            except ValueError as exc:
-                log.warning("skipping malformed resource event %s:%s: %s", log_path, line_no, exc)
+            except ValueError:
+                # Validation errors can repeat rejected values, including credentials.
+                log.warning(
+                    "skipping malformed resource event %s:%s (invalid event schema)",
+                    log_path,
+                    line_no,
+                )
     except OSError:
         log.warning("could not read tool resource events %s", log_path, exc_info=True)
     return events

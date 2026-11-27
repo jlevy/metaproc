@@ -7,7 +7,9 @@ import glob as glob_mod
 import hashlib
 import json
 import logging
+import os
 import re
+import stat as stat_mod
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,7 +19,6 @@ from ruamel.yaml import YAMLError as _RuamelYAMLError
 
 from metaproc.engine.placeholders import TEMPLATE_PATTERN, resolve_templates
 from metaproc.io import read_yaml_file
-from metaproc.io.digests import file_sha256
 from metaproc.io.state_io import read_attempt_at, read_result_at, read_status_at
 from metaproc.models.plan import Plan, ResolvedDep, ResolvedStep
 from metaproc.models.runtime import (
@@ -217,23 +218,43 @@ def _input_digest(path: Path) -> str:
         return ITEM_INPUT_ABSENT
     except OSError:
         return ITEM_INPUT_UNREADABLE
-    if path.is_dir():
+    if stat_mod.S_ISDIR(stat.st_mode):
         return ITEM_INPUT_DIRECTORY
+    if not stat_mod.S_ISREG(stat.st_mode):
+        raise ValueError(f"cannot fingerprint input {path}: expected a regular file or directory")
     try:
-        return _file_sha256_cached(str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+        return _file_sha256_cached(
+            str(path.resolve()),
+            stat.st_dev,
+            stat.st_ino,
+            stat.st_ctime_ns,
+            stat.st_mtime_ns,
+            stat.st_size,
+        )
     except OSError:
         return ITEM_INPUT_UNREADABLE
 
 
 @functools.lru_cache(maxsize=4096)
-def _file_sha256_cached(path: str, mtime_ns: int, size: int) -> str:
+def _file_sha256_cached(
+    path: str, device: int, inode: int, ctime_ns: int, mtime_ns: int, size: int
+) -> str:
     """Hash a file once per version in this process; items often share one input.
 
-    The modification time and size are part of the key only so that a rewritten file
-    is hashed again. They never stand in for its content.
+    File identity, modification metadata, and size are part of the key only so that a
+    rewritten or replaced file is hashed again. They never stand in for its content.
     """
-    del mtime_ns, size
-    return file_sha256(Path(path))
+    del device, inode, ctime_ns, mtime_ns, size
+    # A regular path may be replaced between stat and open. Nonblocking open keeps
+    # a replacement FIFO from waiting for a writer; fstat rejects it before reading.
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    try:
+        if not stat_mod.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError(f"cannot fingerprint input {path}: expected a regular file")
+        with os.fdopen(descriptor, "rb", closefd=False) as stream:
+            return hashlib.file_digest(stream, "sha256").hexdigest()
+    finally:
+        os.close(descriptor)
 
 
 _CHECKOUT_TOKEN = "<checkout>"

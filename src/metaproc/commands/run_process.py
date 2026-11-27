@@ -3090,19 +3090,23 @@ def _changed_item_inputs(
 ) -> list[str]:
     """What changed in a completed item's inputs since its result recorded them.
 
-    Empty when nothing changed, when the result predates input digests, or when the
-    result cannot be read: an unreadable record keeps the reuse it had before digests.
+    Empty when nothing changed or a valid legacy result predates input digests.
+    A malformed result cannot establish unchanged inputs and forces another attempt.
     """
     if target.fan_out is None or target.mode != "code":
         return []
     try:
         result = read_result_at(state_dir)
-    except (ValueError, TypeError, YAMLError) as exc:
-        log.debug("unreadable result.yaml in %s; keeping key-based reuse: %s", state_dir, exc)
-        return []
+    except ValueError, TypeError, YAMLError:
+        log.warning("cannot validate completed item result in %s; re-running item", state_dir)
+        return ["unverifiable input digests"]
     if result is None or result.item_inputs is None:
         return []
-    return changed_item_inputs(result.item_inputs, fingerprint_item_inputs(target, item_vars))
+    try:
+        current = fingerprint_item_inputs(target, item_vars)
+    except ValueError as exc:
+        raise CLIError(str(exc)) from exc
+    return changed_item_inputs(result.item_inputs, current)
 
 
 def _discover_chain_items(

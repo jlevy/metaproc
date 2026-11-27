@@ -115,6 +115,9 @@ def test_transient_handler_exceptions_are_retryable(
     [
         ValueError("model returned malformed JSON"),
         KeyError("text"),
+        FileNotFoundError(2, "No such file or directory", "/data/page-500.png"),
+        ValueError("invalid page count: 500"),
+        KeyError("connection"),
         _StatusError("invalid argument", 400),
         _CodeError("PERMISSION_DENIED", 403),
         # Structure never overrides a permanent signal in the text.
@@ -126,6 +129,42 @@ def test_transient_handler_exceptions_are_retryable(
 def test_permanent_handler_exceptions_are_not_retryable(exception: Exception) -> None:
     failure = handler_failure_message(exception, env={}, log_path="task.log")
     assert not is_transient_failure(failure.failure_class, failure.verdict)
+
+
+@pytest.mark.parametrize("status", [400, 401, 403])
+@pytest.mark.parametrize("explicit_cause", [False, True])
+def test_terminal_http_status_overrides_earlier_timeout(status: int, explicit_cause: bool) -> None:
+    try:
+        try:
+            raise TimeoutError("request expired")
+        except TimeoutError as exc:
+            refusal = _StatusError("request refused", status)
+            if explicit_cause:
+                raise refusal from exc
+            raise refusal  # noqa: B904 - exercise implicit exception context
+    except _StatusError as exception:
+        failure = handler_failure_message(exception, env={}, log_path="task.log")
+    assert failure.verdict is RetryVerdict.FAIL
+    assert not is_transient_failure(failure.failure_class, failure.verdict)
+
+
+@pytest.mark.parametrize(
+    ("message", "failure_class"),
+    [
+        ("HTTP 429 rate exceeded", FailureClass.RATE_LIMITED),
+        ("503 UNAVAILABLE. Please try again later.", FailureClass.SERVER_ERROR),
+        ("504 DEADLINE_EXCEEDED", FailureClass.TIMEOUT),
+        (
+            "TPM quota exhausted. No spare capacity is currently available",
+            FailureClass.QUOTA_EXHAUSTED,
+        ),
+    ],
+)
+def test_explicit_provider_diagnostics_remain_retryable(
+    message: str, failure_class: FailureClass
+) -> None:
+    failure = handler_failure_message(RuntimeError(message), env={}, log_path="task.log")
+    assert (failure.failure_class, failure.verdict) == (failure_class, RetryVerdict.RETRY)
 
 
 def test_a_status_in_the_evidence_path_does_not_make_a_bug_transient() -> None:
@@ -194,7 +233,7 @@ def rate_limited(variables: dict[str, str], step: object) -> None:  # noqa: ARG0
 
 def buggy(variables: dict[str, str], step: object) -> None:  # noqa: ARG001
     _first_attempt(variables, "buggy")
-    raise ValueError("handler bug")
+    raise ValueError("invalid page count: 500")
 '''
 
 _ROSTER = """\
