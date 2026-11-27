@@ -60,6 +60,7 @@ from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
 from metaproc.dispatch.orchestrator_payload import OrchestratorDispatchPayload
 from metaproc.io.digests import verify_file_sha256
 from metaproc.osutils.resource_context import log_resource_context
+from metaproc.utils.log_config import configure_logging
 
 log = logging.getLogger(__name__)
 
@@ -158,10 +159,7 @@ def build_runprocess_cmd(
 
 def main() -> int:
     """Run the orchestrator entrypoint.  Returns exit code."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    configure_logging()
 
     try:
         hydrated = hydrate_secret_env()

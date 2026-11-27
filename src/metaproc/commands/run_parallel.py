@@ -43,6 +43,7 @@ from metaproc.dispatch.slot_coordinator import SlotCoordinator
 from metaproc.runpool.events import EventLogger
 from metaproc.runpool.pool import resolve_min_concurrency
 from metaproc.settings import POOL_MIN_CONCURRENCY
+from metaproc.utils.log_config import configure_logging
 
 log = logging.getLogger(__name__)
 
@@ -647,9 +648,7 @@ def run_parallel(
     override for running a single step with fine-grained control, or when
     you need ``--items``, ``--limit``, or ``--no-retry`` flags.
     """
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
+    configure_logging()
     out = get_output()
 
     try:

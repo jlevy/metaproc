@@ -290,6 +290,7 @@ from metaproc.runpool.scalar_admission import (
     admitted_launch,
 )
 from metaproc.settings import POOL_MAX_CONCURRENCY
+from metaproc.utils.log_config import configure_logging
 from metaproc.viz_loader import PlanBundleLaunch, load_plan_bundle
 
 log = logging.getLogger(__name__)
@@ -6855,9 +6856,7 @@ def run_process_command(
     ),
 ) -> None:
     """Execute a process spec DAG — all steps in dependency order."""
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
+    configure_logging()
     out = get_output()
 
     # Validate --auth-preflight-quota-guard at parse time; an invalid
