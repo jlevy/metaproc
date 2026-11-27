@@ -6,7 +6,7 @@ status: Approved
 ---
 # Metaproc Design
 
-**Date:** 2026-03-23 (last updated 2026-11-22) **Status:** Approved
+**Date:** 2026-03-23 (last updated 2026-11-27) **Status:** Approved
 
 Also readable as `metaproc help design`.
 
@@ -427,6 +427,25 @@ same resolution as `mode: agent`). Long-running handlers should call
 The handler writes outputs directly; the engine records `.state/` completion markers.
 If the handler raises, the step fails with the same state recording as a failed agent
 step.
+
+`context.attempt` is the task’s attempt number, counted across launches, and
+`context.item_key` is the fan-out item’s key (`None` for a scalar step).
+A handler that calls a model API reports each call with
+`context.record_usage(provider=, product=, model=, input_tokens=, output_tokens=, ...)`,
+which takes optional `cache_read_tokens`, `list_cost_usd`, `actual_cost_usd`,
+`api_requests`, `retries`, `cache_hit`, and `request_id`. Each call appends one
+`UsageEvent` with source kind `code_handler` to the run’s `.logs/resource-events.jsonl`
+under the step and item, so the run’s resource summary counts its tokens and cost;
+without `list_cost_usd`, the list cost is estimated from the bundled pricing table, and
+an unpriced model stays unmeasured.
+`input_tokens` excludes `cache_read_tokens`, so a provider that reports cached tokens
+inside its prompt count needs them subtracted.
+Outside a run, `record_usage` does nothing.
+A mapped code step with a declared `for_each.retry` re-attempts an item whose handler
+failed with a rate limit, a per-minute quota, a 5xx, a timeout, or a connection reset.
+Every mapped code step records each completed item’s input digests in `result.yaml` as
+`item_inputs`, so a resume re-runs an item whose bound fields or input files changed
+under the same key. The operator reference documents both rules.
 
 `mode: code` supports `for_each`. Each item is one invocation with its own resolved
 context, so per-item state, logs, and artifacts address the item rather than the step,

@@ -7,6 +7,44 @@ development series.
 
 ## [Unreleased][unreleased]
 
+### Added
+
+- **Code handlers can report the model calls they make.**
+  `StepContext.record_usage(provider=, product=, model=, input_tokens=, output_tokens=, ...)`
+  appends a `UsageEvent` under the step and item to the run’s resource ledger, so a
+  handler that calls a model API directly shows its tokens and list cost in
+  `resource-usage-summary.md` instead of nothing.
+  `StepContext.attempt` and `StepContext.item_key` give the attempt number and the
+  fan-out item key.
+- **A resume re-runs a mapped code item whose inputs changed under the same key.** Each
+  completed item of a mapped `mode: code` step records `item_inputs` in its
+  `result.yaml`: a digest of its bound fields and a SHA-256 of each declared input file.
+  An item whose digests differ re-runs, and the rest are reused.
+  Items completed by an earlier release keep key-based reuse until they run again.
+
+### Fixed
+
+- **A declared `for_each.retry` now retries transient code-handler failures.** A mapped
+  code item whose handler raised, or whose command failed, with a rate limit, a
+  per-minute quota refusal, a 5xx, a timeout, or a connection reset is re-attempted
+  under the step’s budget.
+  The classifier reads HTTP statuses and transport error types from the exception and
+  its chained causes, not only the message, so SDK errors such as google-genai’s
+  `ClientError` with `code=429` are recognized.
+  Hard quotas, authentication and billing refusals, other handler exceptions, and bare
+  nonzero exits still fail on the first attempt.
+- **Tool resource-event streams are counted.**
+  `.logs/tools/<tool>/resource-events.jsonl` is read as typed resource events instead of
+  being parsed as an agent session log and reported unmeasured.
+- **A `collect:` input without a `path:` is rejected when the spec is parsed**, as is
+  `require:` on an input that does not collect.
+  Before, it passed `metaproc plan` and failed only when the consumer was dispatched,
+  after the whole upstream fan-out had run.
+- **HTTP client request logs no longer reach the console at INFO.** Metaproc’s
+  entrypoints hold the `httpx` and `httpcore` loggers at WARNING unless a level was set
+  on them, so a handler’s API calls do not print request URLs, which for Vertex AI name
+  the GCP project.
+
 ## [0.7.0][] - 2026-11-22
 
 ### Changed

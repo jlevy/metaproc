@@ -47,6 +47,21 @@ When a timeout is not transient, raise `timeout_s` or lower the budget:
 `for_each.retry.max_retries` for a fan-out step, `process.defaults.retry.max_retries`
 for scalar steps.
 
+A `mode: code` step has no adapter beneath it to retry a model call, so a handler that
+calls an API relies on its step’s declared budget.
+A mapped code step that declares `for_each.retry` re-attempts an item whose handler
+raised, or whose command failed, with a rate limit, a per-minute quota refusal, a 5xx, a
+timeout, or a connection reset.
+The engine reads that from the exception and the causes chained to it: an HTTP status
+the exception carries (`status_code`, `code`, `status`, or `response.status_code`), a
+standard timeout or connection error, an HTTP transport error type such as httpx’s, and
+the error text. A daily or hard quota, an authentication or billing refusal, any other
+handler exception, and a bare nonzero exit are not retried.
+The declared `max_retries` is the item’s whole budget, with backoff from
+`initial_backoff_s` to `max_backoff_s`; a `Retry-After` header is not read.
+Without a declared `for_each.retry`, a code item runs once, and a scalar code step is
+not retried.
+
 When a launch holds a credential-pool slot, the slot teardown path can also ask an
 auth-capable adapter to classify credential state and severity.
 Claude and Codex provide that adapter classifier.
@@ -613,8 +628,10 @@ command, `agent`, or `manual`) keeps its completed items’ records, because the
 per-item record is the work itself rather than a parent level over reusable children;
 renaming it would re-fetch every finished item on every backfill.
 Either way the step is re-entered and does work only for the items its new roster adds.
-The trade is that an item that keeps its key while the content behind it changes is
-reused; `--from <step> --force` re-does those.
+The trade is that an agent or manual item that keeps its key while the content behind it
+changes is reused; `--from <step> --force` re-does those.
+A mapped code item whose own bound fields or input files changed re-runs by the rule in
+[the next section](#when-a-mapped-code-items-inputs-change).
 A downstream step that itself collects a changed document is judged by its own digest
 comparison when the walk reaches it.
 An invalidated task stays invalidated until it runs again, including across an
@@ -627,9 +644,39 @@ The comparison runs only for steps the launch walks: a collector left out by `--
 `--force` re-runs the selected steps without comparing.
 Four cases are outside the rule: a step that reads a mapped step’s outputs without
 declaring `collect:`, a downstream composite whose completed child steps read changed
-content through `with:` paths, a downstream mapped step’s completed items whose content
-changed under the same key, and the downstream of a composite whose own child collector
-re-ran. Use `--from <step> --force` for those.
+content through `with:` paths, a downstream mapped agent or manual step’s completed
+items whose content changed under the same key, and the downstream of a composite whose
+own child collector re-ran.
+Use `--from <step> --force` for those.
+
+### When a mapped code item’s inputs change
+
+A step fingerprint covers the step’s contract, not the items it maps over, so an item
+whose roster row or input file changes while its key stays the same would otherwise be
+reused. A mapped `mode: code` step therefore records, in each completed item’s
+`result.yaml`, an `item_inputs` block: `item_sha256`, a SHA-256 digest of the item’s
+bound fields (`bind` plus `bind_fields`), and `inputs`, a SHA-256 digest of each
+declared input file the item reads.
+On a resume, a completed item is reused only while both still match.
+An item whose fields or files differ re-runs, and the resume prints
+`Step '<step>' item '<key>': <what changed> changed since it completed; re-running`; the
+other items are reused.
+
+The digests cover what an item reads itself.
+They leave out the roster file the step maps over, so adding a row does not re-run the
+other items; the step’s own declared outputs, which a handler that edits a file in place
+both reads and writes; `collect:` documents, judged by the rule above; streams; and an
+input that declares no path or whose path does not resolve for the item.
+A missing input file is recorded as absent, so its appearance re-runs the item.
+A directory input is recorded as a directory, not hashed, so a change inside it does not
+re-run the item.
+A bound field that names a path inside the checkout is recorded relative
+to it, so a resume from a fresh checkout at another path still reuses unchanged items.
+An item completed by a release before this rule has no `item_inputs` and keeps key-based
+reuse until it runs again.
+Agent and manual mapped steps do not record item digests.
+`metaproc status --steps` does not predict these re-runs, because the orchestrator
+decides them at resume from per-item state.
 
 ### When to reach for a flag
 
@@ -1439,6 +1486,7 @@ for unmarked old runs.
 | Captured process output | `<run>/.logs/tasks/<step_id>/process_<attempt_id>.log` | Scalar code/subprocess stdout and stderr |
 | Captured item output | `<run>/.logs/tasks/<step_id>/<item_key>/process_<attempt_id>.log` | Item-scoped code/subprocess stdout and stderr |
 | Workflow tool logs | `<run>/.logs/tools/<tool-name>/invocations.jsonl` | Workflow-owned tool invocation streams |
+| Workflow tool resource events | `<run>/.logs/tools/<tool-name>/resource-events.jsonl` | Typed `ResourceEvent` lines a tool writes; the resource rollup counts their usage and cost |
 | Trace output | `<run>/.logs/derived/trace.jsonl` | Derived `TraceEvent/0.1` output from `metaproc trace --extract` |
 
 Runpool event streams include `auth_lease_acquired` and `auth_outcome` when a pooled
