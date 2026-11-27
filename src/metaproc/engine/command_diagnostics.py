@@ -364,9 +364,13 @@ def handler_failure_message(
         return ExecutionFailure(
             error=error, failure_class=classify_failure(evidence), verdict=RetryVerdict.FAIL
         )
+    statuses = [_http_status(cause) for cause in chain]
+    statuses.extend(
+        int(match.group(1) or match.group(2)) for match in _HANDLER_HTTP_STATUS.finditer(evidence)
+    )
     if any(
         status is not None and 400 <= status < 500 and status not in (408, 429)
-        for status in (_http_status(cause) for cause in chain)
+        for status in statuses
     ):
         return ExecutionFailure(
             error=error, failure_class=FailureClass.UNKNOWN, verdict=RetryVerdict.FAIL

@@ -133,16 +133,23 @@ def test_permanent_handler_exceptions_are_not_retryable(exception: Exception) ->
 
 @pytest.mark.parametrize("status", [400, 401, 403])
 @pytest.mark.parametrize("explicit_cause", [False, True])
-def test_terminal_http_status_overrides_earlier_timeout(status: int, explicit_cause: bool) -> None:
+@pytest.mark.parametrize("textual_status", [False, True])
+def test_terminal_http_status_overrides_earlier_timeout(
+    status: int, explicit_cause: bool, textual_status: bool
+) -> None:
     try:
         try:
             raise TimeoutError("request expired")
         except TimeoutError as exc:
-            refusal = _StatusError("request refused", status)
+            refusal = (
+                RuntimeError(f"HTTP {status} request refused")
+                if textual_status
+                else _StatusError("request refused", status)
+            )
             if explicit_cause:
                 raise refusal from exc
             raise refusal  # noqa: B904 - exercise implicit exception context
-    except _StatusError as exception:
+    except (_StatusError, RuntimeError) as exception:
         failure = handler_failure_message(exception, env={}, log_path="task.log")
     assert failure.verdict is RetryVerdict.FAIL
     assert not is_transient_failure(failure.failure_class, failure.verdict)
@@ -152,6 +159,7 @@ def test_terminal_http_status_overrides_earlier_timeout(status: int, explicit_ca
     ("message", "failure_class"),
     [
         ("HTTP 429 rate exceeded", FailureClass.RATE_LIMITED),
+        ("HTTP 408 request expired", FailureClass.TIMEOUT),
         ("503 UNAVAILABLE. Please try again later.", FailureClass.SERVER_ERROR),
         ("504 DEADLINE_EXCEEDED", FailureClass.TIMEOUT),
         (
