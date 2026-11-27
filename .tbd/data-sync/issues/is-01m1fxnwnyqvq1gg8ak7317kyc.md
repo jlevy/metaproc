@@ -5,7 +5,7 @@ title: Incubate Safeproc and consolidate process-safety research
 kind: epic
 status: open
 priority: 1
-version: 23
+version: 25
 spec_path: docs/project/specs/active/plan-2026-09-01-safeproc-local-incubation.md
 labels: []
 dependencies: []
@@ -31,8 +31,10 @@ child_order_hints:
   - is-01m1g16qmjbqavfpdmkbcc5y13
   - is-01m1g16r14t60vzq7d9hkredcv
   - is-01m1g16revwp46zsds1px5x4w5
+  - is-01m82dm66q53076ef7psr26250
+  - is-01m82dm8ha4361a6g8pbjgy0ds
 created_at: 2026-09-02T02:02:59.645Z
-updated_at: 2026-09-02T03:04:38.106Z
+updated_at: 2026-11-22T20:02:14.177Z
 ---
 
 ## Notes
