@@ -50,6 +50,7 @@ from metaproc.adapters.registry import ADAPTER_REGISTRY
 from metaproc.cloud.gcp.container_bootstrap import bootstrap_gcp_run
 from metaproc.cloud.gcp.secret_hydration import hydrate_secret_env
 from metaproc.config.env_vars import MetaprocEnv
+from metaproc.utils.log_config import configure_logging
 
 log = logging.getLogger(__name__)
 
@@ -59,10 +60,7 @@ FALLBACK_WORK_DIR = "/tmp"
 
 def main() -> int:
     """Entrypoint: bootstrap, then exec the user command."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    configure_logging()
 
     try:
         hydrated = hydrate_secret_env()

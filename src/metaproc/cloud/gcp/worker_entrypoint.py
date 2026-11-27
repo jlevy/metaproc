@@ -57,6 +57,7 @@ from metaproc.commands.helpers import seed_runtime_vars
 from metaproc.config.env_vars import MetaprocEnv
 from metaproc.dispatch.auth_pool_flags import AuthPoolFlags
 from metaproc.osutils.resource_context import log_resource_context
+from metaproc.utils.log_config import configure_logging
 
 log = logging.getLogger(__name__)
 
@@ -84,10 +85,7 @@ def arm_legacy_bootstrap_guard(
 
 def main() -> int:
     """Run the worker entrypoint.  Returns exit code."""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
+    configure_logging()
 
     try:
         hydrated = hydrate_secret_env()

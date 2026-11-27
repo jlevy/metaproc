@@ -265,6 +265,12 @@ _TRANSIENT_PATTERNS: list[str] = [
     "api_error",
     "503",
     "502",
+    # Gateway timeout. Vertex AI and other Google APIs report an exceeded server-side
+    # deadline as `504 DEADLINE_EXCEEDED`, which names neither a timeout nor a 5xx
+    # code this list otherwise matches.
+    "504",
+    "deadline exceeded",
+    "deadline_exceeded",
     "econnrefused",
     "econnreset",
     "connection",
@@ -281,6 +287,8 @@ _RATE_LIMIT_PATTERNS: list[str] = [
 _TIMEOUT_PATTERNS: list[str] = [
     "timeout",
     "stalled",
+    "deadline exceeded",
+    "deadline_exceeded",
     "log_runaway",
 ]
 
@@ -291,6 +299,7 @@ _SERVER_ERROR_PATTERNS: list[str] = [
     "api_error",
     "503",
     "502",
+    "504",
     "econnrefused",
     "econnreset",
     "connection",
@@ -300,6 +309,49 @@ _SERVER_ERROR_PATTERNS: list[str] = [
 
 
 # ── Classification ─────────────────────────────────────────────
+
+
+def has_permanent_signal(error: str) -> bool:
+    """Whether *error* names a failure that no retry fixes (rule 1 of ``classify_error``).
+
+    A per-minute quota refusal is exempt from the generic ``quota`` pattern only, as in
+    ``classify_error``. A caller holding structured evidence beside the text, such as an
+    exception's HTTP status, checks this first so that evidence never overrides a
+    permanent signal the text carries.
+    """
+    lower = error.lower()
+    rate_quota = is_rate_quota(error)
+    return any(
+        pattern in lower
+        for pattern in _PERMANENT_PATTERNS
+        if not (rate_quota and pattern == "quota")
+    )
+
+
+TRANSIENT_FAILURE_CLASSES: frozenset[FailureClass] = frozenset(
+    {
+        FailureClass.RATE_LIMITED,
+        FailureClass.SERVER_ERROR,
+        FailureClass.TIMEOUT,
+        FailureClass.QUOTA_EXHAUSTED,
+    }
+)
+"""Failure classes that can name a transient operational failure.
+
+``QUOTA_EXHAUSTED`` is transient only as a per-minute refusal, which is what a
+``RETRY`` verdict means for that class; ``is_transient_failure`` requires both.
+"""
+
+
+def is_transient_failure(failure_class: FailureClass, verdict: RetryVerdict) -> bool:
+    """Whether a failure is positively transient: a rate limit, 5xx, timeout, or reset.
+
+    Requires a transient class as well as a ``RETRY`` verdict. ``classify_error``
+    also retries a bare nonzero exit (``CRASH``), which says nothing about why the
+    command failed; a code step's declared budget does not spend attempts on that, or
+    on an ``UNKNOWN`` failure such as an ordinary handler bug.
+    """
+    return verdict is RetryVerdict.RETRY and failure_class in TRANSIENT_FAILURE_CLASSES
 
 
 def classify_error(error: str) -> RetryVerdict:
@@ -316,11 +368,8 @@ def classify_error(error: str) -> RetryVerdict:
     lower = error.lower()
     rate_quota = is_rate_quota(error)
 
-    for pattern in _PERMANENT_PATTERNS:
-        if rate_quota and pattern == "quota":
-            continue
-        if pattern in lower:
-            return RetryVerdict.FAIL
+    if has_permanent_signal(error):
+        return RetryVerdict.FAIL
 
     if rate_quota:
         return RetryVerdict.RETRY

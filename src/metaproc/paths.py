@@ -492,6 +492,21 @@ def tool_resource_events_log(run_dir: Path, tool_name: str) -> Path:
     return tool_log_dir(run_dir, tool_name) / RESOURCE_EVENTS_FILE
 
 
+def is_tool_resource_events_log(path: Path) -> bool:
+    """Return whether *path* is a ``.logs/tools/<tool_name>/resource-events.jsonl`` stream.
+
+    Pass the logical path of a compressed log. Such a file holds typed
+    ``ResourceEvent`` lines, not an agent session, at any scope depth.
+    """
+    parts = path.parts
+    return (
+        len(parts) >= 4
+        and parts[-4] == LOGS_DIR
+        and parts[-3] == TOOLS_SUBDIR
+        and parts[-1] == RESOURCE_EVENTS_FILE
+    )
+
+
 def read_metaproc_layout(run_dir: Path) -> str | None:
     """Read ``metaproc_layout`` from run-config.yaml, returning ``None`` if absent."""
     config_path = run_config_file(run_dir)

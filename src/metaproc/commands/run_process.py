@@ -119,11 +119,14 @@ from metaproc.engine.collected_inputs import (
     record_collected_inputs,
 )
 from metaproc.engine.command_diagnostics import (
+    ExecutionFailure,
     command_failure_message,
     handler_failure_message,
     summarize_failure_causes,
 )
 from metaproc.engine.dep_state import (
+    changed_item_inputs,
+    fingerprint_item_inputs,
     fingerprint_step,
     recorded_step_hash,
 )
@@ -173,7 +176,11 @@ from metaproc.engine.placeholders import (
 from metaproc.engine.preflight import run_preflight
 from metaproc.engine.process_scope import expand_process_vars, is_dep_ref
 from metaproc.engine.resource_finalization import finalize_run_resources
-from metaproc.engine.resource_sampling import run_sampled_step_command, sample_step_resources
+from metaproc.engine.resource_sampling import (
+    record_code_usage,
+    run_sampled_step_command,
+    sample_step_resources,
+)
 from metaproc.engine.resource_snapshot import build_resource_run_snapshot
 from metaproc.engine.retry import (
     FailureClass,
@@ -186,6 +193,7 @@ from metaproc.engine.retry import (
     compute_backoff,
     extract_log_error,
     is_rate_quota,
+    is_transient_failure,
     max_retries_for,
     retry_backoff_s,
 )
@@ -230,8 +238,10 @@ from metaproc.io.state_io import (
     mark_failed_synthetic_at,
     mark_running_at,
     read_manual_ack_at,
+    read_result_at,
     read_run_plan,
     read_status_at,
+    read_task_attempt_at,
     reconcile_stale_running,
     validate_task_status_identity_at,
     write_attempt_at,
@@ -290,6 +300,7 @@ from metaproc.runpool.scalar_admission import (
     admitted_launch,
 )
 from metaproc.settings import POOL_MAX_CONCURRENCY
+from metaproc.utils.log_config import configure_logging
 from metaproc.viz_loader import PlanBundleLaunch, load_plan_bundle
 
 log = logging.getLogger(__name__)
@@ -2730,6 +2741,11 @@ async def _execute_code_step(
     step_hash = fingerprint_step(target)
     try:
         validate_step_inputs_exist(target.inputs, variables, context=f"step '{step_id}'")
+        # Digest what this item reads before it runs, so the record names the inputs the
+        # attempt saw rather than whatever they hold once it has finished.
+        item_inputs = (
+            fingerprint_item_inputs(target, variables) if target.fan_out is not None else None
+        )
     except ValueError as exc:
         raise CLIError(str(exc)) from exc
     handler_ref = target.handler
@@ -2744,12 +2760,13 @@ async def _execute_code_step(
 
     state_dir.mkdir(parents=True, exist_ok=True)
     item_record = {"step": step_id}
+    item_key = state_dir.name if step_def.for_each is not None else None
     running_record = mark_running_at(
         state_dir,
         run_id=run_id,
         step_id=step_id,
         item=item_record,
-        item_key=state_dir.name if step_def.for_each is not None else None,
+        item_key=item_key,
     )
 
     # Captured code stdout/stderr is a task log, not a run-level stream.
@@ -2759,6 +2776,19 @@ async def _execute_code_step(
     # the same second must not overwrite the file their durable errors point at.
     log_file = logs_dir / f"process_{running_record.attempt_id}.log"
     env = dict(os.environ)
+    # A declared for_each.retry budget owns re-attempts; without one, every failure is
+    # this task's last attempt, as it always was.
+    retry_is_owned = target.fan_out is not None and target.fan_out.retry is not None
+
+    def _operational_disposition(failure: ExecutionFailure) -> AttemptDisposition:
+        """Record a transient failure as retryable when a declared budget will retry it.
+
+        ``_contract_retry_decision`` reads this disposition back, so the decision is
+        made once, here, from the classification of the full diagnostic.
+        """
+        if retry_is_owned and is_transient_failure(failure.failure_class, failure.verdict):
+            return AttemptDisposition.retryable
+        return AttemptDisposition.permanent
 
     try:
         handler_fn = resolve_code_handler(handler_ref, process_dir) if handler_ref else None
@@ -2781,6 +2811,15 @@ async def _execute_code_step(
                                 execution_context.cancellation_event.is_set
                                 if execution_context is not None
                                 else None
+                            ),
+                            attempt=running_record.attempt,
+                            item_key=item_key,
+                            usage_recorder=partial(
+                                record_code_usage,
+                                run_dir=run_dir,
+                                run_id=run_id,
+                                step_node_id=step_id,
+                                item_key=item_key,
                             ),
                         ),
                         process_step,
@@ -2837,6 +2876,7 @@ async def _execute_code_step(
             error=command_failure.error,
             running_record=running_record,
             failure_class=str(command_failure.failure_class),
+            attempt_disposition=_operational_disposition(command_failure),
         )
         return False
     except (asyncio.CancelledError, KeyboardInterrupt) as exc:
@@ -2861,6 +2901,7 @@ async def _execute_code_step(
             error=handler_failure.error,
             running_record=running_record,
             failure_class=str(handler_failure.failure_class),
+            attempt_disposition=_operational_disposition(handler_failure),
         )
         return False
     except BaseException as exc:
@@ -2882,7 +2923,6 @@ async def _execute_code_step(
         )
         if output_failures:
             output_errors = [f.summary() for f in output_failures]
-            retry_is_owned = target.fan_out is not None and target.fan_out.retry is not None
             disposition = (
                 AttemptDisposition.retryable
                 if classify_output_failures(output_failures, effective_outputs)
@@ -2912,6 +2952,7 @@ async def _execute_code_step(
             outputs=resolve_record_output_paths(effective_outputs, variables),
             published_at=_now_iso(),
             step_hash=step_hash,
+            item_inputs=item_inputs,
         ),
     )
     return True
@@ -2923,15 +2964,19 @@ def _contract_retry_decision(
     step_def_map: dict[str, ProcessStep],
     run_dir: Path,
 ) -> Callable[[str, dict[str, str]], bool]:
-    """Decide retryability from what refused the output, per the output's declaration.
+    """Decide retryability from what refused the output, or from the recorded attempt.
 
     Nothing here interprets a failure. The producing output declares what its contract
     failure costs through ``on_invalid``, and ``classify_output_failures`` resolves that
     by reading the refusing invariant rather than the sentence describing it. Keeping the
     decision on the contract is what stops every consumer from re-deciding it.
 
-    A failure with no structured record is not a contract failure, so it is left alone:
-    the operational path owns those.
+    A failure with no structured record is operational, and a code step has no adapter
+    retry beneath it. ``_execute_code_step`` classified that failure from the full
+    diagnostic and recorded the attempt ``retryable`` when it is positively transient (a
+    rate limit, a per-minute quota refusal, a 5xx, a timeout, or a connection reset); this
+    reads that disposition back rather than classifying the clipped message again. A
+    hard quota, an unclassified handler error, or a bare nonzero exit is permanent.
     """
 
     def _should_retry(step_id: str, item_vars: dict[str, str]) -> bool:
@@ -2940,10 +2985,20 @@ def _contract_retry_decision(
             status = read_status_at(state_dir)
         except ValueError, TypeError, ValidationError:
             return False
-        failures = getattr(status, "output_failures", None) or []
-        if not failures:
+        if status is None:
             return False
-        return classify_output_failures(failures, step_map[step_id].outputs) == RetryVerdict.RETRY
+        if status.output_failures:
+            return (
+                classify_output_failures(status.output_failures, step_map[step_id].outputs)
+                == RetryVerdict.RETRY
+            )
+        if status.attempt_id is None:
+            return False
+        try:
+            attempt = read_task_attempt_at(state_dir, status.attempt_id)
+        except ValueError, TypeError, ValidationError:
+            return False
+        return attempt is not None and attempt.disposition is AttemptDisposition.retryable
 
     return _should_retry
 
@@ -2986,6 +3041,7 @@ def _item_task_is_done(
     item_vars: dict[str, str],
     run_dir: Path,
     run_id: str,
+    out: Any = None,
 ) -> bool:
     """Whether one fan-out item of one step is already satisfied.
 
@@ -2993,6 +3049,11 @@ def _item_task_is_done(
     either alone: a status file whose artifact has since been removed describes work that
     no longer exists. The status record is checked against this run, step, and item
     before it is trusted, so state addressed elsewhere cannot authorize a skip.
+
+    Reuse also follows content. A result that recorded the item's input digests is
+    reused only while they still match, so an item whose roster fields or input files
+    changed under the same key re-runs, and *out* is told which part changed. A
+    result written before those digests existed keeps its key-based reuse.
     """
     state_dir = compute_task_state_dir(run_dir, step_def, item_vars)
     prior = read_status_at(state_dir)
@@ -3011,7 +3072,41 @@ def _item_task_is_done(
         output_errors = validate_item_outputs(artifact_dir, outputs, variables=item_vars)
         if output_errors:
             return False
+    changed = _changed_item_inputs(target=target, state_dir=state_dir, item_vars=item_vars)
+    if changed:
+        message = (
+            f"  Step '{target.step_id}' item '{state_dir.name}': "
+            f"{', '.join(changed)} changed since it completed; re-running"
+        )
+        log.info(message.strip())
+        if out is not None:
+            out.progress(message)
+        return False
     return True
+
+
+def _changed_item_inputs(
+    *, target: ResolvedStep, state_dir: Path, item_vars: dict[str, str]
+) -> list[str]:
+    """What changed in a completed item's inputs since its result recorded them.
+
+    Empty when nothing changed or a valid legacy result predates input digests.
+    A malformed result cannot establish unchanged inputs and forces another attempt.
+    """
+    if target.fan_out is None or target.mode != "code":
+        return []
+    try:
+        result = read_result_at(state_dir)
+    except ValueError, TypeError, YAMLError:
+        log.warning("cannot validate completed item result in %s; re-running item", state_dir)
+        return ["unverifiable input digests"]
+    if result is None or result.item_inputs is None:
+        return []
+    try:
+        current = fingerprint_item_inputs(target, item_vars)
+    except ValueError as exc:
+        raise CLIError(str(exc)) from exc
+    return changed_item_inputs(result.item_inputs, current)
 
 
 def _discover_chain_items(
@@ -3142,6 +3237,7 @@ async def _execute_code_fan_out_step(
             item_vars={**variables, **item_context},
             run_dir=run_dir,
             run_id=run_id,
+            out=out,
         )
     ]
     reused_count = discovered_count - len(item_contexts)
@@ -3258,6 +3354,7 @@ async def _execute_item_aligned_chain(
             item_vars=item_vars,
             run_dir=run_dir,
             run_id=run_id,
+            out=out,
         )
 
     def _step_concurrency(step_id: str) -> int | None:
@@ -6855,9 +6952,7 @@ def run_process_command(
     ),
 ) -> None:
     """Execute a process spec DAG — all steps in dependency order."""
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
-    )
+    configure_logging()
     out = get_output()
 
     # Validate --auth-preflight-quota-guard at parse time; an invalid

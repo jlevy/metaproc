@@ -13,7 +13,14 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 
 from metaproc.config.env_vars import MetaprocEnv
-from metaproc.engine.retry import FailureClass, RetryVerdict, classify_error, classify_failure
+from metaproc.engine.retry import (
+    FailureClass,
+    RetryVerdict,
+    classify_error,
+    classify_failure,
+    has_permanent_signal,
+    is_rate_quota,
+)
 
 _SECRET_ENV_NAME = re.compile(
     r"(?:^|_)(?:TOKEN|KEY|SECRET|PASSWORD|PASSWD|CREDENTIALS?|CREDS|AUTH|BEARER)"
@@ -197,6 +204,127 @@ def command_failure_message(
     )
 
 
+_MAX_EXCEPTION_CHAIN = 8
+
+# Exception class names, matched anywhere in an exception's MRO, that name a transport
+# failure in the HTTP clients model SDKs are built on (httpx, requests, urllib3,
+# aiohttp, and the OpenAI, Anthropic, and Google SDKs). Matching names rather than
+# importing the classes keeps every one of these libraries optional.
+_TRANSPORT_TIMEOUT_NAMES: frozenset[str] = frozenset(
+    {"TimeoutException", "Timeout", "ReadTimeoutError", "ServerTimeoutError", "DeadlineExceeded"}
+)
+_TRANSPORT_FAILURE_NAMES: frozenset[str] = frozenset(
+    {
+        "NetworkError",
+        "RemoteProtocolError",
+        "ConnectionError",
+        "ProtocolError",
+        "NewConnectionError",
+        "ClientConnectionError",
+        "ServerDisconnectedError",
+        "APIConnectionError",
+    }
+)
+
+
+def _exception_chain(exception: BaseException) -> list[BaseException]:
+    """The exception and what it was raised from or during, outermost first."""
+    chain: list[BaseException] = []
+    current: BaseException | None = exception
+    while current is not None and current not in chain and len(chain) < _MAX_EXCEPTION_CHAIN:
+        chain.append(current)
+        current = current.__cause__ or (
+            None if current.__suppress_context__ else current.__context__
+        )
+    return chain
+
+
+def _http_status(exception: BaseException) -> int | None:
+    """The HTTP status an SDK exception carries, read from its common attributes."""
+    candidates: list[object] = []
+    for owner, attribute in (
+        (exception, "status_code"),
+        (exception, "code"),
+        (exception, "status"),
+        (getattr(exception, "response", None), "status_code"),
+    ):
+        try:
+            candidates.append(getattr(owner, attribute, None))
+        except Exception:  # noqa: BLE001 - an SDK property that fails is no evidence
+            continue
+    for value in candidates:
+        if isinstance(value, int) and not isinstance(value, bool) and 100 <= value <= 599:
+            return value
+    return None
+
+
+def _transport_failure_class(chain: Iterable[BaseException]) -> FailureClass | None:
+    """Classify a transient transport failure from exception types and HTTP status."""
+    for exception in chain:
+        status = _http_status(exception)
+        if status == 429:
+            return FailureClass.RATE_LIMITED
+        if status in (408, 504):
+            return FailureClass.TIMEOUT
+        if status is not None and status >= 500:
+            return FailureClass.SERVER_ERROR
+        if isinstance(exception, TimeoutError):
+            return FailureClass.TIMEOUT
+        names = {cls.__name__ for cls in type(exception).__mro__}
+        if names & _TRANSPORT_TIMEOUT_NAMES:
+            return FailureClass.TIMEOUT
+        if isinstance(exception, ConnectionError) or names & _TRANSPORT_FAILURE_NAMES:
+            return FailureClass.SERVER_ERROR
+    return None
+
+
+# Subprocess diagnostics are opaque and use broad legacy matching. An exception has
+# better evidence: only explicit provider diagnostics may supplement its types/status.
+_HANDLER_TRANSIENT_PATTERNS: tuple[tuple[FailureClass, re.Pattern[str]], ...] = (
+    (
+        FailureClass.RATE_LIMITED,
+        re.compile(r"\b(?:rate[ _-]limit(?:ed|ing)?|too many requests)\b", re.IGNORECASE),
+    ),
+    (
+        FailureClass.TIMEOUT,
+        re.compile(
+            r"\b(?:request timed out|read timed out|deadline[ _]exceeded|gateway timeout)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        FailureClass.SERVER_ERROR,
+        re.compile(
+            r"\b(?:internal server error|service unavailable|bad gateway|connection (?:reset|refused|aborted)|econnreset|econnrefused)\b",
+            re.IGNORECASE,
+        ),
+    ),
+)
+_HANDLER_HTTP_STATUS = re.compile(
+    r"\b(?:HTTP(?:/\d(?:\.\d)?)?|status(?:[ _]code)?|error code)\s*[:=]?\s*(\d{3})\b"
+    r"|\b(429|500|502|503|504)\s+(?:RESOURCE_EXHAUSTED|INTERNAL|BAD_GATEWAY|UNAVAILABLE|DEADLINE_EXCEEDED)\b",
+    re.IGNORECASE,
+)
+
+
+def _handler_text_failure_class(evidence: str) -> FailureClass | None:
+    """Read explicit provider diagnostics, excluding incidental numbers and names."""
+    if is_rate_quota(evidence):
+        return FailureClass.QUOTA_EXHAUSTED
+    for match in _HANDLER_HTTP_STATUS.finditer(evidence):
+        status = int(match.group(1) or match.group(2))
+        if status == 429:
+            return FailureClass.RATE_LIMITED
+        if status in (408, 504):
+            return FailureClass.TIMEOUT
+        if 500 <= status <= 599:
+            return FailureClass.SERVER_ERROR
+    for failure_class, pattern in _HANDLER_TRANSIENT_PATTERNS:
+        if pattern.search(evidence):
+            return failure_class
+    return None
+
+
 def handler_failure_message(
     exception: Exception,
     *,
@@ -207,12 +335,52 @@ def handler_failure_message(
 
     The caller retains the complete traceback at ``log_path``. Classify the full
     redacted exception before clipping its message or attaching that evidence path.
+
+    The evidence is the whole cause chain, so a handler that wraps an SDK error
+    (``raise RuntimeError("transcribe failed") from exc``) is classified by what it
+    wraps. When the text names nothing, the exceptions' structure decides: an HTTP
+    status of 429, 408, or 5xx, a ``TimeoutError`` or ``ConnectionError``, or a known
+    transport error type classifies as transient. A permanent HTTP status or text
+    signal, such as a hard quota or billing refusal, vetoes earlier transient errors.
+    Text alone must name an explicit provider diagnostic, not an incidental number
+    or field name that the subprocess classifier would accept.
     """
     exception_type = type(exception).__name__
     detail = redact_diagnostic(str(exception), env=env)
     summary = clip_diagnostic(detail)
     message = f"{exception_type}: {summary}" if summary else exception_type
-    return _classified(f"{message} (traceback: {log_path})", evidence=f"{exception_type}: {detail}")
+    chain = _exception_chain(exception)
+    evidence = "\n".join(
+        [
+            f"{exception_type}: {detail}",
+            *(
+                f"caused by {type(cause).__name__}: {redact_diagnostic(str(cause), env=env)}"
+                for cause in chain[1:]
+            ),
+        ]
+    )
+    error = f"{message} (traceback: {log_path})"
+    if has_permanent_signal(evidence):
+        return ExecutionFailure(
+            error=error, failure_class=classify_failure(evidence), verdict=RetryVerdict.FAIL
+        )
+    statuses = [_http_status(cause) for cause in chain]
+    statuses.extend(
+        int(match.group(1) or match.group(2)) for match in _HANDLER_HTTP_STATUS.finditer(evidence)
+    )
+    if any(
+        status is not None and 400 <= status < 500 and status not in (408, 429)
+        for status in statuses
+    ):
+        return ExecutionFailure(
+            error=error, failure_class=FailureClass.UNKNOWN, verdict=RetryVerdict.FAIL
+        )
+    failure_class = _handler_text_failure_class(evidence) or _transport_failure_class(chain)
+    return ExecutionFailure(
+        error=error,
+        failure_class=failure_class or FailureClass.UNKNOWN,
+        verdict=RetryVerdict.RETRY if failure_class is not None else RetryVerdict.FAIL,
+    )
 
 
 def failure_cause(error: str) -> str:

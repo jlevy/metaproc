@@ -25,7 +25,7 @@ from metaproc.engine.resource_reconciliation import (
     merge_meter_rollups,
     reconcile_resource_events,
 )
-from metaproc.io import iter_artifact_paths, logical_path
+from metaproc.io import iter_artifact_paths, iter_text_lines, logical_path
 from metaproc.logutil.log_path_owner import (
     LogOwner,
     derive_owner,
@@ -59,7 +59,7 @@ from metaproc.models.resources import (
     UnpricedModel,
     UsageEvent,
 )
-from metaproc.paths import is_native_session_log_path
+from metaproc.paths import is_native_session_log_path, is_tool_resource_events_log
 from metaproc.plugins.discovery import get_plugin_registry
 from metaproc.stats.path_tally import PathTally, render_canonical
 
@@ -220,10 +220,40 @@ def build_resource_artifacts(
     if extra_source_logs:
         discovered = list(discovered) + [Path(p) for p in extra_source_logs]
     discovered = _exclude_paths(sorted(set(discovered)), exclude=[generated_events_path])
+    # A tool's resource-events stream already holds typed events. Parsed as an agent
+    # session it yields nothing, and the usage it records reads as unmeasured.
+    tool_event_logs = [p for p in discovered if is_tool_resource_events_log(logical_path(p))]
+    discovered = [p for p in discovered if not is_tool_resource_events_log(logical_path(p))]
 
     nodes_by_id = _index_nodes(root)
     source_logs: list[SourceLog] = []
     resource_events: list[ResourceEvent] = []
+
+    for log_path in tool_event_logs:
+        tool_events = _read_tool_events(log_path)
+        resource_events.extend(tool_events)
+        tool_calls = [event for event in tool_events if isinstance(event, ToolCallEvent)]
+        owner = _derive_log_owner(
+            log_path,
+            run_dir,
+            bundle=bundle,
+            hierarchy=root,
+            mapped_composite_step_ids=mapped_composite_step_ids,
+        )
+        source_logs.append(
+            SourceLog(
+                kind=TOOL_EVENTS_SOURCE_KIND,
+                path=str(_relative_or_str(log_path, run_dir)),
+                adapter=None,
+                owner_node_id=_resolve_owner_node_id(owner, nodes_by_id),
+                summary=LogSummary(
+                    source_log_count=1,
+                    event_count=len(tool_events),
+                    tool_call_count=len(tool_calls),
+                    tool_failure_count=sum(1 for e in tool_calls if e.metrics.tool_failures),
+                ),
+            )
+        )
 
     for log_path in discovered:
         owner = _derive_log_owner(
@@ -524,6 +554,37 @@ def _exclude_paths(paths: Iterable[Path], *, exclude: Iterable[Path]) -> list[Pa
 
 def _normalized_path(path: Path) -> str:
     return str(logical_path(path).resolve())
+
+
+TOOL_EVENTS_SOURCE_KIND: SourceKind = "tool_events"
+"""``SourceLog.kind`` of a ``.logs/tools/<tool>/resource-events.jsonl`` stream."""
+
+
+def _read_tool_events(log_path: Path) -> list[ResourceEvent]:
+    """Read a tool's typed event stream, keeping every well-formed line.
+
+    The run ledger fails loudly on a malformed line because it is the audit trail;
+    a tool's stream is input to it, and one bad line written by a crashed tool must
+    not discard the rest of the run's resource evidence.
+    """
+    events: list[ResourceEvent] = []
+    try:
+        for line_no, line in iter_text_lines(log_path):
+            stripped = line.strip()
+            if not stripped:
+                continue
+            try:
+                events.append(_RESOURCE_EVENT_ADAPTER.validate_json(stripped))
+            except ValueError:
+                # Validation errors can repeat rejected values, including credentials.
+                log.warning(
+                    "skipping malformed resource event %s:%s (invalid event schema)",
+                    log_path,
+                    line_no,
+                )
+    except OSError:
+        log.warning("could not read tool resource events %s", log_path, exc_info=True)
+    return events
 
 
 def parse_log_file(log_path: Path) -> tuple[LogFile | None, list[LogEvent]]:

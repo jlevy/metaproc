@@ -237,6 +237,37 @@ class TaskAttemptRecord(BaseModel):
         return projected
 
 
+ITEM_INPUT_DIRECTORY = "directory"
+"""``ItemInputDigests.inputs`` value for a directory input, whose content is not hashed."""
+
+ITEM_INPUT_ABSENT = "absent"
+"""``ItemInputDigests.inputs`` value for an optional input that did not exist."""
+
+ITEM_INPUT_UNREADABLE = "unreadable"
+"""``ItemInputDigests.inputs`` value for an input file that could not be read."""
+
+
+class ItemInputDigests(BaseModel):
+    """What one mapped code item read, recorded in ``result.yaml`` when it completes.
+
+    A step fingerprint describes the step, not its items, so an item whose roster row
+    or input file changed under the same key would otherwise be reused on resume. A
+    resume recomputes these digests and re-runs the item when any differs.
+    """
+
+    item_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    """Digest of the item's bound roster fields, with checkout paths made relative."""
+
+    inputs: dict[str, str] = Field(default_factory=dict)
+    """Each declared input's content SHA-256, keyed by input name.
+
+    A directory is recorded as ``directory``, an absent optional input as ``absent``,
+    and a file that could not be read as ``unreadable``; none of those hash content.
+    The fan-out source, the step's own outputs, ``collect:`` inputs, and streams are
+    left out.
+    """
+
+
 class ResultRecord(BaseModel):
     """Validated outcome — written to .state/result.yaml after output check."""
 
@@ -248,6 +279,9 @@ class ResultRecord(BaseModel):
     outputs: dict[str, str] = Field(default_factory=dict)
     published_at: str = ""
     step_hash: str | None = None
+    item_inputs: ItemInputDigests | None = None
+    """Input digests of a mapped code item, or ``None`` for any other task and for a
+    result written before this field existed, which keeps its key-based reuse."""
 
 
 class ManualAckRecord(BaseModel):
