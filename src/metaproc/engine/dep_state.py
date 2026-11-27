@@ -8,17 +8,25 @@ import hashlib
 import json
 import logging
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import ValidationError as PydanticValidationError
 from ruamel.yaml import YAMLError as _RuamelYAMLError
 
-from metaproc.engine.placeholders import TEMPLATE_PATTERN
+from metaproc.engine.placeholders import TEMPLATE_PATTERN, resolve_templates
 from metaproc.io import read_yaml_file
+from metaproc.io.digests import file_sha256
 from metaproc.io.state_io import read_attempt_at, read_result_at, read_status_at
 from metaproc.models.plan import Plan, ResolvedDep, ResolvedStep
-from metaproc.models.runtime import StepState
+from metaproc.models.runtime import (
+    ITEM_INPUT_ABSENT,
+    ITEM_INPUT_DIRECTORY,
+    ITEM_INPUT_UNREADABLE,
+    ItemInputDigests,
+    StepState,
+)
 from metaproc.paths import STATE_DIR, STATUS_FILE, normalize_path_key
 
 _PROCESS_STATUS_FILE = "process-status.yaml"
@@ -87,7 +95,9 @@ def fingerprint_step(step: ResolvedStep) -> str:
     Runtime-discovered fan-out items and their filtered count are excluded.
     The same authored step may be fingerprinted before and after a generated
     roster exists, and discovery results are execution state rather than part
-    of the step definition.
+    of the step definition. What one item read is fingerprinted per item instead,
+    by ``fingerprint_item_inputs``, so a resume re-runs exactly the mapped code
+    items whose roster fields or input files changed under the same key.
 
     A path inside the step's ``checkout_root`` is hashed relative to that root,
     wherever it appears in the resolved step: a composite's ``uses_path``, its
@@ -145,6 +155,85 @@ def fingerprint_step(step: ResolvedStep) -> str:
         hasher.update(b"\x00")
         hasher.update(content)
     return hasher.hexdigest()[:16]
+
+
+def fingerprint_item_inputs(step: ResolvedStep, variables: Mapping[str, str]) -> ItemInputDigests:
+    """Return the digests of what one fan-out item of *step* reads.
+
+    Two parts, recorded separately so a resume can say which one changed:
+
+    - the item's bound roster fields (``for_each.bind`` and ``bind_fields``), with
+      paths inside the step's checkout made relative to it as ``fingerprint_step``
+      does, so a resume from another checkout of the same revision reuses the item;
+    - the content SHA-256 of each declared input file, resolved for this item.
+
+    Left out: the fan-out source, since the item's own row already stands for it and
+    a new roster row must not re-run every existing item; the step's own declared
+    outputs, which a handler that updates a file in place both reads and writes;
+    ``collect:`` inputs, which the collected-input rule owns; and streams. A directory
+    input is recorded by kind only, because hashing a tree on every resume could cost
+    more than the item, and a tree the step writes into would never compare equal.
+    """
+    fan_out = step.fan_out
+    fields = list(dict.fromkeys([fan_out.bind, *fan_out.bind_fields])) if fan_out else []
+    bound: object = {field: variables.get(field) for field in fields if field}
+    root_pattern = _checkout_root_pattern(step.checkout_root) if step.checkout_root else None
+    if root_pattern is not None:
+        bound = _relative_to_checkout(bound, root_pattern)
+    item_sha256 = hashlib.sha256(
+        json.dumps(bound, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+    excluded = {normalize_path_key(fan_out.source)} if fan_out and fan_out.source else set()
+    for spec in step.outputs.values():
+        if spec.path:
+            excluded.add(normalize_path_key(resolve_templates(spec.path, variables)))
+
+    inputs: dict[str, str] = {}
+    for name, spec in sorted(step.inputs.items()):
+        if spec.kind == "stream" or spec.collect or not spec.path:
+            continue
+        resolved = resolve_templates(spec.path, variables)
+        if "{{" in resolved or normalize_path_key(resolved) in excluded:
+            continue
+        inputs[name] = _input_digest(Path(resolved))
+    return ItemInputDigests(item_sha256=item_sha256, inputs=inputs)
+
+
+def changed_item_inputs(recorded: ItemInputDigests, current: ItemInputDigests) -> list[str]:
+    """Name what differs between two item digests: ``roster fields`` or input names."""
+    changed = ["roster fields"] if recorded.item_sha256 != current.item_sha256 else []
+    names = sorted(set(recorded.inputs) | set(current.inputs))
+    changed.extend(
+        f"input '{name}'" for name in names if recorded.inputs.get(name) != current.inputs.get(name)
+    )
+    return changed
+
+
+def _input_digest(path: Path) -> str:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return ITEM_INPUT_ABSENT
+    except OSError:
+        return ITEM_INPUT_UNREADABLE
+    if path.is_dir():
+        return ITEM_INPUT_DIRECTORY
+    try:
+        return _file_sha256_cached(str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        return ITEM_INPUT_UNREADABLE
+
+
+@functools.lru_cache(maxsize=4096)
+def _file_sha256_cached(path: str, mtime_ns: int, size: int) -> str:
+    """Hash a file once per version in this process; items often share one input.
+
+    The modification time and size are part of the key only so that a rewritten file
+    is hashed again. They never stand in for its content.
+    """
+    del mtime_ns, size
+    return file_sha256(Path(path))
 
 
 _CHECKOUT_TOKEN = "<checkout>"

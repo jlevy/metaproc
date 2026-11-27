@@ -125,6 +125,8 @@ from metaproc.engine.command_diagnostics import (
     summarize_failure_causes,
 )
 from metaproc.engine.dep_state import (
+    changed_item_inputs,
+    fingerprint_item_inputs,
     fingerprint_step,
     recorded_step_hash,
 )
@@ -236,6 +238,7 @@ from metaproc.io.state_io import (
     mark_failed_synthetic_at,
     mark_running_at,
     read_manual_ack_at,
+    read_result_at,
     read_run_plan,
     read_status_at,
     read_task_attempt_at,
@@ -2738,6 +2741,11 @@ async def _execute_code_step(
     step_hash = fingerprint_step(target)
     try:
         validate_step_inputs_exist(target.inputs, variables, context=f"step '{step_id}'")
+        # Digest what this item reads before it runs, so the record names the inputs the
+        # attempt saw rather than whatever they hold once it has finished.
+        item_inputs = (
+            fingerprint_item_inputs(target, variables) if target.fan_out is not None else None
+        )
     except ValueError as exc:
         raise CLIError(str(exc)) from exc
     handler_ref = target.handler
@@ -2944,6 +2952,7 @@ async def _execute_code_step(
             outputs=resolve_record_output_paths(effective_outputs, variables),
             published_at=_now_iso(),
             step_hash=step_hash,
+            item_inputs=item_inputs,
         ),
     )
     return True
@@ -3032,6 +3041,7 @@ def _item_task_is_done(
     item_vars: dict[str, str],
     run_dir: Path,
     run_id: str,
+    out: Any = None,
 ) -> bool:
     """Whether one fan-out item of one step is already satisfied.
 
@@ -3039,6 +3049,11 @@ def _item_task_is_done(
     either alone: a status file whose artifact has since been removed describes work that
     no longer exists. The status record is checked against this run, step, and item
     before it is trusted, so state addressed elsewhere cannot authorize a skip.
+
+    Reuse also follows content. A result that recorded the item's input digests is
+    reused only while they still match, so an item whose roster fields or input files
+    changed under the same key re-runs, and *out* is told which part changed. A
+    result written before those digests existed keeps its key-based reuse.
     """
     state_dir = compute_task_state_dir(run_dir, step_def, item_vars)
     prior = read_status_at(state_dir)
@@ -3057,7 +3072,37 @@ def _item_task_is_done(
         output_errors = validate_item_outputs(artifact_dir, outputs, variables=item_vars)
         if output_errors:
             return False
+    changed = _changed_item_inputs(target=target, state_dir=state_dir, item_vars=item_vars)
+    if changed:
+        message = (
+            f"  Step '{target.step_id}' item '{state_dir.name}': "
+            f"{', '.join(changed)} changed since it completed; re-running"
+        )
+        log.info(message.strip())
+        if out is not None:
+            out.progress(message)
+        return False
     return True
+
+
+def _changed_item_inputs(
+    *, target: ResolvedStep, state_dir: Path, item_vars: dict[str, str]
+) -> list[str]:
+    """What changed in a completed item's inputs since its result recorded them.
+
+    Empty when nothing changed, when the result predates input digests, or when the
+    result cannot be read: an unreadable record keeps the reuse it had before digests.
+    """
+    if target.fan_out is None or target.mode != "code":
+        return []
+    try:
+        result = read_result_at(state_dir)
+    except (ValueError, TypeError, YAMLError) as exc:
+        log.debug("unreadable result.yaml in %s; keeping key-based reuse: %s", state_dir, exc)
+        return []
+    if result is None or result.item_inputs is None:
+        return []
+    return changed_item_inputs(result.item_inputs, fingerprint_item_inputs(target, item_vars))
 
 
 def _discover_chain_items(
@@ -3188,6 +3233,7 @@ async def _execute_code_fan_out_step(
             item_vars={**variables, **item_context},
             run_dir=run_dir,
             run_id=run_id,
+            out=out,
         )
     ]
     reused_count = discovered_count - len(item_contexts)
@@ -3304,6 +3350,7 @@ async def _execute_item_aligned_chain(
             item_vars=item_vars,
             run_dir=run_dir,
             run_id=run_id,
+            out=out,
         )
 
     def _step_concurrency(step_id: str) -> int | None:
