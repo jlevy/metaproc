@@ -5,7 +5,7 @@ title: "Address PR #131 reviews A B C: handler reliability"
 kind: task
 status: in_progress
 priority: 1
-version: 7
+version: 8
 delegate: codex@spud10.local
 labels: []
 dependencies: []
@@ -15,10 +15,11 @@ child_order_hints:
   - is-01m8f6x4wq9rt48qmc41te2qk3
   - is-01m8f6x577q06angaxah10ye5g
   - is-01m8f6x5hmw7h71r4mk7m1k1nz
+  - is-01m8f80mwq9nwsd5czbtp8btv5
 hold: null
 hold_until: null
 created_at: 2026-11-27T19:14:39.484Z
-updated_at: 2026-11-27T19:15:36.142Z
+updated_at: 2026-11-27T19:34:16.214Z
 started_at: 2026-11-27T19:15:36.141Z
 ---
 Track all five findings from formal reviews A, B, and C on https://github.com/jlevy/metaproc/pull/131. Coordinator retains pushing, CI, disposition publication, and merge.
