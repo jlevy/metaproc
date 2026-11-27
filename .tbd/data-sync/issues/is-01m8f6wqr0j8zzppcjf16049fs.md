@@ -3,9 +3,9 @@ type: is
 id: is-01m8f6wqr0j8zzppcjf16049fs
 title: "Address PR #131 reviews A B C: handler reliability"
 kind: task
-status: in_progress
+status: closed
 priority: 1
-version: 8
+version: 9
 delegate: codex@spud10.local
 labels: []
 dependencies: []
@@ -19,7 +19,11 @@ child_order_hints:
 hold: null
 hold_until: null
 created_at: 2026-11-27T19:14:39.484Z
-updated_at: 2026-11-27T19:34:16.214Z
+updated_at: 2026-11-27T19:43:21.995Z
 started_at: 2026-11-27T19:15:36.141Z
+closed_at: 2026-11-27T19:43:21.994Z
+close_reason: "PR #131 merged as b115dc27 after review F, green exact-head CI and the downstream Vertex retry/resume smoke."
+resolution: null
+duplicate_of: null
 ---
 Track all five findings from formal reviews A, B, and C on https://github.com/jlevy/metaproc/pull/131. Coordinator retains pushing, CI, disposition publication, and merge.
