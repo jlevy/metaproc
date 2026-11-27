@@ -362,6 +362,19 @@ class IOSpec(BaseModel):
         if self.ref and self.path:
             msg = "io spec must declare either 'path' or 'ref', not both"
             raise ValueError(msg)
+        if self.collect and not self.path:
+            # The harness writes the fan-in manifest to this path before the consumer
+            # runs; without it the step plans cleanly and then fails at dispatch with
+            # "has no resolved path", after every upstream item has already run.
+            msg = (
+                f"a 'collect: {self.collect}' input needs a 'path:' where the collected "
+                "manifest is written, for example "
+                f'path: "{{{{run.dir}}}}/{self.collect}-outcomes.yaml"'
+            )
+            raise ValueError(msg)
+        if self.require and not self.collect:
+            msg = "'require:' only applies to a 'collect:' input"
+            raise ValueError(msg)
         return self
 
 
